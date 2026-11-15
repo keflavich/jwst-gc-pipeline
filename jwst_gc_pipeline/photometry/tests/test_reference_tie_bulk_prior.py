@@ -286,3 +286,169 @@ def test_both_checkpoint_entry_points_attach_the_prior():
     for rel in ("jwst_gc_pipeline/photometry/cataloging.py",
                 "scripts/reduction/run_astrometry_checkpoint.py"):
         assert "attach_bulk_prior(" in (root / rel).read_text(), rel
+
+
+# ---------------------------------------------------------------------------
+# the prior CONSTRAINS the tie (the pairing itself does not depend on its value)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("wrong_by_mas, prior", [
+    (30.0, (_TRUE[0] + 30.0, _TRUE[1])),
+    (50.0, (_TRUE[0] - 50.0, _TRUE[1])),
+    (80.0, (_TRUE[0] - 80.0, _TRUE[1])),
+])
+def test_a_prior_wrong_by_tens_of_mas_is_refused(noisy_histograms, wrong_by_mas,
+                                                 prior):
+    """The data read the true tie and the sibling records it, so only the
+    prior-agreement check can refuse: a wrong prior must not pass because the
+    measured tie happens to be right."""
+    cons, mag, ref = _field()
+    wrong = dict(_PRIOR, dra_mas=prior[0], ddec_mas=prior[1],
+                 coherence=[dict(label="F182M", dra_mas=_TRUE[0],
+                                 ddec_mas=_TRUE[1])])
+    assert np.hypot(*prior) < vc.PRIOR_MAX_OFF_MAS
+    out = _tie(cons, mag, ref, wrong)
+    bp = out["bulk_prior"]
+    assert bp["coherence"]["passed"] is True
+    assert bp["prior_agreement"]["passed"] is False
+    assert bp["prior_agreement"]["sep_mas"] == pytest.approx(wrong_by_mas, abs=3.0)
+    assert any("from the prior" in r for r in bp["reasons"])
+    assert bp["passed"] is False and out["apply_ok"] is False
+
+
+def test_a_prior_a_few_mas_off_is_accepted(noisy_histograms):
+    cons, mag, ref = _field()
+    out = _tie(cons, mag, ref, dict(_PRIOR, dra_mas=_TRUE[0] + 6.0,
+                                    ddec_mas=_TRUE[1] - 4.0))
+    assert out["bulk_prior"]["prior_agreement"]["passed"] is True
+    assert out["apply_ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# malformed priors: one clear ValueError, used or not
+# ---------------------------------------------------------------------------
+
+def test_a_prior_of_exactly_100_mas_is_accepted():
+    assert vc.PRIOR_MAX_OFF_MAS == 100.0
+    seed = vc._bulk_prior_seed(dict(dra_mas=100.0, ddec_mas=0.0))
+    assert seed["off"] == 100.0
+    seed = vc._bulk_prior_seed(dict(dra_mas=0.0, ddec_mas=-100.0))
+    assert seed["off"] == 100.0
+    with pytest.raises(ValueError, match="exceeds 100 mas"):
+        vc._bulk_prior_seed(dict(dra_mas=100.0001, ddec_mas=0.0))
+
+
+@pytest.mark.parametrize("bad, match", [
+    (dict(dra_mas=None, ddec_mas=0.0), "dra_mas must be a finite number"),
+    (dict(dra_mas=0.0, ddec_mas=None), "ddec_mas must be a finite number"),
+    (dict(ddec_mas=0.0), "no 'dra_mas' entry"),
+    (dict(dra_mas=0.0), "no 'ddec_mas' entry"),
+    (dict(dra_mas="38", ddec_mas=0.0), "dra_mas must be a finite number"),
+    (dict(dra_mas=True, ddec_mas=0.0), "dra_mas must be a finite number"),
+    (dict(dra_mas=float("nan"), ddec_mas=0.0), "finite number"),
+    (dict(dra_mas=float("inf"), ddec_mas=0.0), "finite number"),
+    (dict(dra_mas=0.0, ddec_mas=0.0, coherence=[dict(label="F182M",
+                                                     dra_mas=None, ddec_mas=0.0)]),
+     r"coherence\[F182M\] dra_mas"),
+    (dict(dra_mas=0.0, ddec_mas=0.0, coherence=[dict(label="F182M", dra_mas=1.0)]),
+     "no 'ddec_mas'"),
+])
+def test_a_malformed_prior_raises_one_clear_error(bad, match):
+    with pytest.raises(ValueError, match=match):
+        vc.validate_bulk_prior(bad)
+    with pytest.raises(ValueError, match=match):
+        vc._bulk_prior_seed(bad)
+
+
+def test_a_malformed_prior_raises_even_when_the_histogram_verifies(monkeypatch):
+    """A configuration error must not hide behind a tie that happens not to need
+    the prior."""
+    cons, mag, ref = _field()
+    good = dict(ok=True, swept=False, dra=_TRUE[0], ddec=_TRUE[1],
+                off=float(np.hypot(*_TRUE)), contrast=40.0, n_peak=900,
+                window_consistent=True)
+    monkeypatch.setattr(vc, "measure_offset", lambda *a, **k: dict(good))
+    with pytest.raises(ValueError, match="dra_mas must be a finite number"):
+        _tie(cons, mag, ref, dict(dra_mas=None, ddec_mas=0.0))
+
+
+@pytest.mark.parametrize("entry", [None, (40.0,), "ab", (None, 3.0), (101.0, 0.0),
+                                   (float("nan"), 1.0)])
+def test_attach_bulk_prior_rejects_a_malformed_config_entry(monkeypatch, entry):
+    from jwst_gc_pipeline.reduction import alignment_config as ac_cfg
+    cfg = FieldAlignment(proposal="X", fields=("001",), reference_frame=VIRAC2,
+                         source=TABLE_CONSENSUS,
+                         bulk_prior_mas={"F210M": entry, "F182M": (42.0, -33.0)})
+    monkeypatch.setattr(ac_cfg, "resolve", lambda proposal, field: cfg)
+    with pytest.raises(ValueError):
+        attach_bulk_prior(dict(all="A"), "X", "001", "F210M")
+
+
+def test_attach_bulk_prior_rejects_a_malformed_sibling(monkeypatch):
+    from jwst_gc_pipeline.reduction import alignment_config as ac_cfg
+    cfg = FieldAlignment(proposal="X", fields=("001",), reference_frame=VIRAC2,
+                         source=TABLE_CONSENSUS,
+                         bulk_prior_mas={"F210M": (41.0, -31.0),
+                                         "F182M": (None, -33.0)})
+    monkeypatch.setattr(ac_cfg, "resolve", lambda proposal, field: cfg)
+    with pytest.raises(ValueError, match=r"coherence\[F182M\] dra_mas"):
+        attach_bulk_prior(dict(all="A"), "X", "001", "F210M")
+
+
+# ---------------------------------------------------------------------------
+# run_visit_checkpoint hands the prior to the tie at a correcting stage only
+# ---------------------------------------------------------------------------
+
+def _checkpoint_tables(n_exposures=4):
+    from .test_visit_consensus import _exposure_table, _field as _vc_field
+    ra, dec = _vc_field(n=400, rng=np.random.default_rng(11))
+    return ra, dec, [_exposure_table(ra, dec, exposure=e, filtername="F150W",
+                                     rng=np.random.default_rng(300 + e))
+                     for e in range(1, n_exposures + 1)]
+
+
+@pytest.mark.parametrize("stage, expect_prior", [
+    ("m2", True), ("m12", True), ("m1", True),
+    ("m3", False), ("m6", False),
+])
+def test_run_visit_checkpoint_hands_the_prior_over_at_correcting_stages_only(
+        monkeypatch, tmp_path, stage, expect_prior):
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
+    from .test_visit_consensus import _reference_sets
+    assert (stage in ac.CORRECTION_STAGES) is expect_prior
+    ra, dec, tables = _checkpoint_tables()
+    ref_all, ref_sparse = _reference_sets(ra, dec, rng=np.random.default_rng(12))
+    refcat = dict(all=ref_all, sparse=ref_sparse, mag=None, dense=False,
+                  sigma_pred_mas=None, bulk_prior=dict(_PRIOR))
+    seen = []
+    real = ac.measure_reference_tie
+
+    def _spy(*args, **kwargs):
+        seen.append(kwargs.get("bulk_prior", "<not passed>"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ac, "measure_reference_tie", _spy)
+    ac.run_visit_checkpoint(tables, stage, refcat=refcat, filtername="F150W",
+                            record_dir=str(tmp_path), context=f"hand-off {stage}")
+    assert len(seen) == 1
+    if expect_prior:
+        assert seen[0] == _PRIOR
+    else:
+        assert seen[0] is None
+
+
+def test_run_visit_checkpoint_without_a_prior_passes_none(monkeypatch, tmp_path):
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
+    from .test_visit_consensus import _reference_sets
+    ra, dec, tables = _checkpoint_tables()
+    ref_all, ref_sparse = _reference_sets(ra, dec, rng=np.random.default_rng(12))
+    refcat = dict(all=ref_all, sparse=ref_sparse, mag=None, dense=False,
+                  sigma_pred_mas=None)
+    seen = []
+    real = ac.measure_reference_tie
+    monkeypatch.setattr(ac, "measure_reference_tie",
+                        lambda *a, **k: (seen.append(k.get("bulk_prior")),
+                                         real(*a, **k))[1])
+    ac.run_visit_checkpoint(tables, "m2", refcat=refcat, filtername="F150W",
+                            record_dir=str(tmp_path), context="no prior")
+    assert seen == [None]

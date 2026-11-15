@@ -74,6 +74,7 @@ from .visit_consensus import (
     catalog_coords, detect_detector_antisymmetry,
     detect_module_antisymmetry, load_reference_catalog,
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
+    validate_bulk_prior,
     # The same-star SELECTION the #285 restriction uses: mutual nearest
     # partners within a radius, returning a boolean MASK and no offset.
     # Imported rather than re-written here so the nearest-neighbour pairing
@@ -3961,9 +3962,11 @@ def attach_bulk_prior(refcat, proposal_id, field, filtername):
     with ``bulk_prior`` = ``dict(dra_mas, ddec_mas, source, coherence=[...])``,
     where ``coherence`` lists the OTHER filters' entries of the same field:
     ``measure_reference_tie`` requires the prior-seeded tie to agree with them
-    (issue #819).  ``run_visit_checkpoint`` hands the prior to the tie only at a
-    correcting stage; a frozen stage measures a corrected frame, where the
-    histogram verifies the tie and a prior would be unused anyway.
+    and with the prior itself (issue #819).  A malformed entry (``None``, a
+    non-numeric or non-finite value, beyond 100 mas of zero) raises one
+    ``ValueError`` here.  ``run_visit_checkpoint`` hands the prior to the tie
+    only at a correcting stage; a frozen stage measures a corrected frame, where
+    the histogram verifies the tie and a prior would be unused anyway.
     """
     from jwst_gc_pipeline.reduction import alignment_config as _alignment_config
     if refcat is None:
@@ -3971,16 +3974,29 @@ def attach_bulk_prior(refcat, proposal_id, field, filtername):
     cfg = _alignment_config.resolve(proposal_id, field)
     priors = {str(k).upper(): v for k, v in (cfg.bulk_prior_mas.items()
                                              if cfg is not None else ())}
-    mine = priors.get(str(filtername).upper())
-    if mine is None:
+    if str(filtername).upper() not in priors:
         return refcat
+    mine = priors[str(filtername).upper()]
+
+    def _entry(label, value):
+        # One clear ValueError for a malformed config entry (None, a short
+        # tuple, a string), naming the filter.
+        try:
+            dra, ddec = value
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"alignment_config.bulk_prior_mas[{label}] must be a "
+                f"(dra_mas, ddec_mas) pair, got {value!r}") from None
+        return dict(label=label, dra_mas=dra, ddec_mas=ddec)
+
+    me = str(filtername).upper()
     out = dict(refcat)
+    mine = _entry(me, mine)
     out["bulk_prior"] = dict(
-        dra_mas=float(mine[0]), ddec_mas=float(mine[1]),
-        source=f"alignment_config.bulk_prior_mas[{str(filtername).upper()}]",
-        coherence=[dict(label=k, dra_mas=float(v[0]), ddec_mas=float(v[1]))
-                   for k, v in sorted(priors.items())
-                   if k != str(filtername).upper()])
+        dra_mas=mine["dra_mas"], ddec_mas=mine["ddec_mas"],
+        source=f"alignment_config.bulk_prior_mas[{me}]",
+        coherence=[_entry(k, v) for k, v in sorted(priors.items()) if k != me])
+    validate_bulk_prior(out["bulk_prior"])
     return out
 
 
