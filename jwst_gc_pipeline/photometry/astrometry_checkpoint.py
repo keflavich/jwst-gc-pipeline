@@ -3348,6 +3348,20 @@ def prefer_tokenised(found, info_of=None):
             or record_supersession_key(info_of(x)) not in tokenised]
 
 
+def record_mtime(path):
+    """mtime of a record, following a symlink but surviving a dangling one.
+
+    ``os.path.getmtime`` raises ``FileNotFoundError`` on a symlink whose target
+    is gone; release trees carry symlinks, so a broken one in a checkpoint
+    directory must not take a listing down.  A dangling link reports its own
+    mtime.
+    """
+    try:
+        return os.path.getmtime(path)
+    except FileNotFoundError:
+        return os.lstat(path).st_mtime
+
+
 def current_records(record_dir, include_history=False):
     """``{(stage, filt, module, obs, proposal): path}`` of the CURRENT records.
 
@@ -3356,7 +3370,8 @@ def current_records(record_dir, include_history=False):
     :func:`parse_record_name`, skips names that are not checkpoint records and
     drops every untokened record that a tokened one supersedes
     (:func:`prefer_tokenised`).  Where several files share one key, which only
-    happens with ``include_history``, the newest mtime wins.
+    happens with ``include_history``, the newest mtime wins (the later name on
+    a tie).
 
     This is the one reader the secondary tools should use instead of a bare
     ``glob('checkpoint_*_latest.json')``, which also matches the pre-migration
@@ -3372,7 +3387,10 @@ def current_records(record_dir, include_history=False):
     for path, info in prefer_tokenised(found):
         key = (info['stage'], info['filt'], info['module'],
                info['obs'], info['proposal'])
-        if key not in out or os.path.getmtime(path) > os.path.getmtime(out[key]):
+        # Equal mtimes (a copy that dropped them) fall to the later name, which
+        # for timestamped siblings is the newer record.
+        if key not in out or ((record_mtime(path), path)
+                              > (record_mtime(out[key]), out[key])):
             out[key] = path
     return out
 

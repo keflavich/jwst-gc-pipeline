@@ -163,7 +163,7 @@ def base_mismatch_mas(base_ra, base_dec, now_ra, now_dec):
 #: A refcat name may carry a proposal token (``_j6778``, the shared-tree
 #: spelling of ``photometry.naming.perframe_obs_token``) and/or an observation
 #: token (``_o001``), in that order: ``..._j6778_o001.fits``.
-_REFCAT_J_TOKEN = re.compile(r'_j(\d{4})(?:_o\d{3})?\.fits$')
+_REFCAT_J_TOKEN = re.compile(r'_j(\d{4,5})(?:_o\d{3})?\.fits$')
 _REFCAT_O_TOKEN = re.compile(r'_o(\d{3})\.fits$')
 
 
@@ -203,10 +203,16 @@ def pick_refcat(cands, field=None, proposal=None):
     (``_j6778``), this observation's token, an untokened refcat, else refuse --
     picking SOME other observation's or proposal's is never right, and doing it
     silently is how this cost a full o023 chain.  Another proposal's ``_j``
-    file is never a fallback.  Several untokened candidates are refused for a
-    proposal in ``naming.SHARED_TREE_PROPOSALS`` (their names claim nothing, so
-    the newest-sorting one is a guess); other fields keep the newest-sorting
-    pick.  A caller that omits ``proposal`` sees no ``_j`` file at all.
+    file is never a fallback.  The proposal-only name ranks above the
+    observation-only name even for the matching observation: the proposal fixes
+    the epoch and footprint, an observation number alone does not (7213 and 6778
+    are both ``001``).  Several ``_j<proposal>`` files with no observation token
+    are refused (which epoch?), as are several untokened candidates and several
+    ``_o<NNN>`` candidates for this observation when the proposal is in
+    ``naming.SHARED_TREE_PROPOSALS`` (their names do not say which proposal they
+    belong to, so the newest-sorting one is a guess); other fields keep the
+    newest-sorting pick.  A caller that omits ``proposal`` sees no ``_j`` file
+    at all.
     """
     if not cands:
         return None
@@ -214,15 +220,15 @@ def pick_refcat(cands, field=None, proposal=None):
     prop = str(proposal) if proposal not in (None, '') else None
     f3 = str(field).zfill(3) if field else None
     parsed = [(p,) + _refcat_tokens(p) for p in cands]
-    # a candidate claiming another proposal (or any proposal, when the caller
-    # names none) is not eligible
-    pool = [(p, j, o) for p, j, o in parsed if j is None or j == prop]
+    # Every branch below tests ``j == prop`` or ``j is None``, so a candidate
+    # claiming another proposal (or any proposal, when the caller names none)
+    # is never eligible.
     if prop and f3:
-        exact = [p for p, j, o in pool if j == prop and o == f3]
+        exact = [p for p, j, o in parsed if j == prop and o == f3]
         if exact:
             return exact[-1]
     if prop:
-        jonly = [p for p, j, o in pool if j == prop and o is None]
+        jonly = [p for p, j, o in parsed if j == prop and o is None]
         if len(jonly) > 1:
             raise ValueError(
                 f"astrom checkpoint: several reference catalogs claim proposal "
@@ -232,10 +238,19 @@ def pick_refcat(cands, field=None, proposal=None):
         if jonly:
             return jonly[0]
     if f3:
-        by_obs = [p for p, j, o in pool if j is None and o == f3]
+        by_obs = [p for p, j, o in parsed if j is None and o == f3]
+        if prop in SHARED_TREE_PROPOSALS and len(by_obs) > 1:
+            raise ValueError(
+                f"astrom checkpoint: proposal {prop} shares "
+                f"{os.path.dirname(cands[0])} with another proposal, and "
+                f"several reference catalogs there carry observation token "
+                f"_o{f3} but no proposal token: {sorted(by_obs)}.  An "
+                f"observation number does not say which proposal built the "
+                f"file.  Rename each for its proposal ('_j{prop}' before "
+                f"'_o{f3}') or point ASTROM_REFCAT at the right file.")
         if by_obs:
             return by_obs[-1]
-    untokened = [p for p, j, o in pool if j is None and o is None]
+    untokened = [p for p, j, o in parsed if j is None and o is None]
     if prop in SHARED_TREE_PROPOSALS and len(untokened) > 1:
         raise ValueError(
             f"astrom checkpoint: proposal {prop} shares {os.path.dirname(cands[0])} "

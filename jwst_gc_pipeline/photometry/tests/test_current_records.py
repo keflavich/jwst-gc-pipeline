@@ -232,3 +232,24 @@ def test_apply_m2_still_refuses_two_live_observations(tmp_path):
     _write(tmp_path, 'checkpoint_m2_F444W_o002_latest.json', {'corrections': []})
     with pytest.raises(SystemExit):
         apply_m2.load_corrections(str(tmp_path))
+
+
+def test_history_tie_on_mtime_picks_the_later_timestamped_name(tmp_path):
+    """A copy that drops mtimes ties every sibling; the newer stamp must win."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import current_records
+    old = 'checkpoint_m2_F444W_o001_20260801T120000Z.json'
+    new = 'checkpoint_m2_F444W_o001_20260816T143240Z.json'
+    for n in (new, old):
+        (tmp_path / n).write_text('{}')
+        os.utime(tmp_path / n, (1000.0, 1000.0))
+    got = current_records(tmp_path, include_history=True)
+    assert list(got.values()) == [str(tmp_path / new)]
+
+
+def test_a_dangling_symlink_does_not_break_the_listing(tmp_path):
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        current_records, record_mtime)
+    link = tmp_path / 'checkpoint_m2_F444W_o001_latest.json'
+    os.symlink(str(tmp_path / 'gone.json'), str(link))
+    assert record_mtime(str(link)) == os.lstat(link).st_mtime
+    assert list(current_records(tmp_path).values()) == [str(link)]
