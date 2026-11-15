@@ -883,3 +883,191 @@ def test_cross_band_merge_forwards_the_recorded_frame_variant(monkeypatch):
                           basepath='/nowhere/')
     assert seen == {'flag': frozenset({'destreak_o002_crf'}),
                     'replace': frozenset({'destreak_o002_crf'})}
+
+
+# --- forwarding at the reader sites (#1194) -------------------------------
+# One two-variant tree per site; the align files are the newer ones, so a site
+# that drops frame_variants returns the align row for a destreak read.
+
+STAR_C = (60.0, 60.0)
+STAR_D = (100.0, 20.0)
+
+
+def _two_variant_products(tmp_path, expo, kind, xy_by_variant, tail='_m12'):
+    """``kind`` files for one exposure on both variants (align newer)."""
+    pdir = tmp_path / 'F182M' / 'pipeline'
+    pdir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'catalogs').mkdir(exist_ok=True)
+    out = {}
+    for variant, age in (('destreak', 300), ('align', 10)):
+        frame = pdir / f'jw02221001001_02101_0000{expo}_nrca1_{variant}_o001_crf.fits'
+        _write_frame(str(frame))
+        path = _write_product(frame, tail, [(*xy_by_variant[variant], 700.0)],
+                              kind=kind)
+        os.utime(path, (time.time() - age, time.time() - age))
+        out[variant] = path
+    return out
+
+
+def _rejected_rows(tbl, *xys):
+    return [_row_at(tbl, xy) is not None for xy in xys]
+
+
+def test_rejected_loader_follows_the_read_variants_accepted_catalog(
+        tmp_path, clean_env):
+    """The accepted selection inside ``load_rejected_satstar_catalog`` takes
+    the read variant, and the rejected file follows that catalogue."""
+    _two_variant_products(tmp_path, 1, 'catalog',
+                          {'destreak': STAR_A, 'align': STAR_A})
+    _two_variant_products(tmp_path, 1, 'rejected',
+                          {'destreak': STAR_C, 'align': STAR_D})
+    base = str(tmp_path) + '/'
+    unfiltered = MC.load_rejected_satstar_catalog('f182m', basepath=base,
+                                                  phase='m12')
+    assert _rejected_rows(unfiltered, STAR_C, STAR_D) == [False, True]
+    destreak = MC.load_rejected_satstar_catalog(
+        'f182m', basepath=base, phase='m12',
+        frame_variants={'destreak_o001_crf'})
+    assert _rejected_rows(destreak, STAR_C, STAR_D) == [True, False]
+    align = MC.load_rejected_satstar_catalog(
+        'f182m', basepath=base, phase='m12', frame_variants={'align_o001_crf'})
+    assert _rejected_rows(align, STAR_C, STAR_D) == [False, True]
+
+
+def test_rejected_loader_orphans_follow_the_read_variant(tmp_path, clean_env):
+    """An exposure with rejected files but no accepted catalogue is chosen by
+    the orphan branch of ``select_rejected_for_catalogs``."""
+    _two_variant_products(tmp_path, 1, 'rejected',
+                          {'destreak': STAR_C, 'align': STAR_D})
+    base = str(tmp_path) + '/'
+    unfiltered = MC.load_rejected_satstar_catalog('f182m', basepath=base,
+                                                  phase='m12')
+    assert _rejected_rows(unfiltered, STAR_C, STAR_D) == [False, True]
+    destreak = MC.load_rejected_satstar_catalog(
+        'f182m', basepath=base, phase='m12',
+        frame_variants={'destreak_o001_crf'})
+    assert _rejected_rows(destreak, STAR_C, STAR_D) == [True, False]
+
+
+def test_replace_saturated_forwards_the_variant_to_the_rejected_loader(
+        variant_tree, monkeypatch):
+    _fake_svo(monkeypatch)
+    base, _ = variant_tree
+    seen = []
+
+    def _rej(*a, **k):
+        seen.append(k.get('frame_variants'))
+        return None
+    monkeypatch.setattr(MC, 'load_rejected_satstar_catalog', _rej)
+    far = _wcs().pixel_to_world(120.0, 5.0)
+    cat = Table({'skycoord': SkyCoord([far.ra.deg] * u.deg,
+                                      [far.dec.deg] * u.deg),
+                 'flux': [10.0], 'dflux': [1.0], 'x': [120.0], 'y': [5.0],
+                 'dx': [0.01], 'dy': [0.01]})
+    MC.replace_saturated(cat, 'f182m', target='brick', basepath=str(base) + '/',
+                         phase='m2', frame_variants={'destreak_o001_crf'})
+    assert seen == [{'destreak_o001_crf'}]
+
+
+def test_frame_variants_of_tables_skips_unreadable_filenames():
+    def _tb(fn):
+        tb = Table({'x': [1.0]})
+        if fn is not None:
+            tb.meta['FILENAME'] = fn
+        return tb
+    got = MC._frame_variants_of_tables(
+        [_tb(f'{EXPO}_destreak_o002_crf.fits'), _tb('cutout.fits'), _tb(None)])
+    assert got == {'destreak_o002_crf'}
+    assert MC._frame_variants_of_tables([_tb('cutout.fits')]) == set()
+
+
+def test_rejected_report_counts_exposures_without_the_read_variant(
+        tmp_path, clean_env):
+    """An orphan exposure with only the other variant is left out and counted
+    (``no_variant``) in the rejected selection's report too."""
+    other = _touch(tmp_path / f'{EXPO}_align_o002_crf_m12_satstar_rejected.fits', 10)
+    kept = _touch(tmp_path / ('jw02221002001_06201_00002_nrca1_destreak_o002_crf'
+                              '_m12_satstar_rejected.fits'), 10)
+    sel, rep = SPS.select_rejected_for_catalogs(
+        [other, kept], [], phase='m12', frame_variants={'destreak_o002_crf'})
+    assert sel == [kept]
+    assert dict(rep['no_variant']) == {'align_o002_crf': 1}
+    assert dict(rep['other_variant']) == {'m12': 1}
+
+
+# --- the FILENAME-card fallback inside the selector (#1194) -------------------
+
+def _headered_product(tmp_path, name, frame_name, age):
+    """A satstar product whose NAME carries no variant but whose FILENAME card
+    does (the form of a product written by an old run)."""
+    path = tmp_path / name
+    hdu = fits.ImageHDU(name='CAT')
+    hdu.header['FILENAME'] = frame_name
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path)
+    stamp = time.time() - age
+    os.utime(path, (stamp, stamp))
+    return str(path)
+
+
+def test_selector_classifies_a_nameless_variant_by_its_header(tmp_path,
+                                                               clean_env):
+    mine = _headered_product(tmp_path, f'{EXPO}_m12_satstar_catalog.fits',
+                             f'{EXPO}_destreak_o002_crf.fits', 10)
+    # the other variant's catalogue has a named variant and is older
+    other = _touch(tmp_path / f'{EXPO}_align_o002_crf_m12_satstar_catalog.fits',
+                   1000)
+    sel, rep = SPS.select_satstar_phase_files(
+        [mine, other], phase='m12', frame_variants={'align_o002_crf'})
+    assert sel == [other]
+    assert dict(rep['other_variant']) == {'m12': 1}
+    assert rep['unparsed_variant'] == 0
+    # a header that names the read variant keeps the file
+    sel, _ = SPS.select_satstar_phase_files(
+        [mine, other], phase='m12', frame_variants={'destreak_o002_crf'})
+    assert sel == [mine]
+
+
+def test_header_variant_is_read_once_per_file_version(tmp_path, clean_env,
+                                                      monkeypatch):
+    path = _headered_product(tmp_path, f'{EXPO}_m12_satstar_catalog.fits',
+                             f'{EXPO}_destreak_o002_crf.fits', 10)
+    SPS._filename_card.cache_clear()
+    opened = []
+    real_open = fits.open
+
+    def _counting(name, *a, **k):
+        opened.append(str(name))
+        return real_open(name, *a, **k)
+    monkeypatch.setattr(SPS.fits, 'open', _counting)
+    for _ in range(3):      # the flag, replace and rejected readers
+        SPS.select_satstar_phase_files(
+            [path], phase='m12', frame_variants={'destreak_o002_crf'})
+    assert opened == [path]
+    # a rewritten file (new mtime and size) is read again
+    hdu = fits.ImageHDU(name='CAT')
+    hdu.header['FILENAME'] = f'{EXPO}_align_o002_crf_with_a_longer_name.fits'
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path, overwrite=True)
+    sel, _ = SPS.select_satstar_phase_files(
+        [path], phase='m12', frame_variants={'destreak_o002_crf'})
+    assert len(opened) == 2 and sel == []
+
+
+# --- observations are not variants ----------------------------------------
+
+def test_variants_of_two_observations_are_one_family():
+    fams = SPS.frame_variant_families(['align_o002_crf', 'align_o005_crf'])
+    assert fams == {'align'}
+    assert len(SPS.frame_variant_families(
+        ['align_o002_crf', 'destreak_o005_crf'])) == 2
+
+
+def test_two_observations_of_one_variant_raise_no_variant_warning(
+        tmp_path, clean_env):
+    a = _touch(tmp_path / f'{EXPO}_destreak_o002_crf_m12_satstar_catalog.fits', 10)
+    b = _touch(tmp_path / ('jw02221005001_06201_00001_nrca1_destreak_o005_crf'
+                           '_m12_satstar_catalog.fits'), 10)
+    sel, rep = SPS.select_satstar_phase_files(
+        [a, b], phase='m12',
+        frame_variants={'destreak_o002_crf', 'destreak_o005_crf'})
+    assert sel == sorted([a, b])
+    assert 'more than one frame variant' not in SPS.format_phase_report(rep)

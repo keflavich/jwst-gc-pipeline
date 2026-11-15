@@ -31,6 +31,8 @@ so an instrument gate would not scope this change either.
 Unlike ``correct_dq_first_group_saturation`` this reads only the frame's own DQ
 -- no sibling ``_ramp.fits``, no environment gate, no instrument branch.
 """
+import types
+
 import numpy as np
 import pytest
 from jwst.datamodels import dqflags
@@ -337,17 +339,166 @@ def test_veto_with_restricted_dq_keeps_recovered_and_drops_the_core():
     assert set(np.asarray(phot.results['id'])) == {1, 4}
 
 
-def test_flag_is_wired_through_the_parser_and_the_frame_prep():
+def test_flag_is_wired_through_the_parser():
     import pathlib
-    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
 
     here = pathlib.Path(__file__).resolve().parents[1]
-    assert "--truly-lost-saturation-in-fit" in (
-        here / 'crowdsource_catalogs_long.py').read_text()
-    src = (here / 'cataloging.py').read_text()
-    assert "getattr(options, 'truly_lost_saturation_in_fit', False)" in src
-    assert '_truly_lost_fit_products(' in src
-    assert 'keep_recovered_saturation=True' in src
-    assert 'dq=ctx.dq_for_satveto' in src
-    assert 'dq=ctx.dqarr' not in src
-    assert hasattr(L, '_bad_dq_bitmask')
+    src = (here / 'crowdsource_catalogs_long.py').read_text()
+    assert '"--truly-lost-saturation-in-fit"' in src
+    assert 'dest="truly_lost_saturation_in_fit"' in src
+
+
+# The tests below run the real _prepare_frame_for_photometry (the #925 hand-off
+# fixture: a 7x7 any-group SATURATED block around a star, a zero satstar model
+# file present so the satstar fill runs) with the flag off and on.  The hand-off
+# is switched off (fit-quality reject, a target outside its default list) so
+# the only thing that can un-mask the recovered pixels is the flag.
+
+_BLOCK = np.zeros((100, 100), bool)
+_BLOCK[47:54, 37:44] = True
+_DNU_ROW = np.zeros((100, 100), bool)
+_DNU_ROW[47, 37:44] = True
+
+
+def _prep(tmp_path, monkeypatch, flag, **kw):
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+    monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    return G._prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate',
+                      target=G.NO_DEFAULT_TARGET,
+                      truly_lost_saturation_in_fit=flag, **kw)
+
+
+def test_flag_off_is_the_any_group_mask(tmp_path, monkeypatch):
+    ctx, img = _prep(tmp_path, monkeypatch, False, dnu_row=True)
+    assert ctx.mask[_BLOCK].all()
+    assert ctx.dq_for_satveto is ctx.dqarr
+    assert ctx.truly_lost_in_fit is False
+    # satstar fill still overwrites every any-group SATURATED pixel
+    assert np.all(ctx.nan_replaced_data[_BLOCK] == 0.0)
+
+
+def test_an_options_object_without_the_attribute_means_flag_off(tmp_path,
+                                                                monkeypatch):
+    """Callers that build their own options (older drivers, tests) never set
+    the attribute; that must read as the default, off."""
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+    monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
+    ctx, _ = G._prepare(tmp_path, monkeypatch, reject_reason='fit_quality_gate',
+                        target=G.NO_DEFAULT_TARGET, dnu_row=True)
+    assert ctx.truly_lost_in_fit is False
+    assert ctx.mask[_BLOCK].all()
+
+
+def test_flag_on_unmasks_recovered_pixels_and_keeps_their_data(tmp_path,
+                                                               monkeypatch):
+    ctx, img = _prep(tmp_path, monkeypatch, True, dnu_row=True)
+    assert ctx.truly_lost_in_fit is True
+    assert np.array_equal(ctx.mask[_BLOCK], _DNU_ROW[_BLOCK])
+    recovered = _BLOCK & ~_DNU_ROW
+    assert not ctx.mask[recovered].any()
+    # The satstar fill must not replace the un-masked pixels by the model (0
+    # away from an accepted satstar): the fit has to read their measured rate.
+    np.testing.assert_allclose(ctx.nan_replaced_data[recovered], img[recovered],
+                               rtol=1e-5)
+    # the veto sees only the truly-lost row; ctx.dqarr stays the any-group DQ
+    assert int(((ctx.dq_for_satveto & SAT) != 0).sum()) == 7
+    assert np.array_equal((ctx.dq_for_satveto & SAT) != 0, _DNU_ROW)
+    assert int(((ctx.dqarr & SAT) != 0).sum()) == 49
+    assert ctx.dq_for_satveto.dtype == ctx.dqarr.dtype
+
+
+def test_flag_on_without_do_not_use_keeps_the_whole_block(tmp_path,
+                                                          monkeypatch):
+    """No DO_NOT_USE anywhere: truly_lost_saturated_mask falls back to every
+    SATURATED pixel, so nothing is released and the veto DQ is unchanged."""
+    ctx, _ = _prep(tmp_path, monkeypatch, True)
+    assert ctx.mask[_BLOCK].all()
+    assert np.array_equal((ctx.dq_for_satveto & SAT) != 0, _BLOCK)
+    assert np.all(ctx.nan_replaced_data[_BLOCK] == 0.0)
+
+
+def test_flag_on_takes_truly_lost_before_the_data_floor(tmp_path, monkeypatch):
+    """A floor above every pixel empties the floor-restricted set; the fit mask
+    and the veto DQ still carry the truly-lost row (flag on), and with the flag
+    off the floor releases nothing from the any-group fit mask."""
+    ctx_on, _ = _prep(tmp_path / 'on', monkeypatch, True, dnu_row=True,
+                      saturation_data_floor=1.0e9)
+    assert np.array_equal(ctx_on.mask[_BLOCK], _DNU_ROW[_BLOCK])
+    assert np.array_equal((ctx_on.dq_for_satveto & SAT) != 0, _DNU_ROW)
+    ctx_off, _ = _prep(tmp_path / 'off', monkeypatch, False, dnu_row=True,
+                       saturation_data_floor=1.0e9)
+    assert ctx_off.mask[_BLOCK].all()
+
+
+def test_flag_on_recovers_the_flux_that_the_veto_drops_with_it_off(
+        tmp_path, monkeypatch):
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+    ctx_off, _ = _prep(tmp_path / 'off', monkeypatch, False, dnu_row=True)
+    assert not G._has_fit_near(
+        G._ctx_pass(ctx_off, handoff=False, dq=ctx_off.dq_for_satveto), G.BIG)
+    ctx_on, _ = _prep(tmp_path / 'on', monkeypatch, True, dnu_row=True)
+    res = G._ctx_pass(ctx_on, handoff=False, dq=ctx_on.dq_for_satveto)
+    assert G._has_fit_near(res, G.BIG)
+    d = np.hypot(np.asarray(res['x_fit']) - G.BIG[0],
+                 np.asarray(res['y_fit']) - G.BIG[1])
+    flux = float(np.asarray(res['flux_fit'])[np.argmin(d)])
+    true = G.BIG_AMP * 2 * np.pi * (2.574 / 2.3548) ** 2
+    assert flux == pytest.approx(true, rel=0.02)
+
+
+def test_the_manual_pass_gets_the_veto_dq(monkeypatch):
+    """do_photometry_step_manual hands _manual_phot_pass ctx.dq_for_satveto,
+    not ctx.dqarr."""
+    import types
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry import cataloging as C
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+
+    dq_any = np.zeros(G.SHAPE, np.uint32)
+    dq_veto = dq_any + 1
+    ctx = types.SimpleNamespace(
+        im1=None, fwhm_pix=G.FWHM, satstar_rejected_path=None, handoff_xy=None,
+        handoff_radius=0.0, satstar_table=None,
+        nan_replaced_data=np.zeros(G.SHAPE), mask=np.zeros(G.SHAPE, bool),
+        err=np.ones(G.SHAPE), bad=np.zeros(G.SHAPE, bool), dao_psf_model=None,
+        aperture_radius_pix=5.0, localbkg_inner=6, localbkg_outer=10,
+        grouper=None, dqarr=dq_any, dq_for_satveto=dq_veto,
+        satstar_model_subtracted=None, data=np.zeros(G.SHAPE), ww=None)
+    seen = {}
+    monkeypatch.setattr(C, '_prepare_frame_for_photometry', lambda *a, **k: ctx)
+    monkeypatch.setattr(C, '_build_manual_seed', lambda **k: Table())
+
+    def _fake_pass(**kw):
+        seen.update(kw)
+        return Table(), np.zeros(G.SHAPE), None
+    monkeypatch.setattr(C, '_manual_phot_pass', _fake_pass)
+    monkeypatch.setattr(C, '_save_manual_pass', lambda **k: None)
+    C.do_photometry_step_manual(types.SimpleNamespace(target='brick'), 'F212N',
+                                'nrca1', 'nrca1', '001', '/nonexistent',
+                                'f.fits', '2221', manual_phase='m7')
+    assert seen['dq'] is dq_veto
+
+
+@pytest.mark.parametrize('flag', [False, True])
+def test_the_arm_is_written_to_the_per_frame_header(tmp_path, monkeypatch,
+                                                    flag):
+    """TLSATFIT in the per-frame catalog header tells the A and B arms apart:
+    they write the same product names."""
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry import cataloging as C
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+    ctx, _ = _prep(tmp_path, monkeypatch, flag, dnu_row=True)
+    captured = {}
+
+    def _fake_save(result, *a, **k):
+        captured['meta'] = dict(result.meta)
+        return 'saved'
+    monkeypatch.setattr(L, 'save_photutils_results', _fake_save)
+    monkeypatch.setattr(L, 'save_residual_datamodel', lambda *a, **k: None)
+    monkeypatch.setattr(C, '_attach_residual_background', lambda *a, **k: None)
+    ctx.satstar_model_subtracted = None
+    result = Table()
+    C._save_manual_pass(ctx, result, np.zeros(ctx.data.shape),
+                        types.SimpleNamespace(blur=False), 'm7', 'nrcalong')
+    card = captured['meta']['TLSATFIT']
+    assert (card[0] if isinstance(card, tuple) else card) is flag

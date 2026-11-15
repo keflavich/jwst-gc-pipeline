@@ -269,3 +269,24 @@ def test_windowed_core_evaluation_equals_the_full_stamp(monkeypatch):
     ref, sh_r = eh.hybrid_stamp(D, origin, OS, core, 700.0, 1100.0)
     assert np.array_equal(win, ref)
     assert sh_w == sh_r
+
+
+@pytest.mark.parametrize('dx, dy', [(0.0, 0.0), (1.3, -1.1), (-1.3, -1.1), (-2.4, 1.7), (3.3, -2.1)])
+@pytest.mark.parametrize('oversampling', [2, (2, 3)])
+def test_core_box_covers_the_support_of_a_shifted_core(dx, dy, oversampling):
+    """``_core_on_stamp`` must equal ``core.sample`` on every node of the stamp
+    when the core is shifted by more than 1 px and is non-zero at its own edge
+    (a broad core), so the box's shift term and sign are pinned.  Through
+    ``hybrid_stamp`` alone the shift term is invisible: the blend weight is zero
+    beyond R1 = the core radius, so a box of half-width R1 is always enough
+    there (#1208)."""
+    core = _core(sigma=9.0)            # still ~0.4 of its peak at the radius
+    oy, ox = np.broadcast_to(np.asarray(oversampling, dtype=float), (2,))
+    nx, ny = 131, 133
+    ux = (np.arange(nx) - (nx - 1) / 2.0) / ox
+    uy = (np.arange(ny) - (ny - 1) / 2.0) / oy
+    UX, UY = np.meshgrid(ux, uy)
+    x, y = 700.0, 1100.0
+    full = core.sample(x, y, UX - dx, UY - dy)
+    assert full[np.hypot(UX - dx, UY - dy) > core.radius - 1].max() > 0   # non-zero at the edge
+    assert np.array_equal(eh._core_on_stamp(core, x, y, ux, uy, dx, dy), full)

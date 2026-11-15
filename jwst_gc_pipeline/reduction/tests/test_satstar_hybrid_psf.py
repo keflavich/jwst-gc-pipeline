@@ -278,6 +278,33 @@ def test_content_key_unchanged_when_no_core_applies(tmp_path):
                                              {eh.EPSF_CORE_DIR_ENV: str(tmp_path)}) == ''
 
 
+# Digest of the key for the frame built in ``test_stpsf_content_key_is_frozen``,
+# computed with the code of #1196 (before the ``psf_core`` term existed) and
+# identical on this branch.  Any change to what the key feeds for an STPSF run
+# invalidates every cross-phase donor under SATSTAR_CROSS_PHASE_CACHE (one refit
+# of every satstar catalogue, silently); if you change the key on purpose,
+# recompute this value and say so in the PR.
+_STPSF_KEY_DIGEST = '31221c8fd591aaf71cdee0c2d2157c7c'
+
+
+def test_stpsf_content_key_is_frozen(tmp_path, env):
+    """The key of an STPSF run is a fixed value, with the variable unset and
+    with it set for a frame no core covers (a filter without a core, MIRI)."""
+    hdr = _header()
+    sci = np.arange(16, dtype=np.float32).reshape(4, 4) / 7.0
+    dq = np.arange(16, dtype=np.uint32).reshape(4, 4)
+    fn = tmp_path / 'frozen_crf.fits'
+    fits.HDUList([fits.PrimaryHDU(header=hdr), fits.ImageHDU(sci, name='SCI'),
+                  fits.ImageHDU(dq, name='DQ')]).writeto(fn)
+    key = lambda e: satstar_cache.satstar_content_key(
+        str(fn), path_prefix=str(tmp_path / 'nopsfs'), env=e)
+    assert key({}) == _STPSF_KEY_DIGEST
+    # a core directory that has no core for F480M/NRCBLONG leaves the key alone
+    assert key({eh.EPSF_CORE_DIR_ENV: str(tmp_path / 'empty')}) == _STPSF_KEY_DIGEST
+    # and the core of this frame's filter and detector does change it
+    assert key({eh.EPSF_CORE_DIR_ENV: env['cores']}) != _STPSF_KEY_DIGEST
+
+
 # -- the writer stamps what the cache check expects ---------------------------
 
 def test_remove_saturated_stars_stamps_the_signature_the_cache_expects(

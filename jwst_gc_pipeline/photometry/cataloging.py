@@ -1518,6 +1518,36 @@ def _subset_model_image(phot, keep, shape):
         phot.__dict__.pop('_model_image_params', None)
 
 
+def _miri_satstar_excl_xy(satstar_table):
+    """Positions for the MIRI satstar-coincidence drop in ``_manual_phot_pass``.
+
+    Returns the ``(N, 2)`` array of ``x_fit``/``y_fit`` values the drop has
+    always been given, or None when there is none.  Those are the fit STAMP
+    coordinates (about 40, 40), not detector pixels, so the drop only ever
+    acted near that stamp position and was effectively dead.  Since #949 a
+    satstar table holds detector pixels in ``x_fit``/``y_fit`` and keeps the
+    stamp values in ``x_fit_cutout``/``y_fit_cutout``; this reads the stamp
+    values from either vintage so the MIRI per-frame daophot output does not
+    change with #949.  Activating the drop on detector positions (read
+    ``xcentroid``/``ycentroid``) removes daophot rows from every MIRI frame
+    and goes in its own PR.
+    """
+    if satstar_table is None or not len(satstar_table):
+        return None
+    names = satstar_table.colnames
+    for xcol, ycol in (('x_fit_cutout', 'y_fit_cutout'), ('x_fit', 'y_fit')):
+        if xcol in names and ycol in names:
+            break
+    else:
+        return None
+    sxv = np.asarray(satstar_table[xcol], dtype=float)
+    syv = np.asarray(satstar_table[ycol], dtype=float)
+    ok = np.isfinite(sxv) & np.isfinite(syv)
+    if not ok.any():
+        return None
+    return np.column_stack([sxv[ok], syv[ok]])
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -4534,7 +4564,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             if sm.shape == nan_replaced_data.shape:
                 finite_model = np.where(np.isfinite(sm), sm, 0.0)
                 if dqarr is not None:
-                    was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+                    if tl_in_fit:
+                        # `--truly-lost-saturation-in-fit` (#567): the flag
+                        # un-masks the recovered pixels so the fit reads them;
+                        # filling them from the satstar model (0 away from an
+                        # accepted satstar) would hand the fit zeros instead of
+                        # their valid rate.  Only the truly-lost set is filled.
+                        was_sat = np.asarray(truly_lost, dtype=bool)
+                    else:
+                        was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
                     if handoff_restore is not None:
                         # keep the handed-off stars' measured cores
                         was_sat = was_sat & ~handoff_restore
@@ -4552,7 +4590,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group,
         exposure_=exposure_, visitid_=visitid_, vgroupid_=vgroupid_,
         inst_token=inst_token, im1=im1, ww=ww, data=data, err=err, bad=bad,
-        dqarr=dqarr, dq_for_satveto=dq_for_satveto, mask=mask,
+        dqarr=dqarr, dq_for_satveto=dq_for_satveto,
+        truly_lost_in_fit=(tl_in_fit and dqarr is not None), mask=mask,
         nan_replaced_data=nan_replaced_data, dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
@@ -4759,6 +4798,11 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     # by default, so its trees can hold catalogs from both regimes
     result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
                                'unaccepted SATURATED comps handed to daophot')
+    # --truly-lost-saturation-in-fit (#567) changes the fitted pixels under the
+    # SAME per-frame product names, so the header is where the A and B arms of
+    # the #418 comparison are told apart
+    result.meta['TLSATFIT'] = (bool(getattr(ctx, 'truly_lost_in_fit', False)),
+                               'fit mask/veto use truly-lost saturation only')
 
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
@@ -4912,15 +4956,10 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # the satstar pixel positions once.  NIRCam: leave disabled (pix=0).
     _satstar_xy = None
     _satstar_excl_pix = 0.0
-    if _is_miri and ctx.satstar_table is not None and len(ctx.satstar_table):
-        _sst = ctx.satstar_table
-        if 'x_fit' in _sst.colnames and 'y_fit' in _sst.colnames:
-            _sxv = np.asarray(_sst['x_fit'], dtype=float)
-            _syv = np.asarray(_sst['y_fit'], dtype=float)
-            _ok = np.isfinite(_sxv) & np.isfinite(_syv)
-            if _ok.any():
-                _satstar_xy = np.column_stack([_sxv[_ok], _syv[_ok]])
-                _satstar_excl_pix = 1.5 * ctx.fwhm_pix
+    if _is_miri:
+        _satstar_xy = _miri_satstar_excl_xy(ctx.satstar_table)
+        if _satstar_xy is not None:
+            _satstar_excl_pix = 1.5 * ctx.fwhm_pix
 
     # Coadd-confirmed seed protection (extended-emission/crowded fields only):
     # exempt fits at i2d-seed positions from the satstar-wing / near-saturation
@@ -4980,7 +5019,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             dao_psf_model=ctx.dao_psf_model, init_params=seed,
             aperture_radius_pix=ctx.aperture_radius_pix,
             localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
-            grouper=ctx.grouper, options=options, dq=ctx.dq_for_satveto,
+            grouper=ctx.grouper, options=options,
+            dq=getattr(ctx, 'dq_for_satveto', ctx.dqarr),
             satstar_model_subtracted=(ctx.satstar_model_subtracted
                                       if ctx.satstar_model_subtracted is not None
                                       else np.zeros(ctx.data.shape)),

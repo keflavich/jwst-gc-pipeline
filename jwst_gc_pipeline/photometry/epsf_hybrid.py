@@ -208,9 +208,13 @@ def _core_on_stamp(core, x, y, ux, uy, dx, dy):
 
     The core is zero beyond its ``radius`` and the hybrid weights it by zero
     beyond ``r1`` <= ``radius``, so the spline needs no evaluation outside a
-    box of half-width ``radius`` + 1 px + the shift.  On a samp2 fovp1024 stamp
-    that is ~1% of the nodes: the full evaluation took ~4 s per node, the box
-    ~0.05 s.  Nodes outside the box stay exactly 0, the value the full
+    box of half-width ``radius`` + 1 px + the shift.  Measured on the real
+    nrcb5/F480M samp2 fovp1024 stamp (2048 x 2048, radius 12): the core is
+    non-zero on 0.055% of the nodes (2304 of 4,194,304) and the box holds
+    0.064%; ``hybrid_stamp`` took 2.23-2.25 s with the full evaluation and
+    0.91-0.92 s with the box per node (a loaded node, load ~30; absolute times
+    scale with the load).  What remains is ``_centroid``, which is not
+    windowed.  Nodes outside the box stay exactly 0, the value the full
     evaluation returns there (``mode='constant'``), so the result is the same
     array.
     """

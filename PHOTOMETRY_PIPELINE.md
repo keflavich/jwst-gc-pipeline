@@ -198,6 +198,21 @@ The PSF model is STPSF by default.  The opt-in hybrid PSF (empirical core,
 STPSF wings; `jwst_gc_pipeline.photometry.epsf_hybrid`) is enabled with
 `git clone https://github.com/JWST-GC/epsfs && export PSF_EPSF_CORE_DIR=<checkout>`;
 its catalogs carry the `_hybpsf` filename token and `PSFMODEL`/`EPSFCORE`/`EPSFSHA`.
+The satstar fits use the same hybrid for NIRCam: `saturated_star_finding.get_psf`
+applies the core to the frame's grid (the large grid that `get_saturated_stars`
+loads for forced and MIRI sources stays STPSF), so a small saturated core
+(N_sat of about 40-100) is fit with the PSF the unsaturated stars see.  Every
+satstar catalog now carries `PSFMODEL` (`STPSF` by default); a hybrid run adds
+`EPSFSHA` (the sha256 of the core file), `EPSFCORE`, `EPSFR0`/`EPSFR1` and
+`EPSFDIR`, restricted to the frame's own detector.  The cache check
+(`load_or_make_satstar_catalog`) compares `EPSFSHA` with the core the run would
+use before the other checks, so **switching `PSF_EPSF_CORE_DIR` on, or editing a
+core file in place, refits the cached satstar catalogs of that filter once**
+(catalogs written before this carry no `EPSFSHA` and read as STPSF).  Filters
+and programs with no core keep their caches.  The cross-phase content key
+(`satstar_cache.satstar_content_key`) adds `psf_core=<sha>` only when a core
+applies, so every STPSF key is unchanged.  This is a consistency change; no
+photometric improvement has been measured for it (the o081 A/B is open, #1208).
 
 Post-fit, in order: **overshoot QC** (rendered model peak vs local data peak; if
 `model_peak > 1.2 × data_peak` the free-position fit walked off the star →
@@ -405,6 +420,7 @@ still run after m6.
 | `--satstar-artifact-sigK` | 3.0 | 3.0 | 3.0 | 3.0 |
 | `--satstar-oversub-clamp-percentile` | 10.0 | 10 | 10 | 10 |
 | `--deblend-satstars` | off | off (on for gc2211) | | off |
+| `SATSTAR_DEBLEND_PSF_MARGIN` (env, with `--deblend-satstars`) | 0 (off) | 0 | | 0 |
 | `--satstar-zeroframe-recover` | off | off | | off |
 | `--satstar-zeroframe-dilate` | 3 | 3 | | |
 | `--manual-crossband-seed-dedup-mas` | 30.0 | 30 | 30 | 30 |
