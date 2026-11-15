@@ -197,13 +197,26 @@ INTEGRATED_MEDIAN_BAND = (0.7, 1.3)
 INTEGRATED_GROSS_BOUNDS = (0.3, 2.0)
 INTEGRATED_GROSS_FRACTION_MAX = 0.1
 INTEGRATED_MIN_STARS = 20
+#: A box with more than this fraction of its pixels non-finite in either array
+#: has no ratio.  Non-finite pixels are dropped from BOTH sums, so a NaN
+#: (saturated) core where the model has flux makes the ratio read low; a few
+#: dropped pixels are tolerated (1 of the 38 boxes in the 2026-08-21 products
+#: has 2 of 625) and the count is in the record, but a box that is mostly
+#: dropped is not a measurement.
+MAX_DROPPED_FRACTION = 0.2
 
 RECORD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
                            "sickle_f480m_residual_record.json")
-#: Set to regenerate the committed record in place.  An environment variable
-#: and not a pytest option, because an option needs a ``conftest.py`` and this
-#: tree has none.
+#: Set to ``1`` to regenerate the committed record in place (any other value,
+#: ``0`` and ``false`` included, leaves it alone).  An environment variable and
+#: not a pytest option, because an option needs a ``conftest.py`` and this tree
+#: has none.
 RECORD_UPDATE_ENV = "RESIDUAL_RECORD_UPDATE"
+
+
+def record_update_requested(environ=None):
+    environ = os.environ if environ is None else environ
+    return environ.get(RECORD_UPDATE_ENV) == "1"
 
 
 def nearest_neighbour_arcsec(stars):
@@ -222,8 +235,14 @@ def nearest_neighbour_arcsec(stars):
 
 def star_halfwidth_px(nn_arcsec, pixscale_arcsec,
                       cap=BOX_HALFWIDTH_CAP_PX, floor=BOX_HALFWIDTH_FLOOR_PX):
-    """Box half-width in pixels: half the nearest-neighbour distance, clipped."""
+    """Box half-width in pixels: half the nearest-neighbour distance, clipped.
+
+    An unknown (NaN) separation gets the floor, the smallest and so the least
+    neighbour-contaminated box; ``inf`` (no other star) gets the cap.  NaN must
+    not reach ``astype(int)``, which turns it into the most negative integer.
+    """
     half = np.floor(0.5 * np.asarray(nn_arcsec, float) / pixscale_arcsec)
+    half = np.where(np.isnan(half), floor, half)
     return np.clip(half, floor, cap).astype(int)
 
 
@@ -267,14 +286,27 @@ def annulus_sky(data, w, stars, halfwidths, inner=SKY_INNER_PX,
     return sky
 
 
-def integrated_ratio(numerator, data, w, stars, halfwidths, sky):
+def integrated_ratio(numerator, data, w, stars, halfwidths, sky,
+                     max_dropped_fraction=MAX_DROPPED_FRACTION,
+                     return_dropped=False):
     """``sum(numerator[box]) / sum(data[box] - sky)`` per star.
 
     ``numerator`` is the model for the model/data ratio and the residual for
     the residual fraction.  ``numerator``, ``data`` and ``w`` share one pixel
     grid.  ``nan`` for a star whose box is not fully on the image, has no
-    finite pixel in common between the two arrays, or whose sky-subtracted data
-    sums to zero or less (a ratio against a non-positive flux is not a ratio).
+    finite pixel in common between the two arrays, has more than
+    ``max_dropped_fraction`` of its pixels non-finite in either array, or whose
+    sky-subtracted data sums to zero or less (a ratio against a non-positive
+    flux is not a ratio).
+
+    Pixels that are non-finite in EITHER array are dropped from BOTH sums.  A
+    NaN data pixel (a saturated core) where the model has flux therefore takes
+    that flux out of the numerator too, and the ratio reads low by the model
+    flux in the dropped pixels: in the 2026-08-21 products star 23 loses 12.6%
+    of its summed model counts to two NaN data pixels.  With
+    ``return_dropped=True`` the result is ``(ratio, n_dropped)``, the number of
+    dropped pixels per star (``nan`` where the box is off the image or the sky
+    is unknown), which is what the per-star record stores.
     """
     if numerator.shape != data.shape:
         raise ValueError(f"numerator {numerator.shape} and data {data.shape} "
@@ -284,18 +316,20 @@ def integrated_ratio(numerator, data, w, stars, halfwidths, sky):
     halfwidths = np.asarray(halfwidths, int)
     sky = np.broadcast_to(np.asarray(sky, float), xi.shape)
     out = np.full(len(xi), np.nan)
+    dropped = np.full(len(xi), np.nan)
     for i, (x, y, h) in enumerate(zip(xi, yi, halfwidths)):
         if not (h <= x < nx - h and h <= y < ny - h) or not np.isfinite(sky[i]):
             continue
         num = numerator[y - h:y + h + 1, x - h:x + h + 1]
         dat = data[y - h:y + h + 1, x - h:x + h + 1]
         ok = np.isfinite(num) & np.isfinite(dat)
-        if not ok.any():
+        dropped[i] = ok.size - ok.sum()
+        if not ok.any() or dropped[i] > max_dropped_fraction * ok.size:
             continue
         flux = float(np.sum(dat[ok] - sky[i]))
         if flux > 0:
             out[i] = float(np.sum(num[ok])) / flux
-    return out
+    return (out, dropped) if return_dropped else out
 
 
 def _git_sha():
@@ -309,24 +343,31 @@ def _git_sha():
 
 
 def star_record(stars, nn_arcsec, halfwidth, model_ratio, resid_fraction,
-                dates, git_sha=None):
+                dates, git_sha=None, n_dropped_px=None):
     """The per-star record as a JSON-ready dict.
 
     ``resid_fraction`` is ``sum(resid[box]) / sum(data[box] - sky)`` over the
     same box and sky as the model ratio, kept so that a move of
     `test_residual_contains_no_stars` to an integrated statistic can be
     calibrated from this file without another pass over the mosaics.
+    ``n_dropped_px`` is the number of box pixels dropped as non-finite (see
+    `integrated_ratio`); ``None`` in the record where unknown.
     """
     def _num(x, nd):
         return None if not np.isfinite(x) else round(float(x), nd)
+
+    if n_dropped_px is None:
+        n_dropped_px = np.full(len(nn_arcsec), np.nan)
 
     stars = SkyCoord(stars)
     rows = [dict(index=i, ra=round(float(c.ra.deg), 6),
                  dec=round(float(c.dec.deg), 6),
                  nn_arcsec=_num(nn, 2), halfwidth_px=int(h),
-                 model_ratio=_num(mr, 3), resid_fraction=_num(rf, 3))
-            for i, (c, nn, h, mr, rf) in enumerate(
-                zip(stars, nn_arcsec, halfwidth, model_ratio, resid_fraction))]
+                 model_ratio=_num(mr, 3), resid_fraction=_num(rf, 3),
+                 n_dropped_px=None if not np.isfinite(nd) else int(nd))
+            for i, (c, nn, h, mr, rf, nd) in enumerate(
+                zip(stars, nn_arcsec, halfwidth, model_ratio, resid_fraction,
+                    n_dropped_px))]
     return dict(product_dates=dict(dates), git_sha=git_sha, stars=rows)
 
 
@@ -360,18 +401,67 @@ def write_record(rec, path=RECORD_PATH):
         fh.write("\n")
 
 
+def report_record(rec, path=RECORD_PATH, update=False):
+    """Text for `test_per_star_record_diff`: the diff, or a note that the
+    committed record was rewritten (only when ``update``)."""
+    if update:
+        write_record(rec, path)
+        return f"wrote {path}"
+    diff = record_diff(rec, path)
+    return ("per-star residual record vs committed copy:\n"
+            + (diff if diff else "  (no differences)"))
+
+
+def integrated_median_failure(ratio, half):
+    """Why the ensemble median is out of band, or ``None``.
+
+    The sample is the isolated stars (box at its cap) with a finite ratio:
+    stars in close pairs get a smaller box and a larger aperture-loss bias.
+    """
+    ratio, half = np.asarray(ratio, float), np.asarray(half)
+    sample = ratio[(half == BOX_HALFWIDTH_CAP_PX) & np.isfinite(ratio)]
+    if sample.size < INTEGRATED_MIN_STARS:
+        return (f"only {sample.size} isolated, in-frame curated stars have an "
+                f"integrated ratio; need {INTEGRATED_MIN_STARS}")
+    lo, hi = INTEGRATED_MEDIAN_BAND
+    med = np.median(sample)
+    if not lo <= med <= hi:
+        return (f"median integrated model/data ratio {med:.2f} over "
+                f"{sample.size} isolated stars is outside [{lo}, {hi}] "
+                f"(2026-08-21 products: 0.87)")
+    return None
+
+
+def integrated_gross_failure(ratio):
+    """Why too many stars sit outside the gross bounds, or ``None``."""
+    ratio = np.asarray(ratio, float)
+    ratio = ratio[np.isfinite(ratio)]
+    if ratio.size < INTEGRATED_MIN_STARS:
+        return (f"only {ratio.size} curated stars have an integrated ratio; "
+                f"need {INTEGRATED_MIN_STARS}")
+    lo, hi = INTEGRATED_GROSS_BOUNDS
+    frac = float(np.mean((ratio < lo) | (ratio > hi)))
+    if frac > INTEGRATED_GROSS_FRACTION_MAX:
+        return (f"{frac:.0%} of {ratio.size} curated stars have an integrated "
+                f"model/data ratio outside [{lo}, {hi}] "
+                f"(limit {INTEGRATED_GROSS_FRACTION_MAX:.0%}; "
+                f"2026-08-21 products: 0%)")
+    return None
+
+
 def _integrated_products(data, resid, model, dw, stars, dates):
     """Boxes, sky, ratios and the record for the curated stars."""
     pix = float(np.mean(proj_plane_pixel_scales(dw))) * 3600.0
     nn = nearest_neighbour_arcsec(stars)
     half = star_halfwidth_px(nn, pix)
     sky = annulus_sky(data, dw, stars, half)
-    ratio = integrated_ratio(model, data, dw, stars, half, sky)
+    ratio, dropped = integrated_ratio(model, data, dw, stars, half, sky,
+                                      return_dropped=True)
     rfrac = integrated_ratio(resid, data, dw, stars, half, sky)
     return dict(nn_arcsec=nn, halfwidth=half, sky=sky, int_ratio=ratio,
-                int_resid=rfrac,
+                int_resid=rfrac, n_dropped=dropped,
                 record=star_record(stars, nn, half, ratio, rfrac, dates,
-                                   _git_sha()))
+                                   _git_sha(), dropped))
 
 
 #: Ceilings for the OVER-subtraction direction (issue #266 item 4).  Both are
@@ -564,29 +654,14 @@ def test_integrated_model_ratio_in_band(f480m):
     pairs get a smaller box and a larger aperture-loss bias, so they appear in
     the record and in the gross-bound test below, not in this median.
     """
-    ratio, half = f480m['int_ratio'], f480m['halfwidth']
-    sample = ratio[(half == BOX_HALFWIDTH_CAP_PX) & np.isfinite(ratio)]
-    assert sample.size >= INTEGRATED_MIN_STARS, (
-        f"only {sample.size} isolated, in-frame curated stars have an "
-        f"integrated ratio; need {INTEGRATED_MIN_STARS}")
-    lo, hi = INTEGRATED_MEDIAN_BAND
-    assert lo <= np.median(sample) <= hi, (
-        f"median integrated model/data ratio {np.median(sample):.2f} over "
-        f"{sample.size} isolated stars is outside [{lo}, {hi}] "
-        f"(2026-08-21 products: 0.87)")
+    msg = integrated_median_failure(f480m['int_ratio'], f480m['halfwidth'])
+    assert msg is None, msg
 
 
 def test_integrated_model_ratio_gross_outliers_are_rare(f480m):
     """No more than a small fraction of the stars sit outside the gross bounds."""
-    ratio = f480m['int_ratio']
-    ratio = ratio[np.isfinite(ratio)]
-    assert ratio.size >= INTEGRATED_MIN_STARS
-    lo, hi = INTEGRATED_GROSS_BOUNDS
-    frac = float(np.mean((ratio < lo) | (ratio > hi)))
-    assert frac <= INTEGRATED_GROSS_FRACTION_MAX, (
-        f"{frac:.0%} of {ratio.size} curated stars have an integrated "
-        f"model/data ratio outside [{lo}, {hi}] "
-        f"(limit {INTEGRATED_GROSS_FRACTION_MAX:.0%}; 2026-08-21 products: 0%)")
+    msg = integrated_gross_failure(f480m['int_ratio'])
+    assert msg is None, msg
 
 
 def test_per_star_record_diff(f480m, capsys):
@@ -594,19 +669,14 @@ def test_per_star_record_diff(f480m, capsys):
 
     Nothing here asserts on the diff: the record documents how each star moved
     between product generations, and a legitimate re-reduction must not turn the
-    suite red.  Read it with ``pytest -s``.  ``RESIDUAL_RECORD_UPDATE=1``
-    rewrites the committed copy.  A cross-generation set of products never
-    reaches this test, because the fixture skips it first.
+    suite red.  The diff is printed in every run, ``-s`` or not
+    (``capsys.disabled()``), so a moved record is visible in a default run.
+    ``RESIDUAL_RECORD_UPDATE=1`` rewrites the committed copy.  A cross-generation
+    set of products never reaches this test, because the fixture skips it first.
     """
-    rec = f480m['record']
-    if os.environ.get(RECORD_UPDATE_ENV):
-        write_record(rec)
-        print(f"wrote {RECORD_PATH}")
-        return
-    diff = record_diff(rec)
+    text = report_record(f480m['record'], update=record_update_requested())
     with capsys.disabled():
-        print("\nper-star residual record vs committed copy:")
-        print(diff if diff else "  (no differences)")
+        print("\n" + text)
 
 
 # NB pytest ORs skip conditions: a function-level skipif(False) CANNOT cancel a

@@ -551,3 +551,42 @@ def test_the_tiles_block_does_not_need_an_epoch_or_a_catalog():
     tiles = [DRIVER.Tile(obsid='088', target='GC_88', ra=1.0, dec=2.0,
                          radius_deg=0.14, epoch=None)]
     assert "'088': GC_88" in DRIVER.tiles_block(tiles, '2026-11-13')
+
+
+def _no_epoch_tiles():
+    """Tiles as MAST gives them for an unexecuted visit: no t_min."""
+    return [DRIVER.Tile(obsid='088', target='GC_88', ra=266.8, dec=-28.3,
+                        radius_deg=0.17, epoch=None, instruments=('nircam',)),
+            DRIVER.Tile(obsid='199', target='GC_99', ra=266.9, dec=-28.3,
+                        radius_deg=0.17, epoch=None, instruments=('nircam',))]
+
+
+def test_emit_tiles_dry_run_prints_a_block_without_epoch_or_build(
+        tmp_path, monkeypatch, capsys):
+    """The documented regeneration command: no --epoch, MAST gives no t_min."""
+    import yaml
+    ran = []
+    monkeypatch.setattr(DRIVER.subprocess, 'run',
+                        lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(DRIVER, 'query_tiles',
+                        lambda **kw: _no_epoch_tiles())
+    rc = DRIVER.main(['--base', str(tmp_path), '--emit-tiles', '--dry-run'])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert ran == []
+    assert list(tmp_path.iterdir()) == []
+    block = '\n'.join(x for x in out.splitlines() if x.startswith(' ' * 8))
+    parsed = yaml.safe_load('p:\n' + block)
+    assert parsed['p']['tiles'] == {'088': 'GC_88', '199': 'GC_99'}
+
+
+def test_emit_tiles_is_printed_before_a_tile_that_needs_an_epoch_fails(
+        tmp_path, monkeypatch, capsys):
+    """Without --dry-run the build loop still wants an epoch, but the block
+    must already be on stdout by then."""
+    monkeypatch.setattr(DRIVER.subprocess, 'run', lambda *a, **k: None)
+    monkeypatch.setattr(DRIVER, 'query_tiles',
+                        lambda **kw: _no_epoch_tiles())
+    with pytest.raises(ValueError, match='no epoch'):
+        DRIVER.main(['--base', str(tmp_path), '--emit-tiles'])
+    assert "'199': GC_99" in capsys.readouterr().out
