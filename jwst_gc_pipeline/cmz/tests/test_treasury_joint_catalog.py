@@ -133,6 +133,15 @@ def test_header_roll_upstream_provenance(tmp_path):
     assert TJC._header_roll_upstream_provenance(str(p_stamped)) == (
         '2026-11-03_PR1266', '921d1ef9')
     assert TJC._header_roll_upstream_provenance(str(p_bare)) == (None, None)
+    # either card alone is enough
+    p_tag = tmp_path / 'c.fits'
+    p_ver = tmp_path / 'd.fits'
+    _write_tile(p_tag, *_grid_tile_coords(266.5, -29.1), roll_corrected=True,
+               rollcutg='2026-11-03_PR1266')
+    _write_tile(p_ver, *_grid_tile_coords(266.6, -29.1), roll_corrected=True,
+               rollcupv='921d1ef9')
+    assert TJC._header_roll_upstream_provenance(str(p_tag)) == ('2026-11-03_PR1266', None)
+    assert TJC._header_roll_upstream_provenance(str(p_ver)) == (None, '921d1ef9')
 
 
 def test_assert_no_mixed_roll_correction_raises():

@@ -28,7 +28,9 @@ in ``mag_vega_{band_a}``) are then split into
 - ``B2``: the remainder, including forced ``band_b`` rows.
 
 ``R4`` counts rows in the same magnitude range that are detected
-independently in ``band_b`` only.  The statistic is
+independently in ``band_b`` only.  ``02_extract_tiles.py`` counts R4 without
+the magnitude restriction, so R4 here and there differ for the same catalogue;
+B2, BB and BSAT agree.  The statistic is
 
     b2_share = B2 / (B2 + BB + BSAT)
 
@@ -41,7 +43,13 @@ GC Treasury m8 catalogues at F212N 13-14.5: the pre-#1178 set had a 10th
 percentile of 12% with 36 of 68 observations above 20%, and the 2026-10-28
 set a maximum of 8.6%.  Other fields and filter pairs need their own
 ``mag_range`` and thresholds.  The command line reports the verdicts and
-exits with status 1 on ``fail`` only; no pipeline stage gates on it.
+exits with status 1 on ``fail`` only, and 2 when a catalogue lacks a column
+this check needs (the remaining catalogues are still checked); no pipeline
+stage gates on it.
+
+Use it on merged catalogues (``basic_merged_*``).  B2 is defined on the merged
+two-band table; the per-module ``basic_nrca_*`` files give much larger shares
+(14-42% on the 2026-10-28 set) that are not comparable with these thresholds.
 """
 import argparse
 import json
@@ -86,7 +94,10 @@ def pair_coverage(cat, band_a='f212n', band_b='f480m', mag_range=(13.0, 14.5),
     c = _columns(cat, (band_a, band_b))
 
     def flag(stem, b):
-        return c[f'{stem}_{b}'].astype(bool)
+        col = c[f'{stem}_{b}']
+        if col.dtype.kind == 'f':
+            col = np.nan_to_num(col, nan=0.0)    # NaN is not a detection
+        return col.astype(bool)
 
     ia, ib = flag('independently_detected', band_a), flag('independently_detected', band_b)
     fa, fb = flag('forced_filled', band_a), flag('forced_filled', band_b)
@@ -122,8 +133,9 @@ def pair_coverage(cat, band_a='f212n', band_b='f480m', mag_range=(13.0, 14.5),
 def format_result(r):
     """One-line human-readable summary of a :func:`pair_coverage` result."""
     lo, hi = r['mag_range']
+    share = f"{100 * r['b2_share']:.1f}%" if np.isfinite(r['b2_share']) else 'n/a'
     return (f"{r['band_a']}/{r['band_b']} mag_vega_{r['band_a']} {lo:g}-{hi:g}: "
-            f"{r['verdict'].upper()} B2 share {100 * r['b2_share']:.1f}% "
+            f"{r['verdict'].upper()} B2 share {share} "
             f"(BB {r['n_BB']} BSAT {r['n_BSAT']} B2 {r['n_B2']} R4 {r['n_R4']})")
 
 
@@ -138,8 +150,10 @@ def _read_columns(path, bands):
 
 def main(argv=None):
     """CLI: ``python -m jwst_gc_pipeline.photometry.pair_coverage CAT.fits
-    [CAT.fits ...] [--band-a f212n --band-b f480m] [--json]``.  Exit status 1
-    when any catalog fails."""
+    [CAT.fits ...] [--band-a f212n --band-b f480m] [--json]``, on merged
+    catalogs.  Exit status 1 when any catalog fails (``fail`` verdict), 2 when
+    any catalog lacks a needed column (reported; the rest are still checked);
+    2 takes precedence."""
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('catalogs', nargs='+')
     ap.add_argument('--band-a', default='f212n')
@@ -153,18 +167,26 @@ def main(argv=None):
     ap.add_argument('--json', action='store_true', help='print JSON lines')
     a = ap.parse_args(argv)
     bad = False
+    bad_input = False
     for path in a.catalogs:
         cols = _read_columns(path, (a.band_a.lower(), a.band_b.lower()))
-        r = pair_coverage(cols, a.band_a, a.band_b,
-                          mag_range=(a.mag_min, a.mag_max), qfit_max=a.qfit_max,
-                          warn_share=a.warn_share, fail_share=a.fail_share,
-                          min_count=a.min_count)
+        try:
+            r = pair_coverage(cols, a.band_a, a.band_b,
+                              mag_range=(a.mag_min, a.mag_max), qfit_max=a.qfit_max,
+                              warn_share=a.warn_share, fail_share=a.fail_share,
+                              min_count=a.min_count)
+        except KeyError as exc:
+            bad_input = True
+            print(f'{path}  ERROR {exc.args[0]}', file=sys.stderr)
+            continue
         bad |= r['verdict'] == FAIL
         if a.json:
-            print(json.dumps(dict(r, catalog=path), default=float))
+            if not np.isfinite(r['b2_share']):    # strict JSON has no NaN
+                r['b2_share'] = None
+            print(json.dumps(dict(r, catalog=path), default=float, allow_nan=False))
         else:
             print(f'{path}  {format_result(r)}')
-    return 1 if bad else 0
+    return 2 if bad_input else (1 if bad else 0)
 
 
 if __name__ == '__main__':

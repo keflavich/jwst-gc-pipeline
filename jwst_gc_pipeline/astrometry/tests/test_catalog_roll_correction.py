@@ -185,6 +185,24 @@ def test_fits_output_keeps_upstream_tag_and_version(tmp_path, treasury_models):
     assert fits.getheader(out, 0)['GCTAG'] != 'producer-tag'
 
 
+def test_fits_upstream_tag_prefers_primary_over_table_header(tmp_path, treasury_models):
+    """The provenance hook stamps the primary HDU only, so the primary's tag is
+    the producer's; a differing table-HDU tag must not win (#1269)."""
+    ra, dec = _grid()
+    src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'
+    _write_perband(src, ra, dec)
+    with fits.open(src, mode='update') as hl:
+        hl[0].header['GCTAG'] = 'primary-tag'
+        hl[0].header['GCPIPEV'] = 'primary-commit'
+        hl[1].header['GCTAG'] = 'table-tag'
+        hl[1].header['GCPIPEV'] = 'table-commit'
+    out = tmp_path / 'out' / src.name
+    crc.correct_catalog(str(src), str(out), 'gc-treasury', treasury_models)
+    for hdr in (fits.getheader(out, 0), fits.getheader(out, 1)):
+        assert hdr['ROLLCUTG'] == 'primary-tag'
+        assert hdr['ROLLCUPV'] == 'primary-commit'
+
+
 def test_fits_output_without_upstream_tag_has_no_upstream_cards(tmp_path, treasury_models):
     ra, dec = _grid()
     src = tmp_path / 'f212n_merged_o135_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits'

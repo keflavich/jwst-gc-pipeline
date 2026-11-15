@@ -2,6 +2,8 @@
 
 Synthetic catalogs with known BB / BSAT / B2 / R4 counts.
 """
+import json
+
 import numpy as np
 import pytest
 from astropy.io import fits
@@ -125,3 +127,68 @@ def test_cli_exit_status(tmp_path, capsys):
     out = capsys.readouterr().out
     assert '"verdict": "fail"' not in out.splitlines()[-1]
     assert main([str(bad), '--fail-share', '0.5']) == 0
+
+
+def test_share_exactly_at_warn_share_passes():
+    r = pair_coverage(_cat(_rows(90), _rows(10, i4=False)))
+    assert r['b2_share'] == pytest.approx(0.10)
+    assert r['verdict'] == 'pass'
+
+
+def test_exactly_min_count_detections_is_sufficient():
+    r = pair_coverage(_cat(_rows(50)), min_count=50)
+    assert r['verdict'] == 'pass'
+    assert pair_coverage(_cat(_rows(49)), min_count=50)['verdict'] == 'insufficient'
+
+
+def test_r4_respects_magnitude_range():
+    r = pair_coverage(_cat(_rows(60), _rows(7, i2=False), _rows(5, i2=False, m2=16.0)))
+    assert r['n_R4'] == 7
+
+
+def test_masked_flag_columns_count_as_not_detected():
+    from astropy.table import MaskedColumn
+    cat = _cat(_rows(60), _rows(40))
+    mask = np.zeros(100, bool)
+    mask[60:] = True
+    cat['independently_detected_f480m'] = MaskedColumn(
+        cat['independently_detected_f480m'], mask=mask)
+    r = pair_coverage(cat)
+    assert (r['n_BB'], r['n_B2']) == (60, 40)
+
+
+def test_nan_in_float_flag_column_is_not_a_detection():
+    cat = _cat(_rows(60), _rows(40))
+    cat['independently_detected_f480m'] = np.where(
+        np.arange(100) < 60, 1.0, np.nan)
+    r = pair_coverage(cat)
+    assert (r['n_BB'], r['n_B2']) == (60, 40)
+
+
+def test_insufficient_result_prints_na_and_strict_json(tmp_path, capsys):
+    p = tmp_path / 'empty.fits'
+    _write(p, _cat(_rows(5, i2=False)))
+    assert 'B2 share n/a' in format_result(pair_coverage(_cat(_rows(5, i2=False))))
+    assert main([str(p), '--json']) == 0
+    rec = json.loads(capsys.readouterr().out, parse_constant=_no_constant)
+    assert rec['verdict'] == 'insufficient' and rec['b2_share'] is None
+
+
+def _no_constant(name):
+    raise ValueError(f'non-strict JSON constant {name}')
+
+
+def test_cli_bad_input_is_status_2_and_batch_continues(tmp_path, capsys):
+    good = tmp_path / 'good.fits'
+    nocol = tmp_path / 'nocol.fits'
+    _write(good, _cat(_rows(95), _rows(5, i4=False)))
+    cat = _cat(_rows(60))
+    cat.remove_column('independently_detected_f480m')
+    _write(nocol, cat)
+    assert main([str(nocol), str(good)]) == 2
+    cap = capsys.readouterr()
+    assert 'independently_detected_f480m' in cap.err
+    assert 'PASS' in cap.out and str(good) in cap.out        # the batch went on
+    bad = tmp_path / 'bad.fits'
+    _write(bad, _cat(_rows(60), _rows(40, i4=False)))
+    assert main([str(bad)]) == 1
