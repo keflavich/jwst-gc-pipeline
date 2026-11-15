@@ -203,6 +203,8 @@ def test_seed_health_collapse_warns_and_records_offset(tmp_path, capsys):
     assert health['n_good'] == {'f212n': 2000, 'f480m': 2000}
     assert health['offset_filters'] == ['f212n', 'f480m']
     assert health['offset_ok'] is True
+    assert 0.0 <= health['offset_window_edge_fraction'] <= 1.0
+    assert health['offset_window_edge_fraction'] < 0.5
     assert abs(health['offset_dra_mas'] - 80.0) < 12.0
     assert abs(health['offset_ddec_mas']) < 12.0
     # the printed line carries the recorded number, not just a prefix
@@ -362,14 +364,31 @@ def test_unequal_depth_collapse_is_still_flagged(tmp_path):
 
 
 def test_deep_band_does_not_trip_a_healthy_pair(tmp_path):
-    """gc-treasury shape (#981 review): F480M 2.4x deeper than F212N, 70% of the
-    shallow band confirmed.  The pooled form gave 0.70; dividing the deep band by
+    """gc-treasury shape (#981 review): the bands differ 2.4x in
+    good detections, 70% of the smaller band confirmed.  The pooled form gave 0.70; dividing the deep band by
     its own n_good gave 0.29 and a false collapse warning."""
     cut_bp = str(tmp_path)
     filts = _sparse_pair(cut_bp, 100, 240, 70)
     h = _load_health(C._build_crossband_seed(cut_bp, ['merged'], filts, _opts()))
     assert h['band_frac']['f480m'] == pytest.approx(0.70)
     assert h['frac'] == pytest.approx(0.70) and h['collapsed'] is False
+
+
+def test_fraction_is_capped_when_a_cluster_holds_several_detections(tmp_path):
+    """Every star of the 10-star band has two detections ~7 mas apart in the
+    other band: that band has 20 detections in kept clusters against a smallest
+    band of 10, and its fraction is capped at 1, not 2."""
+    cut_bp = str(tmp_path)
+    step = 10.0 / 3600.0
+    ra_a = 266.0 + step * np.arange(10)
+    ra_b = np.concatenate([ra_a, ra_a + 2e-6])
+    _write_m6(cut_bp, 'f212n', ra_a, np.full(10, -28.9))
+    _write_m6(cut_bp, 'f480m', ra_b, np.full(20, -28.9))
+    out = C._build_crossband_seed(cut_bp, ['merged'], ['f212n', 'f480m'], _opts())
+    h = _load_health(out)
+    assert h['n_in_seed'] == {'f212n': 10, 'f480m': 20}
+    assert h['band_frac'] == {'f212n': pytest.approx(1.0), 'f480m': pytest.approx(1.0)}
+    assert h['collapsed'] is False
 
 
 def test_good_detections_are_summed_over_modules(tmp_path):

@@ -340,7 +340,8 @@ the earlier pooled `n_seed / min(n_good)` form; not re-measured on all 68).
 On the 68 two-band gc-treasury tiles the pooled form gives 0.63-0.82 while a
 per-band count over each band's *own* `n_good` gives 0.28-0.63 (six tiles, o042,
 o043, o045, o069, o070 and o076, at 0.282-0.298, under the 0.3 floor), because
-F480M is deeper than F212N and its extra detections can never be confirmed. The
+the band with more good detections (F212N on 65 of the 68 tiles, F480M on 3)
+has detections the other band can never confirm. The
 two forms therefore agree only for bands of equal depth, and the per-band count
 uses the smallest band's `n_good` for every band (below).
 
