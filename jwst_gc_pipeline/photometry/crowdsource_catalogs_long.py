@@ -5592,10 +5592,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False, action='store_true',
                       help=('Add each m8 forced-fill source\'s local background '
                             'scatter (1.4826 MAD of the frame data in a 2.5-4.5 '
-                            'FWHM annulus) to the per-pixel crf ERR in '
-                            'quadrature, so forced_snr, flux_ulim and the '
-                            'detection cut rest on the larger error.  Writes '
-                            'forced_bkg_sigma_<filter>.  Default off: the crf '
+                            'FWHM annulus, inner radius at least 4 pixels, with '
+                            'median ERR^2 subtracted) to the per-pixel crf ERR '
+                            'in quadrature, so forced_snr, flux_ulim, emag_ab '
+                            'and the detection cut rest on the larger error.  '
+                            'Writes forced_bkg_sigma_<filter> (per pixel) and '
+                            'forced_bkg_nframes_<filter>.  Default off: the crf '
                             'ERR holds no term for background structure and '
                             'the m8 limits on bright extended emission are '
                             'deeper than the local noise (#1120).'))
@@ -5606,8 +5608,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'sources within 40 mas of a target, so the other '
                             'stars of the band stop contributing to the fit.  '
                             'Needs the m7 per-frame model and catalogue; a '
-                            'frame without them is fitted unsubtracted.  '
-                            'Writes forced_nbrsub_<filter> and '
+                            'frame without both is fitted unsubtracted and '
+                            'left out of the combine of any target that has '
+                            'a subtracted frame; a target with none is not '
+                            'promoted.  Writes forced_nbrsub_<filter> and '
                             'forced_near_m7_sep_<filter>.  Default off '
                             '(#1284).'))
     parser.add_option('--forced-fill-nrand', dest='forced_fill_nrand',
@@ -5618,9 +5622,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'flux/error (at least 1), so forced_snr, '
                             'flux_ulim and the detection cut rest on the '
                             'measured scatter.  Writes forced_err_scale_ and '
-                            'forced_snr_raw_<filter>.  Default 0 = off; use '
-                            'with --forced-fill-nbrsub (#1284).'))
+                            'forced_snr_raw_<filter>.  Default 0 = off; needs '
+                            '--forced-fill-nbrsub (warns without it) '
+                            '(#1284).'))
     (options, args) = parser.parse_args()
+
+    # The m8 dedup runs at the end of the m8 phase, inside a handler that logs
+    # a failure and carries on; a malformed option would cost the dedup product
+    # only after the whole fill.  Reject it here instead (#1278).
+    from jwst_gc_pipeline.photometry.dedup_catalog import (
+        check_winner_emag_ratio, parse_band_resolve_mas)
+    try:
+        check_winner_emag_ratio(options.m8_dedup_winner_emag_ratio)
+        parse_band_resolve_mas(options.m8_dedup_band_resolve_mas)
+    except ValueError as _dedup_err:
+        parser.error(f"--m8-dedup-*: {_dedup_err}")
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the
     # instrument must be stated explicitly.  Set the process-global env override
