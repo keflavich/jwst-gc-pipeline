@@ -4511,7 +4511,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             if sm.shape == nan_replaced_data.shape:
                 finite_model = np.where(np.isfinite(sm), sm, 0.0)
                 if dqarr is not None:
-                    was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+                    if tl_in_fit:
+                        # `--truly-lost-saturation-in-fit` (#567): the flag
+                        # un-masks the recovered pixels so the fit reads them;
+                        # filling them from the satstar model (0 away from an
+                        # accepted satstar) would hand the fit zeros instead of
+                        # their valid rate.  Only the truly-lost set is filled.
+                        was_sat = np.asarray(truly_lost, dtype=bool)
+                    else:
+                        was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
                     if handoff_restore is not None:
                         # keep the handed-off stars' measured cores
                         was_sat = was_sat & ~handoff_restore
@@ -4529,7 +4537,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group,
         exposure_=exposure_, visitid_=visitid_, vgroupid_=vgroupid_,
         inst_token=inst_token, im1=im1, ww=ww, data=data, err=err, bad=bad,
-        dqarr=dqarr, dq_for_satveto=dq_for_satveto, mask=mask,
+        dqarr=dqarr, dq_for_satveto=dq_for_satveto,
+        truly_lost_in_fit=(tl_in_fit and dqarr is not None), mask=mask,
         nan_replaced_data=nan_replaced_data, dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
@@ -4736,6 +4745,11 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     # by default, so its trees can hold catalogs from both regimes
     result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
                                'unaccepted SATURATED comps handed to daophot')
+    # --truly-lost-saturation-in-fit (#567) changes the fitted pixels under the
+    # SAME per-frame product names, so the header is where the A and B arms of
+    # the #418 comparison are told apart
+    result.meta['TLSATFIT'] = (bool(getattr(ctx, 'truly_lost_in_fit', False)),
+                               'fit mask/veto use truly-lost saturation only')
 
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
@@ -4952,7 +4966,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             dao_psf_model=ctx.dao_psf_model, init_params=seed,
             aperture_radius_pix=ctx.aperture_radius_pix,
             localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
-            grouper=ctx.grouper, options=options, dq=ctx.dq_for_satveto,
+            grouper=ctx.grouper, options=options,
+            dq=getattr(ctx, 'dq_for_satveto', ctx.dqarr),
             satstar_model_subtracted=(ctx.satstar_model_subtracted
                                       if ctx.satstar_model_subtracted is not None
                                       else np.zeros(ctx.data.shape)),
