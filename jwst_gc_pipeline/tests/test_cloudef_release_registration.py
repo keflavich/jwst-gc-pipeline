@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from jwst_gc_pipeline.retention import BADASTROM_RE
+
 _RELEASE = Path(__file__).resolve().parents[2] / "scripts" / "release"
 if str(_RELEASE) not in sys.path:
     sys.path.insert(0, str(_RELEASE))
@@ -87,14 +89,22 @@ def _miri_srcs():
 def test_no_miri_entry_points_at_a_quarantined_mosaic():
     """The m2 checkpoint renames a mis-tied mosaic to ``*_im0_badastrom.fits``
     and leaves a stub; a manifest ``src`` naming one would stage the stub."""
-    bad = [(f, s) for f, s in _miri_srcs() if "_im0_badastrom" in s]
+    # BADASTROM_RE is retention's model of the m2 rename and covers both the
+    # "<stem>_im0_badastrom.fits" and the ".N.fits" collision form.
+    bad = [(f, s) for f, s in _miri_srcs()
+           if BADASTROM_RE.match(Path(s).name)]
     assert not bad, f"MIRI src names a quarantined mosaic: {bad}"
 
 
 def test_cloudef_miri_src_is_never_an_archive_file():
     """If a cloudef MIRI entry is added it names the pipeline's own mosaic,
     ``jw02092-o00N_t00?_miri_clear-f*-mirimage_data_i2d.fits``, not the MAST
-    ``jw02092-o00N_t00?_miri_f*_i2d.fits`` file."""
+    ``jw02092-o00N_t00?_miri_f*_i2d.fits`` file.
+
+    Scope is ``CLOUDEF_FIELDS`` only: other fields' MIRI entries use other
+    naming (``brick`` stages ``jw02221-o002_t001_miri_f2550w_i2d.fits``), so
+    this check does not apply to them; the quarantine guard above covers every
+    ``FIELDS`` entry."""
     for field in CLOUDEF_FIELDS:
         for entry in stage_release.FIELDS[field].get("miri", []):
             name = Path(str(entry["src"])).name
