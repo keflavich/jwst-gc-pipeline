@@ -32,9 +32,12 @@ the two stars' bands, the pair has no same-band collision, and dedup collapses
 it.  The surviving row keeps the lowest-emag detection per band, so it can
 combine, for example, F115W from one star with F162M from the other and drops
 the other star's values.  This behaviour is unchanged.
-``flag_complementary_splits`` marks such pairs (``complementary_split``, ``split_group``) on the m7
-catalog, where both rows still exist, and again on the dedup output for pairs
-that dedup leaves split.
+``flag_complementary_splits`` marks such pairs (``complementary_split``,
+``split_group``) on the m7 catalog, where both rows still exist, and again on
+the dedup output for pairs that dedup leaves split because the component is
+too large or contains a band-resolved pair.  The flag uses ``link_radius`` only, so a
+complementary pair that dedup links solely through the wider satstar radius is
+not flagged.
 """
 import numpy as np
 from astropy import units as u
@@ -246,16 +249,28 @@ def _complementary_pairs(sc, bands, det, mags, is_sat, is_sat_any, *,
     return i1, i2, sep, link, n_shared
 
 
-def flag_complementary_splits(tbl, radius=0.10 * u.arcsec,
-                              dmag_collision=0.1):
+def flag_complementary_splits(tbl, radius=0.10 * u.arcsec):
     """Mark close row pairs whose bands are strictly complementary (#1124).
 
     A pair is flagged when its rows lie within ``radius`` and no band detects
     both, with each row detecting at least one band.  That is the signature of
     the cross-band merge attaching one star's bands (or two stars' bands) to
-    the wrong reference row.  Pairs that share a band with near-identical
-    magnitudes are duplicates, not splits, and stay unflagged; so do pairs
-    that a band resolves with |dmag| >= ``dmag_collision``.
+    the wrong reference row.  A pair that shares a detected band is excluded
+    outright, whether the shared band has near-identical magnitudes (a
+    duplicate) or discrepant ones (a resolved binary), so no magnitude
+    threshold enters the flag.
+
+    Only the plain ``radius`` is used, not dedup's wider satstar radius: a
+    complementary pair 0.1" to 0.5" apart that dedup links only through the
+    satstar radius is not flagged.
+
+    "Detection" is the one ``dedup_merged_catalog`` uses: a finite, unmasked
+    magnitude that is not marked ``forced_filled_<band>``.  At m7 time the
+    ``forced_filled_*`` and ``independently_detected_*`` columns do not exist
+    yet (m8 and ``cataloging.annotate_independent_detection`` write them
+    later), so a cross-band-seeded force-fit in an m7 row counts as a
+    detection there; the forced-fill exclusion is operative on the
+    ``m8_dedup`` output only.
 
     Adds two columns to ``tbl`` in place and returns it:
 
@@ -264,25 +279,41 @@ def flag_complementary_splits(tbl, radius=0.10 * u.arcsec,
     ``split_group`` : int
         Shared by the rows of one pair or chain of flagged pairs, equal to the
         lowest member row index at flag time; -1 where unflagged.  It is a
-        label, not a row pointer: dedup drops rows, so an index stored at m7
-        would not locate the partner in ``m8_dedup``.
+        label, not a row pointer: dedup drops rows, and the quality-cut
+        (``_qualcuts``/oksep) tables select rows after the flag is computed,
+        so a flagged row can lack its partner there.
 
     Flux and magnitude columns are not touched, and repeated calls give the
     same columns.  A table without ``skycoord_ref`` or without real bands gets
     all-False/-1 columns.
+
+    Raises
+    ------
+    ValueError
+        If any ``skycoord_ref`` coordinate is non-finite.
     """
     n = len(tbl)
     split = np.zeros(n, bool)
     group = np.full(n, -1, int)
     bands = real_bands(tbl)
+    if n > 1 and 'skycoord_ref' in tbl.colnames:
+        sc = SkyCoord(tbl['skycoord_ref'])
+        nbad = int((~(np.isfinite(sc.ra.deg) & np.isfinite(sc.dec.deg))).sum())
+        if nbad:
+            raise ValueError(
+                f"skycoord_ref has {nbad} non-finite coordinate(s); the "
+                f"complementary-split flag needs a position for every row")
     if n > 1 and bands and 'skycoord_ref' in tbl.colnames:
         det, mags, is_sat, is_sat_any = _band_state(tbl, bands)
         nbands_det = np.sum([det[b] for b in bands], axis=0)
-        i1, i2, _, link, n_shared = _complementary_pairs(
-            SkyCoord(tbl['skycoord_ref']), bands, det, mags, is_sat,
-            is_sat_any, link_radius=radius, sat_link_radius=0 * u.arcsec,
-            dmag_collision=dmag_collision, sat_dmag_collision=dmag_collision)
-        sel = (link & (n_shared == 0)
+        # the collision thresholds are inert here: pairs that share a band
+        # are dropped by the n_shared == 0 test below, and a pair with no
+        # shared band has no collision to threshold
+        i1, i2, _, _, n_shared = _complementary_pairs(
+            sc, bands, det, mags, is_sat, is_sat_any,
+            link_radius=radius, sat_link_radius=0 * u.arcsec,
+            dmag_collision=0.0, sat_dmag_collision=0.0)
+        sel = ((n_shared == 0)
                & (nbands_det[i1] > 0) & (nbands_det[i2] > 0))
         i1, i2 = i1[sel], i2[sel]
         if len(i1):
@@ -447,8 +478,7 @@ def dedup_merged_catalog(in_path, out_path, *,
     _recompute_synthetic(out, bands, changed[~drop])
     # pairs that dedup left split (too-large component, binary protection)
     # are flagged on the output rows; any m7 values are stale after the drop
-    flag_complementary_splits(out, radius=link_radius,
-                              dmag_collision=dmag_collision)
+    flag_complementary_splits(out, radius=link_radius)
 
     if verbose:
         ncomp = len(primaries)

@@ -239,3 +239,102 @@ def test_dedup_collapse_unchanged_and_flag_cleared(tmp_path):
     # the collapsed pair is one row now, so nothing is left to flag
     assert not out['complementary_split'].any()
     assert (out['split_group'] == -1).all()
+
+
+def _pair(sep_arcsec, **kw):
+    """Two complementary rows (f187n only / f405n only) ``sep_arcsec`` apart."""
+    return _build([
+        _row(0.0, 0.0, f187n=(15.0, True)),
+        _row(0.0, sep_arcsec / 3600., f405n=(16.0, True)),
+    ], **kw)
+
+
+@pytest.mark.parametrize('sep, flagged', [
+    (0.0999, True), (0.1001, False), (0.15, False), (0.19, False), (0.21, False)])
+def test_flag_radius_boundary(sep, flagged):
+    # default radius 0.10": a pair at 0.15-0.2" must stay unflagged
+    t = dc.flag_complementary_splits(_pair(sep))
+    assert bool(t['complementary_split'].all()) is flagged
+    assert bool(t['complementary_split'].any()) is flagged
+
+
+def test_flag_custom_radius():
+    t = dc.flag_complementary_splits(_pair(0.15), radius=0.2 * u.arcsec)
+    assert t['complementary_split'].all()
+    t = dc.flag_complementary_splits(_pair(0.07), radius=0.05 * u.arcsec)
+    assert not t['complementary_split'].any()
+
+
+def test_dedup_output_flag_uses_link_radius(tmp_path):
+    # a 4-row complementary chain at 70 mas, too large to collapse
+    # (max_component=3); with link_radius=0.05" none of the pairs is close
+    # enough to flag, with the default 0.10" all of them are
+    d = 0.07 / 3600.
+    rows = [_row(0.0, k * d, **{('f187n' if k % 2 == 0 else 'f405n'):
+                                (15.0 + k, True)}) for k in range(4)]
+    t = _build(rows)
+    p = tmp_path / 'in.fits'
+    t.write(p)
+    for link, expect in ((0.05 * u.arcsec, False), (0.10 * u.arcsec, True)):
+        o = tmp_path / f'out_{link.value}.fits'
+        dc.dedup_merged_catalog(str(p), str(o), link_radius=link,
+                                max_component=3, verbose=False)
+        out = Table.read(o)
+        assert len(out) == 4
+        assert bool(out['complementary_split'].all()) is expect
+        assert bool(out['complementary_split'].any()) is expect
+
+
+def test_row_without_independent_detection_not_flagged():
+    # row 1 has no detected band (only a masked/non-detected magnitude): there
+    # is no shared band, but it is not evidence of a split either
+    rows = [
+        _row(0.0, 0.0, f187n=(15.0, True)),
+        _row(0.0, 0.04 / 3600., f405n=(20.0, False)),
+    ]
+    t = dc.flag_complementary_splits(_build(rows))
+    assert not t['complementary_split'].any()
+    assert (t['split_group'] == -1).all()
+    # the same rows flag once the second one has a real detection
+    rows[1] = _row(0.0, 0.04 / 3600., f405n=(20.0, True))
+    assert dc.flag_complementary_splits(_build(rows))['complementary_split'].all()
+
+
+def test_both_rows_without_detection_not_flagged():
+    rows = [
+        _row(0.0, 0.0, f187n=(20.0, False)),
+        _row(0.0, 0.04 / 3600., f405n=(20.0, False)),
+    ]
+    t = dc.flag_complementary_splits(_build(rows))
+    assert not t['complementary_split'].any()
+
+
+def test_satstar_wide_pair_is_not_flagged():
+    # a complementary pair 0.3" apart with one saturated row: dedup links it
+    # through the satstar radius, the flag only looks within ``radius``
+    t = _pair(0.30)
+    t['is_saturated_f187n'] = [True, False]
+    dc.flag_complementary_splits(t)
+    assert not t['complementary_split'].any()
+    dc.flag_complementary_splits(t, radius=0.5 * u.arcsec)
+    assert t['complementary_split'].all()
+
+
+def test_flag_has_no_magnitude_threshold():
+    # complementary pairs share no band, so no magnitude can matter
+    assert 'dmag_collision' not in dc.flag_complementary_splits.__code__.co_varnames[
+        :dc.flag_complementary_splits.__code__.co_argcount]
+    for dm in (0.0, 5.0):
+        rows = [_row(0.0, 0.0, f187n=(15.0, True)),
+                _row(0.0, 0.04 / 3600., f405n=(15.0 + dm, True))]
+        assert dc.flag_complementary_splits(_build(rows))['complementary_split'].all()
+
+
+def test_nan_skycoord_ref_raises_valueerror():
+    t = _pair(0.04)
+    sc = t['skycoord_ref']
+    ra = np.array(sc.ra.deg)
+    ra[1] = np.nan
+    t['skycoord_ref'] = SkyCoord(ra=ra * u.deg, dec=sc.dec)
+    with pytest.raises(ValueError, match='non-finite'):
+        dc.flag_complementary_splits(t)
