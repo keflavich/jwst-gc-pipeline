@@ -4546,6 +4546,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             ("dra", "ddec", "off", "npairs", "contrast", "ok",
                              "swept", "window_arcsec", "dra_err", "ddec_err",
                              "n_peak", "window_edge_fraction",
+                             "peak_significance", "min_peak_significance",
+                             "bin_arcsec",
                              "window_consistent", "alias_rejected")})
             exp_records.append(rec)
             if exp.get("unverified"):
