@@ -143,6 +143,43 @@ def test_info_order_key_is_aligned_with_centres():
                 assert abs(k - r) < 1.0
 
 
+def test_bbox_fallback_centre_has_order_key_zero(monkeypatch):
+    """No centre survives the merge: the bbox centre is the seed and, being no
+    core, carries key 0 (a nonzero key would sort it ahead of the other
+    records of equal sat_area when the switch is on)."""
+    from jwst_gc_pipeline.reduction import satstar_deblend as SD
+    monkeypatch.setattr(SD, '_fof_merge', lambda *a, **k: ([], []))
+    zf, sat = _scene()
+    sources, _ = ndimage.label(sat)
+    sl = ndimage.find_objects(sources)[0]
+    centers, info = deblend_blob_zeroframe(
+        zf, np.zeros(SHAPE), sources, 1, sl, FWHM, sat_ceiling=np.inf)
+    assert len(centers) == 1
+    assert info['order_key'] == [0.0]
+
+
+def test_record_fallback_when_the_deblender_raises_has_order_key_zero(
+        monkeypatch):
+    from jwst_gc_pipeline.reduction import satstar_deblend as SD
+
+    def boom(*a, **k):
+        raise ValueError('forced')
+    monkeypatch.setattr(SD, 'deblend_blob_zeroframe', boom)
+    recs = _records()
+    assert len(recs) == 1
+    assert recs[0]['order_key'] == 0.0
+
+
+def test_record_fallback_when_the_deblender_returns_no_centres_has_key_zero(
+        monkeypatch):
+    from jwst_gc_pipeline.reduction import satstar_deblend as SD
+    monkeypatch.setattr(SD, 'deblend_blob_zeroframe',
+                        lambda *a, **k: ([], {'order_key': []}))
+    recs = _records()
+    assert len(recs) == 1
+    assert recs[0]['order_key'] == 0.0
+
+
 def test_fof_merge_returns_the_largest_radius_of_each_group():
     centers = [(10.0, 10.0), (10.0, 12.0), (50.0, 50.0), (80.0, 80.0)]
     means, rad = _fof_merge(centers, link=3.0, radii=[2.0, 5.0, 0.0, 4.0],
