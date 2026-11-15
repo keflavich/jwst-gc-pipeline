@@ -1604,7 +1604,7 @@ def _sanitise_meta_for_yaml(table):
             continue
         try:
             yaml.dump({k: v}, )
-        except Exception as ex:
+        except (yaml.YAMLError, TypeError, ValueError, AttributeError) as ex:
             table.meta[k] = str(v)
             print("BAD META:", k, type(v), v, ex)
 
@@ -2406,17 +2406,21 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     # `_obsid_for_glob`); the loop variable used to be spelled `obsid`, which
     # read as if the prefix were built out of an observation number.
     imgfns = []
+    _imgs_by_filter = {}
     for proposal in _obs_filters_for(target):
         for filn in _obs_filters_for(target)[proposal]:
             _obsid = _obsid_for_glob(target, proposal, filn, field=field)
             if _obsid is None:
                 continue
-            _matches = [x for x in glob.glob(
+            # sorted: glob order is the filesystem's, and the first match is
+            # what the guard message names
+            _matches = sorted(x for x in glob.glob(
                 f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(proposal)}-o{_obsid}"
                 f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-                if f'{module}_' in x or f'{module}1_' in x]
+                if f'{module}_' in x or f'{module}1_' in x)
             _check_single_observation(_matches, target, proposal, filn)
             imgfns.extend(_matches)
+            _imgs_by_filter.setdefault(filn, []).extend(_matches)
 
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
@@ -2454,6 +2458,21 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                   for filn in filternames
                   for x in glob.glob(f"{basepath}/{filn.upper()}/{filn.lower()}*{module}{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")
                   ]
+        # The catalogues are paired with the i2d list by position below, and
+        # zip() stops at the shorter list.  A filter whose catalogue exists but
+        # whose (observation-scoped) i2d glob came back empty would hand the
+        # next filter's WCS to this one's table, so name it instead.
+        _no_i2d = [filn for filn in dict.fromkeys(filternames)
+                   if not _imgs_by_filter.get(filn)
+                   and glob.glob(f"{basepath}/{filn.upper()}/{filn.lower()}*{module}{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")]
+        if _no_i2d:
+            raise ValueError(
+                f"No {module} i2d matched for filter(s) {_no_i2d} (target={target}, "
+                f"field={field!r}) although their crowdsource catalogues exist; "
+                f"without a mosaic per catalogue the WCS would be paired with "
+                f"the wrong filter's table.  Looked in "
+                f"{basepath}/<FILTER>/pipeline/ for the observation's "
+                f"*{module}_i2d.fits.")
         # Historical per-target catalog counts (brick=10, cloudc=6) predate
         # later filter additions; warn loudly rather than hard-fail on this
         # legacy (non-indivexp) path.
@@ -2729,10 +2748,12 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                 continue
         _proj = _project_for_target_filter(target, filn)
         _obsid = _obsid_for_glob(target, _proj, filn, field=field)
-        _img_matches = [] if _obsid is None else [x for x in glob.glob(
+        # sorted: the first match is the WCS and pixel-area source, so it must
+        # not depend on the filesystem's glob order
+        _img_matches = [] if _obsid is None else sorted(x for x in glob.glob(
             f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(_proj)}-o{_obsid}"
             f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-            if f'{module}_' in x or f'{module}1_' in x]
+            if f'{module}_' in x or f'{module}1_' in x)
         _check_single_observation(_img_matches, target, _proj, filn)
         if not _img_matches:
             print(f"WARNING: no {module} i2d for filter {filn}; will fall back to "
