@@ -7,9 +7,13 @@
 calls ``write_crossband_ecsv`` after the annotation and propagation steps.
 """
 import inspect
+import os
+import threading
 
 import astropy.units as u
 import numpy as np
+import pytest
+import yaml.representer
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Table
@@ -78,13 +82,54 @@ def test_run_manual_pipeline_writes_the_ecsv_last():
     i_ann = run.index("annotate_independent_detection(_xb, cut_bp, filternames, options)")
     i_exc = run.index("except Exception as _aex:")
     i_prop = run.index("propagate_independent_detection(_xb)")
-    i_ecsv = run.index("write_crossband_ecsv(_xb)")
+    i_ecsv = run.index("_write_crossband_ecsv_guarded(module, _xb_ecsv_modules, _xb, last_phase)")
     assert i_ann < i_exc < i_prop < i_ecsv
-    # the ECSV call follows the annotation's except-block at the same level, so
-    # a failed annotation still gets an ECSV (without the flags)
-    assert "if module in _xb_ecsv_modules: try: write_crossband_ecsv(_xb)" in run
+
+
+def test_the_guarded_writer_writes_only_for_ecsv_modules(tmp_path):
+    stem, _ = _annotated_fits(tmp_path)
+    fits_path = f'{stem}.fits'
+    assert cataloging._write_crossband_ecsv_guarded(
+        'nrca', {'merged'}, fits_path, 'm7') is None
+    assert not os.path.exists(f'{stem}.ecsv')
+    assert cataloging._write_crossband_ecsv_guarded(
+        'merged', {'merged'}, fits_path, 'm7') == f'{stem}.ecsv'
+    assert 'n_filt_independent' in Table.read(f'{stem}.ecsv').colnames
+
+
+@pytest.mark.parametrize('exc', [OSError('disk full'), ValueError('bad value'),
+                                 KeyError('col'),
+                                 yaml.representer.RepresenterError('no repr')])
+def test_a_failed_ecsv_write_is_reported_and_the_run_continues(
+        tmp_path, monkeypatch, capsys, exc):
+    def boom(path):
+        raise exc
+    monkeypatch.setattr(cataloging, 'write_crossband_ecsv', boom)
+    out = cataloging._write_crossband_ecsv_guarded(
+        'merged', {'merged'}, str(tmp_path / 'x_m7.fits'), 'm7')
+    assert out is None
+    msg = capsys.readouterr().out
+    assert 'manual [m7]: writing the ECSV twin of x_m7.fits failed' in msg
+
+
+def test_an_unexpected_error_in_the_ecsv_write_propagates(tmp_path, monkeypatch):
+    def boom(path):
+        raise RuntimeError('a bug, not an I/O problem')
+    monkeypatch.setattr(cataloging, 'write_crossband_ecsv', boom)
+    with pytest.raises(RuntimeError):
+        cataloging._write_crossband_ecsv_guarded(
+            'merged', {'merged'}, str(tmp_path / 'x.fits'), 'm7')
 
 
 def test_the_merge_still_strips_bad_meta_via_the_shared_helper():
     src = ' '.join(inspect.getsource(merge_catalogs.merge_catalogs).split())
     assert "_sanitise_meta_for_yaml(basetable) _write_ecsv_twin(basetable, tablename, write_ecsv)" in src
+
+
+def test_sanitise_meta_stringifies_values_the_yaml_dumper_rejects():
+    t = Table({'a': [1]})
+    t.meta['LOCK'] = threading.Lock()   # yaml.dump raises TypeError
+    t.meta['OK'] = 3
+    merge_catalogs._sanitise_meta_for_yaml(t)
+    assert isinstance(t.meta['LOCK'], str)
+    assert t.meta['OK'] == 3
