@@ -56,8 +56,9 @@ peak. Use it only to DETECT the tie is small, then refine **same-star** — a ma
 residual via `local_residual_map` (single giant cell), which REFUSES unless a verified
 small global tie already exists (nearest pair = the RIGHT star; the sanctioned path,
 NOT ad-hoc dense NN-median). `measure_reference_tie` now does this automatically and
-reports `bulk_source` (`"same-star"` / `"histogram"`); cycle-N table corrections must
-come from the same-star bulk, never the raw histogram against dense VIRAC.
+reports `bulk_source` (`"same-star"` / `"histogram"`, or `"same-star-prior"` / `"prior"`
+for the opt-in, still-unused `bulk_prior`, see `ASTROMETRY_CHECKPOINTS.md`); cycle-N
+table corrections must come from the same-star bulk, never the raw histogram against dense VIRAC.
 
 Do **not** hand-roll `match_to_catalog_sky(...).median()` in an ad-hoc script.
 Import `measure_offset` (detection/large) or use `local_residual_map` after a verified

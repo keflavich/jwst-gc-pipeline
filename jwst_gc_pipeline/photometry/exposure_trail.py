@@ -21,6 +21,19 @@ Two halves:
   detectors AND the sky position angle agrees across them: a drift is common to
   the focal plane, an optical or single-detector defect is not.
 
+BLIND SPOT of the sibling comparison: an exposure is compared with the median
+of its siblings' sigma and axis ratio, so once more than about half of a group's
+exposures trail, that median is itself trailed and the verdict is ``ok``.
+Replaying the grader on 8 detectors at a common position angle (k trailed
+exposures of n; every trailed exposure is flagged or none is): flagged for
+k <= 2 (n = 3, 4), k <= 3 (n = 5, 6), k <= 4 (n = 8) and k <= 6 (n = 12);
+every exposure reads ``ok`` for k = 3 of 3, k >= 3 of 4, k >= 4 of 5 or 6,
+k >= 5 of 8 and k >= 7 of 12.  gc2211 groups have four exposures, so 3 of 4 or
+4 of 4 trailed reads ``ok`` with "0 of N graded detectors over threshold".
+``ok`` therefore means "not distinguishable from its siblings", not "round".
+The per-detector rows keep ``sigma`` and ``axis_ratio``, so an absolute reading
+against the filter's PSF can be added without a record change.
+
 Adaptive weighted moments are used because plain box moments truncate a trail.
 ``reduction/exposure_exclusions.py`` records that 19x19 and 41x41 px box moments
 could not separate gc2211 o023 exposure 4 from a clean control.
@@ -35,13 +48,13 @@ thresholds.  Discarding an exposure stays a manual edit of
 ``reduction/exposure_exclusions.py``; nothing here writes to it.
 """
 import math
-import os
 
 import numpy as np
 from astropy.io import fits
 
 from .column_utils import _best_available_xy
 from .visit_consensus import exposure_key, select_reliable_stars
+from ..astrometry_utils import _resolve_existing_path
 from ..frame_wcs import GwcsReadError, frame_wcs
 from ..reduction.exposure_exclusions import exposure_stem
 
@@ -153,8 +166,13 @@ def _axial_mean_deg(angles_deg, weights=None):
     return float((np.degrees(math.atan2(s, c)) / 2.0) % 180.0), float(math.hypot(c, s))
 
 
-def _select_stars(table, half, n_max):
-    """Row indices and pixel positions of isolated, bright, reliable stars."""
+def _select_stars(table, half, n_max=None):
+    """Row indices and pixel positions of isolated, bright, reliable stars.
+
+    Brightest first.  ``n_max`` cuts the list; the measurement leaves it unset
+    and cuts after the stamp checks, so that stars whose stamp is unusable do
+    not use up the quota.
+    """
     x, y = _best_available_xy(table)
     x, y = np.asarray(x, float), np.asarray(y, float)
     finite = np.isfinite(x) & np.isfinite(y)
@@ -173,7 +191,7 @@ def _select_stars(table, half, n_max):
     if "flux_fit" in table.colnames:
         flux = np.asarray(table["flux_fit"], dtype=float)[cand]
         cand = cand[np.argsort(-flux)]
-    return cand[:n_max], x, y
+    return (cand if n_max is None else cand[:n_max]), x, y
 
 
 def measure_exposure_shape(table, frame_path=None, n_max=400, half=STAMP_HALF_PX,
@@ -191,10 +209,14 @@ def measure_exposure_shape(table, frame_path=None, n_max=400, half=STAMP_HALF_PX
     if not frame_path:
         return dict(status="cannot_measure", reason="no FILENAME in the catalog meta")
     frame_path = str(frame_path)
-    if not os.path.exists(frame_path):
+    try:
+        # meta['FILENAME'] is spelled with whichever of /blue and /orange was
+        # live when the catalog was built.
+        frame_path = _resolve_existing_path(frame_path)
+    except FileNotFoundError:
         return dict(status="cannot_measure", reason=f"frame not on disk: {frame_path}")
     try:
-        cand, x, y = _select_stars(table, half, n_max)
+        cand, x, y = _select_stars(table, half)
     except KeyError as ex:
         return dict(status="cannot_measure", reason=f"no pixel positions: {ex}")
     if len(cand) < min_stars:
@@ -214,6 +236,8 @@ def measure_exposure_shape(table, frame_path=None, n_max=400, half=STAMP_HALF_PX
     ny, nx = data.shape
     sigmas, ratios, thetas, xs, ys = [], [], [], [], []
     for i in cand:
+        if len(sigmas) >= n_max:
+            break
         ix, iy = int(round(x[i])), int(round(y[i]))
         if ix - half < 0 or iy - half < 0 or ix + half >= nx or iy + half >= ny:
             continue
@@ -332,7 +356,9 @@ def grade_visit_trails(measured, reviewed=None):
             else:
                 _, coherence = _axial_mean_deg([d["pa_sky_deg"] for d in over])
                 entry["pa_coherence"] = coherence
-                if coherence < TRAIL_PA_COHERENCE_MIN:
+                # Written as "not >=" so that a NaN coherence (a NaN sky angle in
+                # a hand-made record) fails closed instead of reading as agreement.
+                if not (coherence >= TRAIL_PA_COHERENCE_MIN):
                     entry.update(verdict="ok",
                                  reason=f"{len(over)} of {len(graded)} detectors over "
                                         f"threshold but the sky position angles "

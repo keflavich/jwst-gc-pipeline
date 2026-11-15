@@ -47,8 +47,10 @@ def _offset(dra_mas, ddec_mas, ok=True, swept=False):
                 window_arcsec=3.0, dra_err=0.0008, ddec_err=0.0008)
 
 
-def _region_map(worst_mas, clean, n_flagged, n_measured=25, n_uncovered=0):
+def _region_map(worst_mas, clean, n_flagged, n_measured=25, n_uncovered=0,
+                ref_too_sparse=False):
     return dict(clean=clean, measurable=True, n_cells=n_measured,
+                ref_too_sparse=ref_too_sparse,
                 n_measured=n_measured, n_flagged=n_flagged,
                 n_uncovered=n_uncovered,
                 uncovered_cells=[{'by': 'tight-pairs'}] * n_uncovered,
@@ -61,7 +63,7 @@ def _region_map(worst_mas, clean, n_flagged, n_measured=25, n_uncovered=0):
 
 def _tie(monkeypatch, bulk_mas, worst_mas, clean=False, n_flagged=2,
          n_measured=25, n_uncovered=0, dra_sem=0.8, ddec_sem=0.8,
-         region_measurable=True, grid_clean=True):
+         region_measurable=True, grid_clean=True, ref_too_sparse=False):
     """Run the REAL decision over canned estimator output."""
     dra, ddec = bulk_mas
     monkeypatch.setattr(vc, 'measure_offset',
@@ -70,7 +72,8 @@ def _tie(monkeypatch, bulk_mas, worst_mas, clean=False, n_flagged=2,
                         lambda *a, **k: dict(clean=grid_clean, n_total=4,
                                              worst_off_mas=worst_mas, cells=[]))
     if region_measurable:
-        rm = _region_map(worst_mas, clean, n_flagged, n_measured, n_uncovered)
+        rm = _region_map(worst_mas, clean, n_flagged, n_measured, n_uncovered,
+                         ref_too_sparse)
     else:
         rm = dict(clean=False, measurable=False, n_cells=0, n_measured=0,
                   n_flagged=0, worst_off_mas=float('nan'), cells=[])
@@ -108,6 +111,22 @@ def test_a_small_precisely_measured_bulk_with_a_few_flagged_cells_is_demoted(
     assert r['apply_ok'] is True, (
         'a small bulk measured to ~1 mas was refused over reference noise in '
         '2 of 25 cells; the correction cannot be improved by refusing it')
+
+
+def test_a_map_refused_for_a_sparse_reference_is_not_demoted(monkeypatch):
+    """Issue #1191: ``ref_too_sparse`` is a coverage verdict, not a residual
+    one, so the small-bulk exemption may not overrule it -- the 4-8 mas bulk of
+    the demotion test above, with the same 2 flagged cells, is demoted without
+    the flag and refused with it."""
+    ok = _tie(monkeypatch, (-6.0, -3.0), 45.0, n_flagged=2, n_measured=25)
+    assert ok['per_tile_small_bulk_exempt'] is True
+    r = _tie(monkeypatch, (-6.0, -3.0), 45.0, n_flagged=2, n_measured=25,
+             ref_too_sparse=True)
+    assert r['per_tile_ok'] is False
+    assert r['per_tile_small_bulk_exempt'] is False
+    assert r['region_map']['ref_too_sparse'] is True
+    assert r['region_map']['status'] == 'blocking'
+    assert r['apply_ok'] is False
 
 
 def test_a_clean_map_reads_not_a_demotion(monkeypatch):

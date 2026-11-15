@@ -29,6 +29,7 @@ SAFETY_OVERRIDES = (
     'ASTROM_CHECKPOINT',                  # =0 disables the checkpoint ladder
     'ALLOW_LATE_STAGE_ASTROM_SHIFT',      # accepts a shift at m3-m6
     'ALLOW_CROSSFILTER_ASTROM_FAIL',      # accepts cross-filter disagreement at m7
+    'CROSSFILTER_ANCHOR_BRIGHT_C',        # ties the m7 anchor on its brightest K stars only (#1212)
     'ALLOW_MISSING_MERGEDCAT_MOSAIC',     # accepts a merge with no mosaic
     'FORCE_REALIGN_ON_DISAGREE',          # (opposite sense: stricter, reported as info)
 )
