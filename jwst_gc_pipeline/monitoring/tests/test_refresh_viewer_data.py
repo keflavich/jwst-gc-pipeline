@@ -116,7 +116,9 @@ def test_the_files_are_copied_to_the_web_host(tmp_path):
 
 def test_no_staging_file_is_left_behind(tmp_path):
     done, docroot, _ = _run(tmp_path, _builders())
-    assert [p for p in os.listdir(docroot) if p.startswith('.')] == []
+    # the lock file is a deliberate, permanent dot-file; staging files are not
+    assert [p for p in os.listdir(docroot) if p.startswith('.')
+            and p != '.refresh_viewer_data.lock'] == []
 
 
 def test_a_failed_focal_plane_builder_replaces_neither_file(tmp_path):
@@ -130,7 +132,9 @@ def test_a_failed_focal_plane_builder_replaces_neither_file(tmp_path):
     assert done.returncode == 3
     assert json.loads((docroot / 'jwst_gc_focal_plane.json').read_text())['n_as_flown'] == 5
     assert json.loads((docroot / 'jwst_gc_cat_guidestars.json').read_text())['n'] == 7
-    assert [p for p in os.listdir(docroot) if p.startswith('.')] == []
+    # the lock file is a deliberate, permanent dot-file; staging files are not
+    assert [p for p in os.listdir(docroot) if p.startswith('.')
+            and p != '.refresh_viewer_data.lock'] == []
     assert not rsync_log.exists()
 
 
@@ -218,7 +222,8 @@ def test_a_dry_run_publishes_nothing_and_keeps_the_staged_files(tmp_path):
     assert done.returncode == 0
     assert json.loads((docroot / 'jwst_gc_focal_plane.json').read_text())['n_as_flown'] == 1
     assert not rsync_log.exists()
-    assert len([p for p in os.listdir(docroot) if p.startswith('.')]) == 2
+    assert len([p for p in os.listdir(docroot) if p.startswith('.')
+                and p != '.refresh_viewer_data.lock']) == 2
 
 
 def test_the_exposures_override_reaches_the_focal_plane_builder(tmp_path):
@@ -252,6 +257,74 @@ def test_a_stale_checkout_publishes_nothing(tmp_path):
     assert not rsync_log.exists()
 
 
+def test_the_second_rename_failing_exits_5_with_the_old_guide_stars(tmp_path):
+    """The pair of renames is not atomic.  If the guide-star rename fails the
+    docroot holds the new focal plane and the old guide stars, the script exits
+    5, and nothing is copied to the web host."""
+    docroot = tmp_path / 'docroot'
+    docroot.mkdir()
+    _seed(docroot, focal=_focal(n=3, flown=1), guide=_guide(n=2))
+    real_mv = subprocess.run(['which', 'mv'], capture_output=True, text=True,
+                             check=True).stdout.strip()
+    counter = tmp_path / 'mv.count'
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    _stub(bindir, 'mv', f'echo x >> {counter}\n'
+                        f'if [ "$(wc -l < {counter})" -ge 2 ]; then exit 1; fi\n'
+                        f'exec {real_mv} "$@"')
+    done, docroot, rsync_log = _run(
+        tmp_path, _builders(), docroot=docroot,
+        PATH=f'{bindir}{os.pathsep}{os.environ["PATH"]}')
+    assert done.returncode == 5, done.stdout + done.stderr
+    assert 'FAILED while moving' in done.stderr
+    assert json.loads((docroot / 'jwst_gc_focal_plane.json').read_text())['n_as_flown'] == 2
+    assert len(json.loads((docroot / 'jwst_gc_cat_guidestars.json').read_text())['sources']) == 2
+    assert not rsync_log.exists()
+    assert [p for p in os.listdir(docroot) if p.startswith('.')
+            and p != '.refresh_viewer_data.lock'] == []        # the trap cleaned up
+
+
+def test_a_second_run_while_one_is_running_is_refused(tmp_path):
+    import fcntl
+    docroot = tmp_path / 'docroot'
+    docroot.mkdir()
+    _seed(docroot)
+    before = {p: (docroot / p).read_text() for p in os.listdir(docroot)}
+    with open(docroot / '.refresh_viewer_data.lock', 'w') as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        done, _, rsync_log = _run(tmp_path, _builders(), docroot=docroot)
+    assert done.returncode == 7, done.stdout + done.stderr
+    assert 'another run' in done.stderr
+    assert not rsync_log.exists()
+    assert {p: (docroot / p).read_text() for p in os.listdir(docroot)
+            if not p.startswith('.')} == before
+    # the lock is released with the holder: the next run goes through
+    done, _, _ = _run(tmp_path, _builders(), docroot=docroot)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_failed_fast_forward_says_so_in_the_log(tmp_path):
+    up = tmp_path / 'up'
+    up.mkdir()
+    env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@x',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@x')
+    sh = lambda *a, **k: subprocess.run(['git', *a], check=True, env=env, **k)
+    sh('init', '-q', '-b', 'main', str(up))
+    (up / 'f').write_text('0')
+    sh('-C', str(up), 'add', '.')
+    sh('-C', str(up), 'commit', '-qm', 'base')
+    repo = tmp_path / 'repo'
+    sh('clone', '-q', str(up), str(repo))
+    (repo / 'f').write_text('local')                     # a diverging local commit
+    sh('-C', str(repo), 'commit', '-qam', 'local')
+    (up / 'f').write_text('1')
+    sh('-C', str(up), 'commit', '-qam', 'c1')
+    done, _, _ = _run(tmp_path, _builders(), REPO=str(repo),
+                      ALLOW_STALE_CHECKOUT='0')
+    assert done.returncode == 3
+    assert 'NOTE:' in done.stderr and 'could not be fast-forwarded to' in done.stderr
+
+
 # --- the helpers --------------------------------------------------------------
 
 def test_the_newest_release_wins_and_orders_numerically(tmp_path):
@@ -280,6 +353,44 @@ def test_resolve_exposures_precedence(tmp_path, monkeypatch):
     monkeypatch.delenv('EXPOSURES')
     with pytest.raises(SystemExit):
         vd.resolve_exposures(None, str(tmp_path / 'empty'))
+
+
+def test_equal_major_minor_releases_resolve_by_name(tmp_path):
+    vd = _module('viewer_data')
+    for name in ('v1.9-a', 'v1.9-b'):
+        (tmp_path / name / 'gc-treasury' / 'exposures').mkdir(parents=True)
+    assert 'v1.9-b' in vd.newest_release_exposures(str(tmp_path))
+
+
+@pytest.mark.parametrize('kind,doc', [
+    ('focal', {'pointings': [], 'n_as_flown': 0}),
+    ('guide', {'n': 3, 'sources': []}),
+])
+def test_a_document_with_no_entries_is_never_publishable(tmp_path, kind, doc):
+    """With no published copy there is no shrink floor, and ``allow_shrink``
+    removes it when there is one; the zero-entry rule is what remains."""
+    vd = _module('viewer_data')
+    new = tmp_path / 'new.json'
+    new.write_text(json.dumps(doc))
+    assert vd.check(kind, str(new))
+    assert vd.check(kind, str(new), allow_shrink=True)
+    assert 'holds no' in vd.check(kind, str(new))[0]
+
+
+@pytest.mark.parametrize('kind,doc', [
+    ('focal', {'pointings': [{'id': 'o001'}], 'n_as_flown': [1, 2]}),
+    ('guide', {'n': {'a': 1}, 'sources': [{'g': 1}]}),
+])
+def test_a_non_numeric_count_is_refused_not_a_traceback(tmp_path, kind, doc):
+    vd = _module('viewer_data')
+    new = tmp_path / 'new.json'
+    new.write_text(json.dumps(doc))
+    problems = vd.check(kind, str(new))
+    assert problems and 'does not parse' in problems[0]
+    # and a bad previous copy imposes no floor rather than crashing the check
+    ok = tmp_path / 'ok.json'
+    ok.write_text(_focal() if kind == 'focal' else _guide())
+    assert vd.check(kind, str(ok), str(new)) == []
 
 
 def test_release_name_is_read_from_the_path():
@@ -327,7 +438,9 @@ def test_the_focal_plane_records_when_and_from_which_release(tmp_path):
     src.write_text(json.dumps({'pa_v3': 87.0, 'planned': [
         {'number': '1', 'ra': 266.5, 'dec': -28.9}]}))
     out = tmp_path / 'fp.json'
-    exposures = str(tmp_path / 'releases' / 'v1.9-2026.10' / 'gc-treasury' / 'exposures')
+    exposures = tmp_path / 'releases' / 'v1.9-2026.10' / 'gc-treasury' / 'exposures'
+    _frame(exposures / 'o001' / 'F212N')
+    exposures = str(exposures)
     bfp.build(argparse.Namespace(footprints=str(src), out=str(out),
                                  anchor='NRCALL_FULL', programme='10678',
                                  exposures=exposures))
@@ -352,3 +465,83 @@ def test_the_guide_star_document_records_when_and_from_where(tmp_path, monkeypat
     doc = json.loads(out.read_text())
     assert doc['source'] == 'mast' and 'release' not in doc
     assert doc['generated'].endswith('Z')
+
+
+# --- a missing exposures tree, and the CLI wiring ---------------------------------
+
+def _frame(directory, name='a.fits', obs='1', aper='NRCA1_FULL'):
+    from astropy.io import fits
+    import numpy as np
+    directory.mkdir(parents=True, exist_ok=True)
+    primary = fits.PrimaryHDU(np.zeros((2, 2), dtype='float32'))
+    primary.header['OBSERVTN'] = obs
+    primary.header['APERNAME'] = aper
+    sci = fits.ImageHDU(np.zeros((2, 2), dtype='float32'))
+    sci.header['PA_V3'] = 90.15
+    sci.header['RA_REF'] = 266.5
+    sci.header['DEC_REF'] = -28.9
+    fits.HDUList([primary, sci]).writeto(directory / name)
+
+
+def _footprints(tmp_path):
+    src = tmp_path / 'footprints.json'
+    src.write_text(json.dumps({'pa_v3': 87.0, 'planned': [
+        {'number': '1', 'ra': 266.5, 'dec': -28.9}]}))
+    return str(src)
+
+
+def test_a_missing_exposures_directory_is_an_error_not_a_release_stamp(tmp_path):
+    pytest.importorskip('pysiaf')
+    bfp = _module('build_focal_plane')
+    out = tmp_path / 'fp.json'
+    gone = tmp_path / 'releases' / 'v1.9-2026.10' / 'gc-treasury' / 'exposures'
+    with pytest.raises(SystemExit, match='no exposures tree'):
+        bfp.main(['--footprints', _footprints(tmp_path), '--out', str(out),
+                  '--exposures', str(gone)])
+    assert not out.exists()
+
+
+def test_an_exposures_tree_with_no_usable_frame_names_no_release(tmp_path):
+    pytest.importorskip('pysiaf')
+    bfp = _module('build_focal_plane')
+    out = tmp_path / 'fp.json'
+    empty = tmp_path / 'releases' / 'v1.9-2026.10' / 'gc-treasury' / 'exposures'
+    empty.mkdir(parents=True)
+    bfp.main(['--footprints', _footprints(tmp_path), '--out', str(out),
+              '--exposures', str(empty)])
+    doc = json.loads(out.read_text())
+    assert doc['release'] is None and doc['n_as_flown'] == 0
+
+
+def test_the_focal_plane_cli_resolves_the_default_exposures(tmp_path, monkeypatch, capsys):
+    """A bare run must read the newest release (the wiring, not just `build`)."""
+    pytest.importorskip('pysiaf')
+    bfp = _module('build_focal_plane')
+    exposures = tmp_path / 'releases' / 'v1.9-2026.10' / 'gc-treasury' / 'exposures'
+    _frame(exposures / 'o001' / 'F212N')
+    monkeypatch.setenv('EXPOSURES', str(exposures))
+    out = tmp_path / 'fp.json'
+    bfp.main(['--footprints', _footprints(tmp_path), '--out', str(out)])
+    assert f'exposures: {exposures}' in capsys.readouterr().out
+    doc = json.loads(out.read_text())
+    assert doc['release'] == 'v1.9-2026.10' and doc['n_as_flown'] == 1
+
+
+def test_the_guide_star_cli_resolves_the_default_exposures(tmp_path, monkeypatch, capsys):
+    gs = _module('build_guidestars')
+    exposures = tmp_path / 'releases' / 'v1.9-2026.10' / 'gc-treasury' / 'exposures'
+    exposures.mkdir(parents=True)
+    monkeypatch.setenv('EXPOSURES', str(exposures))
+    seen = {}
+
+    def fake_scan(path):
+        seen['path'] = path
+        return ({'S1': {'ra': 1.0, 'dec': 2.0, 'gs_mag': 12.0, 'orders': {1},
+                        'obs': {'o001'}, 'visits': {'v1'}, 'frames': 1}},
+                {'v1': {'observation': 'o001', 'stars': {'S1': 1}}}, [])
+    monkeypatch.setattr(gs, 'scan', fake_scan)
+    out = tmp_path / 'gs.json'
+    gs.main(['--source', 'frames', '--out', str(out),
+             '--footprints', str(tmp_path / 'none.json')])
+    assert seen['path'] == str(exposures)
+    assert json.loads(out.read_text())['release'] == 'v1.9-2026.10'

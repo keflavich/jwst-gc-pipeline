@@ -120,6 +120,12 @@ def build(args):
     # it directly turned a new option into an AttributeError for every such
     # caller. argparse supplies the default; everyone else gets "no frames".
     exposures = getattr(args, 'exposures', None)
+    if exposures and not os.path.isdir(exposures):
+        # `observed_attitude` treats a missing directory as "no frames", which
+        # would build a plan-attitude document that still names the release.
+        # An empty string asks for the plan attitude explicitly; a path that
+        # does not exist is a typo or a moved release.
+        raise SystemExit(f'no exposures tree at {exposures}')
     flown = observed_attitude(exposures) if exposures else {}
     if flown:
         spread = max(r['pa_v3_spread_deg'] for r in flown.values())
@@ -180,7 +186,9 @@ def build(args):
     out = {'programme': args.programme, 'anchor': args.anchor,
            'default_pa_v3': default_pa,
            'generated': vd.utc_stamp(),
-           'release': vd.release_name(exposures) if exposures else None,
+           # Named only when a frame was read from it; a release directory
+           # that held no usable frame did not set any attitude.
+           'release': vd.release_name(exposures) if flown else None,
            'n_as_flown': sum(1 for e in entries if e['attitude'] == 'as-flown'),
            'instruments': [{'label': l, 'colour': c} for l, c, _ in INSTRUMENTS],
            'pointings': entries}

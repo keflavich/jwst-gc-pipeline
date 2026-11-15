@@ -167,6 +167,9 @@ What the script guarantees:
   visits that never flew and is not used as a fallback.
 * The script refuses to publish from a checkout that is behind `origin/main`
   (it fast-forwards a clean one first), as `refresh_monitor.sh` does.
+* One run at a time: the script takes an exclusive `flock` on
+  `$DOCROOT/.refresh_viewer_data.lock` and exits 7 if another run holds it, so
+  two overlapping runs cannot interleave their renames.
 * The docroot is updated first, then both files are copied to the web host with
   `rsync`, using the host and directory from `publish_hips_layers.py`. A failed
   copy exits non-zero. `DEPLOY=0` skips the copy.
@@ -179,6 +182,23 @@ which one they used. Both builders had been pinned to `v1.8-2026.09` after
 lowers `n_as_flown`, which the check refuses. Each file records `generated`
 (UTC) and, for the focal plane, `release`.
 
+How a failure is noticed: nothing notifies anyone. A failed run exits non-zero
+and writes `VIEWER DATA refresh ABORTED` (or `FAILED`) to
+`gc-viewer-data-<jobid>.out`; exit 3 is a stale checkout, 4 a rebuilt file that
+failed its check (including a shrink), 5 a failed rename (the docroot then holds
+the new focal plane and the old guide stars), 6 no web host, 7 another run in
+progress, and a builder's own code if a builder fails. Read the log after the
+first few runs, and when the viewer's `generated` stamp stops advancing.
+
+A legitimate shrink (a MAST re-issue that removes a guide star, say) fails every
+day until it is published once with `ALLOW_SHRINK=1`. Set it for that ONE run
+only, on the command line; putting it in the scrontab line disables the check.
+
+A focal plane is refused outright when `--exposures` names a directory that does
+not exist; the `release` field is recorded only when at least one frame was read
+from it. When two release directories share a major.minor (`v1.9-a`, `v1.9-b`)
+the later name wins.
+
 To see what a run would publish without publishing it:
 
 ```bash
@@ -186,7 +206,11 @@ DRY_RUN=1 bash scripts/monitoring/refresh_viewer_data.sh
 ```
 
 This builds and checks, then leaves the staged `.jwst_gc_*.json.<pid>` files in
-the docroot for a diff against the served copies.
+the docroot for a diff against the served copies. The docroot is served by
+data.rc and whether the web server serves dot-files has not been checked, so
+treat the staged files as readable by URL and remove them (`rm
+$DOCROOT/.jwst_gc_*.json.*`) when the diff is done; a SIGKILLed real run leaves
+one too (SIGTERM and `scancel` clean up).
 
 ## What the schedule does NOT do
 

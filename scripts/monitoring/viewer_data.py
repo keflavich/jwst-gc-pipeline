@@ -62,8 +62,10 @@ def newest_release_exposures(root=RELEASES_ROOT):
         names = os.listdir(root)
     except OSError:
         return None
+    # The name breaks a major.minor tie (`v1.9-a`, `v1.9-b`) so the winner does
+    # not depend on the order `os.listdir` happens to return.
     for name in sorted((n for n in names if release_key(n)),
-                       key=release_key, reverse=True):
+                       key=lambda n: (release_key(n), n), reverse=True):
         candidate = os.path.join(root, name, 'gc-treasury', 'exposures')
         if os.path.isdir(candidate):
             return candidate
@@ -120,7 +122,8 @@ def check(kind, new_path, previous_path=None, allow_shrink=False):
         return [f'{new_path} is missing or empty']
     try:
         new = counts(kind, _load(new_path))
-    except (OSError, ValueError) as err:
+    except (OSError, ValueError, TypeError) as err:
+        # TypeError: a count field that is a list or object, not a number.
         return [f'{new_path} does not parse: {err}']
     problems = []
     entries = new['pointings'] if kind == 'focal' else new['sources']
@@ -130,7 +133,7 @@ def check(kind, new_path, previous_path=None, allow_shrink=False):
     if previous_path and os.path.isfile(previous_path) and not allow_shrink:
         try:
             old = counts(kind, _load(previous_path))
-        except (OSError, ValueError):
+        except (OSError, ValueError, TypeError):
             old = {}
         for name, value in new.items():
             if value < old.get(name, 0):

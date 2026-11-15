@@ -24,6 +24,10 @@
 #   DRY_RUN=1      build and check, publish nothing, keep the staged files
 #   DEPLOY=0       update the data.rc docroot only, skip the starformation copy
 #   EXPOSURES=...  delivered frames to read (default: the newest release)
+#
+# Exit codes: 3 stale checkout, 4 a file failed its check, 5 the rename failed,
+# 6 no web host, 7 another run in progress; a builder's own code if it fails.
+# ALLOW_SHRINK=1 is for ONE run (a legitimate shrink); never put it in scrontab.
 set -uo pipefail
 
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
@@ -54,7 +58,9 @@ if [ "${ALLOW_STALE_CHECKOUT:-0}" != "1" ] && [ -d "$REPO/.git" -o -f "$REPO/.gi
     if git -C "$REPO" fetch --quiet origin 2>/dev/null \
        && git -C "$REPO" diff --quiet 2>/dev/null \
        && git -C "$REPO" diff --cached --quiet 2>/dev/null; then
-        git -C "$REPO" merge --ff-only --quiet origin/main 2>/dev/null || true
+        git -C "$REPO" merge --ff-only --quiet origin/main 2>/dev/null \
+            || echo "NOTE: $REPO could not be fast-forwarded to origin/main" \
+                    "(a feature branch or diverged history); checking staleness" >&2
     fi
     if git -C "$REPO" fetch --quiet origin 2>/dev/null; then
         behind=$(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
@@ -71,6 +77,17 @@ if [ "${ALLOW_STALE_CHECKOUT:-0}" != "1" ] && [ -d "$REPO/.git" -o -f "$REPO/.gi
 fi
 
 mkdir -p "$DOCROOT" || exit 1
+
+# One run at a time.  Two overlapping runs would stage under different names and
+# rename in an interleaved order, leaving a focal plane and guide stars built at
+# different moments.  The lock is released when the script exits.
+LOCKFILE=${LOCKFILE:-$DOCROOT/.refresh_viewer_data.lock}
+exec 9>"$LOCKFILE" || exit 1
+if ! flock -n 9; then
+    echo "VIEWER DATA refresh ABORTED: another run holds $LOCKFILE;" \
+         "published files untouched" >&2
+    exit 7
+fi
 focal_tmp="$DOCROOT/.$FOCAL.$$"
 guide_tmp="$DOCROOT/.$GUIDE.$$"
 if [ "$DRY_RUN" != "1" ]; then
