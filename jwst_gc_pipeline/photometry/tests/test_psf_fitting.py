@@ -64,10 +64,13 @@ def test_none_nan_and_nonpositive_sigma_leave_the_fit_unchanged():
         np.testing.assert_array_equal(other['flux_err'], base['flux_err'])
 
 
-def test_invalid_error_pixels_stay_excluded():
+@pytest.mark.parametrize('invalid', [np.nan, 0.0, -1.0])
+def test_invalid_error_pixels_stay_excluded(invalid):
+    # validity is judged on the formal error, before the term inflates it: a
+    # zero or negative ERR pixel must not come back with weight 1/sigma**2
     image, err, seed, xs, ys = _scene(n_src=1)
     bad = err.copy()
-    bad[int(round(ys[0])), int(round(xs[0]))] = np.nan
+    bad[int(round(ys[0])), int(round(xs[0]))] = invalid
     plain = forced_psf_photometry(image, _MockPSF(), seed, error=bad)
     inflated = forced_psf_photometry(image, _MockPSF(), seed, error=bad,
                                      bkg_sigma=np.array([2.0]))
@@ -148,3 +151,50 @@ def test_flat_annulus_reads_zero():
     img = np.full((60, 60), 7.0)
     valid = np.ones(img.shape, bool)
     assert annulus_scatter_sigma(img, valid, 30.0, 30.0, 8.0, 15.0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# annulus_scatter_sigma(error=): the formal part is not counted twice
+# ---------------------------------------------------------------------------
+def test_annulus_sigma_with_error_removes_the_formal_part_in_quadrature():
+    img, valid = _noise(sigma=5.0)
+    err = np.full(img.shape, 3.0)
+    raw = annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0)
+    excess = annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0, error=err)
+    assert excess == pytest.approx(np.sqrt(raw ** 2 - 9.0), rel=1e-12)
+    assert excess == pytest.approx(4.0, rel=0.15)     # sqrt(5**2 - 3**2)
+
+
+def test_annulus_sigma_with_error_is_floored_at_zero_where_error_explains_it():
+    img, valid = _noise(sigma=5.0)
+    out = annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0,
+                                error=np.full(img.shape, 9.0))
+    assert out == 0.0
+    # the term then adds nothing: the fit keeps the formal error
+    xy = Table({'x_init': [40.0], 'y_init': [40.0]})
+    plain = forced_psf_photometry(img, _MockPSF(), xy, error=np.full(img.shape, 9.0))
+    term = forced_psf_photometry(img, _MockPSF(), xy, error=np.full(img.shape, 9.0),
+                                 bkg_sigma=np.array([out]))
+    np.testing.assert_array_equal(term['flux_err'], plain['flux_err'])
+
+
+def test_annulus_sigma_with_error_uses_the_median_over_finite_annulus_pixels():
+    img, valid = _noise(sigma=5.0)
+    err = np.full(img.shape, 3.0)
+    yy, xx = np.indices(img.shape)
+    rr = np.hypot(xx - 40.0, yy - 40.0)
+    err[(rr >= 8.0) & (rr < 15.0) & (xx > 34)] = np.nan   # no error on most of it
+    err[rr < 8.0] = 1e6                                   # outside the annulus
+    raw = annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0)
+    out = annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0, error=err)
+    assert out == pytest.approx(np.sqrt(raw ** 2 - 9.0), rel=1e-12)
+    # an annulus with no finite error keeps the raw scatter
+    none = annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0,
+                                 error=np.full(img.shape, np.nan))
+    assert none == raw
+
+
+def test_annulus_sigma_without_error_is_unchanged_by_the_keyword():
+    img, valid = _noise()
+    assert (annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0, error=None)
+            == annulus_scatter_sigma(img, valid, 40.0, 40.0, 8.0, 15.0))

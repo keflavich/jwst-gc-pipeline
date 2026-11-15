@@ -15,6 +15,7 @@ from astropy import units as u
 from astropy.wcs import WCS
 
 from jwst_gc_pipeline.photometry import forced_fill as ff
+from jwst_gc_pipeline.photometry.psf_fitting import annulus_scatter_sigma
 
 SIG = 1.5
 
@@ -420,11 +421,35 @@ def test_bkg_scatter_ulim_tracks_the_blank_position_scatter():
     # the bound is only ever raised, and fewer blank positions pass the cut
     assert np.all(tbl['flux_ulim_f405n'][blank] >= off['flux_ulim_f405n'][blank])
     assert (~tbl['mask_f405n'][blank]).sum() < (~off['mask_f405n'][blank]).sum()
-    # the diagnostic column is the annulus scatter in image units
+    # the diagnostic column is the annulus scatter beyond the unit ERR, per
+    # pixel in image units, written for every fitted row (promoted ones too)
     bs = np.asarray(tbl['forced_bkg_sigma_f405n'][blank], float)
     assert np.isfinite(bs).all()
-    assert np.median(bs) == pytest.approx(NOISE, rel=0.1)
+    assert np.median(bs) == pytest.approx(np.sqrt(NOISE ** 2 - 1.0), rel=0.1)
     assert not np.isfinite(tbl['forced_bkg_sigma_f405n'][:ndet]).any()
+    promoted = ~np.asarray(tbl['mask_f405n'][blank], bool)
+    assert promoted.sum() > 0
+    assert np.isfinite(bs[promoted]).all()
+    nfr = np.asarray(tbl['forced_bkg_nframes_f405n'])
+    assert (nfr[blank] == 1).all() and (nfr[:ndet] == 0).all()
+
+
+# Values of the m8 fill with the switch off on ``_blank_scene(nblank=40)``,
+# computed with the code of the PR's base (#1238, origin/agent/issue-1238
+# 0c173c61) before the switch existed: the first four blank rows and the sum
+# over the 40.  The switch must not move them.
+_BASE_OFF = {
+    'flux_f405n': ([38.408775123168674, 9.870752501505342,
+                    -39.195637139248596, -9.889590138279793], 232.75895440003455),
+    'forced_snr_f405n': ([7.089440805229665, 1.8217847990080438,
+                          -7.216877426747068, -1.8327893790652945],
+                         42.96727823067737),
+    'flux_ulim_f405n': ([16.253231888826416, 16.25453100752614,
+                         16.293322508422712, 16.187768629459306],
+                        649.783680456242),
+    'emag_ab_f405n': ([0.15314324921072933, 0.5959540339732554, np.nan, np.nan],
+                      34.155941881068685),
+}
 
 
 def test_bkg_scatter_off_is_the_existing_behaviour():
@@ -433,12 +458,45 @@ def test_bkg_scatter_off_is_the_existing_behaviour():
     _fill(ref, prepare_frame)
     explicit = tbl.copy()
     _fill(explicit, prepare_frame, bkg_scatter=False)
-    assert 'forced_bkg_sigma_f405n' not in ref.colnames
+    assert not [c for c in ref.colnames if c.startswith('forced_bkg')]
     assert explicit.colnames == ref.colnames
     for c in ref.colnames:
         if c == 'skycoord_ref':
             continue
         np.testing.assert_array_equal(np.asarray(explicit[c]), np.asarray(ref[c]))
+    # and against the values the base code gives, not only against itself
+    for col, (head, total) in _BASE_OFF.items():
+        vals = np.asarray(ref[col][ndet:], float)
+        np.testing.assert_allclose(vals[:4], head, rtol=1e-9)
+        assert np.nansum(vals) == pytest.approx(total, rel=1e-9)
+    assert (~np.asarray(ref['mask_f405n'][ndet:], bool)).sum() == 9
+
+
+def test_bkg_scatter_off_resets_the_columns_of_an_earlier_on_run():
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=30)
+    _fill(tbl, prepare_frame, bkg_scatter=True)
+    assert np.isfinite(tbl['forced_bkg_sigma_f405n'][ndet:]).all()
+    _fill(tbl, prepare_frame)
+    assert np.isnan(np.asarray(tbl['forced_bkg_sigma_f405n'][ndet:], float)).all()
+    assert (np.asarray(tbl['forced_bkg_nframes_f405n'][ndet:]) == 0).all()
+
+
+def test_bkg_scatter_on_a_frame_whose_err_is_right_does_not_double_count():
+    """ERR equals the true scatter: the term must add (almost) nothing.  Adding
+    the raw annulus scatter would raise ferr by sqrt(2) here (a 38% error)."""
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=300, noise=1.0)
+    off = tbl.copy()
+    _fill(off, prepare_frame)
+    _fill(tbl, prepare_frame, bkg_scatter=True)
+    blank = slice(ndet, None)
+    ratio = (np.median(tbl['flux_ulim_f405n'][blank])
+             / np.median(off['flux_ulim_f405n'][blank]))
+    assert 1.0 <= ratio < 1.1
+    true_scatter = np.std(np.asarray(off['flux_f405n'][blank], float))
+    assert np.median(tbl['flux_ulim_f405n'][blank]) / 3.0 == pytest.approx(
+        true_scatter, rel=0.1)
+    # most of the MAD estimates are below ERR, so the term reads 0 there
+    assert np.median(np.asarray(tbl['forced_bkg_sigma_f405n'][blank], float)) < 0.5
 
 
 def test_bkg_scatter_falls_back_to_crf_error_where_the_annulus_is_unusable():
@@ -493,18 +551,141 @@ def test_bkg_scatter_error_scales_with_the_frame_pixel_area():
     assert np.all(var_raw > 1.0 / (2 * np.pi * SIG ** 2))   # above the ERR-only floor
 
 
-def test_bkg_scatter_option_is_wired_through_the_cli_and_both_m8_call_sites():
+def test_bkg_scatter_annulus_radii_and_floors():
+    # 2.5 and 4.5 FWHM where the floors do not bind
+    inner, outer = ff.bkg_scatter_annulus(3.53, (5, 5))
+    assert (inner, outer) == pytest.approx((2.5 * 3.53, 4.5 * 3.53))
+    # the inner radius clears the 5x5 stamp (half-width 2.5 + 1.5 = 4 px)
+    # for a FWHM below 1.6 px, and the outer radius keeps 2 px of width
+    assert ff.bkg_scatter_annulus(1.0, (5, 5)) == (4.0, 6.0)
+    assert ff.bkg_scatter_annulus(1.6, (5, 5)) == pytest.approx((4.0, 7.2))
+    assert ff.bkg_scatter_annulus(1.0, (7, 7)) == (5.0, 7.0)
+    # and the frame fit uses it: the annulus is where the scatter is measured
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=10)
+    ctx = prepare_frame()
+    inner, outer = ff.bkg_scatter_annulus(FWHM, (5, 5))
+    ra = tbl['skycoord_ref'].ra.deg[ndet:]
+    dec = tbl['skycoord_ref'].dec.deg[ndet:]
+    loc, _, _, bs = ff._forced_fit_frame(
+        'a', 'f405n', ra, dec, prepare_frame=prepare_frame,
+        frame_arg_builder=lambda fn: {}, fit_shape=(5, 5), bkg_scatter=True)
+    x, y = ctx.ww.all_world2pix(ra, dec, 0)
+    expect = [annulus_scatter_sigma(ctx.nan_replaced_data, ~ctx.mask, x[k], y[k],
+                                    inner, outer, min_pixels=20, error=ctx.err)
+              for k in loc]
+    np.testing.assert_array_equal(bs, expect)
+
+
+def test_bkg_scatter_stays_aligned_when_a_fit_is_dropped():
+    """A target whose stamp has no usable error pixel gives no fit and is
+    dropped; the scatter of the others must stay on their own rows."""
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=30)
+    ctx = prepare_frame()
+    ra = tbl['skycoord_ref'].ra.deg[ndet:]
+    dec = tbl['skycoord_ref'].dec.deg[ndet:]
+    x, y = ctx.ww.all_world2pix(ra, dec, 0)
+    image = ctx.nan_replaced_data.copy()
+    image[:, 120:] *= 3.0                  # scatter differs between the halves
+    err = ctx.err.copy()
+    drop = 4
+    ix, iy = int(round(x[drop])), int(round(y[drop]))
+    err[iy - 2:iy + 3, ix - 2:ix + 3] = np.nan
+    ctx2 = SimpleNamespace(**{**vars(ctx), 'nan_replaced_data': image, 'err': err})
+    loc, _, _, bs = ff._forced_fit_frame(
+        'a', 'f405n', ra, dec, prepare_frame=lambda **kw: ctx2,
+        frame_arg_builder=lambda fn: {}, fit_shape=(5, 5), bkg_scatter=True)
+    assert drop not in loc and len(loc) == 29
+    inner, outer = ff.bkg_scatter_annulus(FWHM, (5, 5))
+    for k, b in zip(loc, bs):
+        assert b == annulus_scatter_sigma(image, ~ctx.mask, x[k], y[k], inner,
+                                          outer, min_pixels=20, error=err)
+    left, right = x[loc] < 100, x[loc] > 140
+    assert left.any() and right.any()
+    assert np.median(bs[right]) > 2.0 * np.median(bs[left])
+
+
+def test_bkg_scatter_mean_and_count_cover_only_the_frames_that_measured_it():
+    tbl, prepare_frame, ndet, mask_a = _blank_scene(nblank=30)
+    ctx = prepare_frame()
+    ra = tbl['skycoord_ref'].ra.deg[ndet:]
+    dec = tbl['skycoord_ref'].dec.deg[ndet:]
+    x, y = ctx.ww.all_world2pix(ra, dec, 0)
+    # frame b has only each target's own 5x5 stamp usable: no annulus
+    mask_b = np.ones_like(mask_a)
+    for xi, yi in zip(x, y):
+        mask_b[int(round(yi)) - 2:int(round(yi)) + 3,
+               int(round(xi)) - 2:int(round(xi)) + 3] = False
+    masks = {'a': mask_a, 'b': mask_b}
+
+    def prep(name):
+        return SimpleNamespace(**{**vars(ctx), 'mask': masks[name]})
+
+    def fill(t, frames):
+        ff.forced_fill_band(t, 'f405n', frames, prepare_frame=lambda **kw: prep(**kw),
+                            frame_arg_builder=lambda fn: {'name': fn}, nsigma=3.0,
+                            fit_shape=(5, 5), verbose=False, bkg_scatter=True)
+    both, only_a = tbl.copy(), tbl.copy()
+    fill(both, ['a', 'b'])
+    fill(only_a, ['a'])
+    unmeasured_b = np.isnan(np.asarray(
+        ff._forced_fit_frame('b', 'f405n', ra, dec, prepare_frame=lambda **kw: prep(**kw),
+                             frame_arg_builder=lambda fn: {'name': fn},
+                             fit_shape=(5, 5), bkg_scatter=True)[3], float))
+    assert unmeasured_b.sum() > 20
+    n = np.asarray(both['forced_bkg_nframes_f405n'][ndet:])
+    # frame b contributes nothing to the mean or the count where it has no annulus
+    assert (n[unmeasured_b] == 1).all()
+    np.testing.assert_array_equal(
+        np.asarray(both['forced_bkg_sigma_f405n'][ndet:])[unmeasured_b],
+        np.asarray(only_a['forced_bkg_sigma_f405n'][ndet:])[unmeasured_b])
+    # frame b's ERR-only weight pulls the combined error below frame a's alone
+    assert np.all(np.asarray(both['flux_ulim_f405n'][ndet:])[unmeasured_b]
+                  < np.asarray(only_a['flux_ulim_f405n'][ndet:])[unmeasured_b])
+
+
+def test_the_runner_passes_bkg_scatter_through_and_writes_the_columns(
+        tmp_path, monkeypatch):
+    seen = []
+    _real = ff.forced_fill_band
+
+    def _spy(*args, **kwargs):
+        seen.append(kwargs.get('bkg_scatter'))
+        return _real(*args, **kwargs)
+
+    monkeypatch.setattr(ff, 'forced_fill_band', _spy)
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=30)
+    merged = str(tmp_path / 'merged_m7.fits')
+    tbl.write(merged)
+    outs = []
+    for flag in (False, True):
+        out = str(tmp_path / f'merged_m8_{flag}.fits')
+        ff.run_forced_crossband_fill(
+            merged, out, filternames=['F405N'], module='merged',
+            frames_for=lambda filt: ['frame1'], prepare_frame=prepare_frame,
+            frame_arg_builder_for=lambda filt: (lambda fn: {}),
+            verbose=False, frame_area_sr=None, bkg_scatter=flag)
+        outs.append(Table.read(out))
+    assert seen == [False, True]
+    off, on = outs
+    assert not [c for c in off.colnames if c.startswith('forced_bkg')]
+    assert np.isfinite(np.asarray(on['forced_bkg_sigma_f405n'][ndet:], float)).all()
+    assert (np.asarray(on['forced_bkg_nframes_f405n'][ndet:]) == 1).all()
+
+
+def test_the_option_is_on_the_cli_and_read_at_both_m8_call_sites():
     import inspect
-    import os
+    import subprocess
+    import sys
     from jwst_gc_pipeline.photometry import cataloging
-    src = inspect.getsource(cataloging.run_manual_pipeline)
+    src = ' '.join(inspect.getsource(cataloging.run_manual_pipeline).split())
     assert src.count("bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False))") == 2
-    cli = os.path.join(os.path.dirname(cataloging.__file__),
-                       'crowdsource_catalogs_long.py')
-    with open(cli) as fh:
-        text = fh.read()
-    i = text.index("'--forced-fill-bkg-scatter'")
-    assert "default=False, action='store_true'" in text[i:i + 200]
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(cataloging.__file__)))
+    out = subprocess.run(
+        [sys.executable, '-m', 'jwst_gc_pipeline.photometry.crowdsource_catalogs_long',
+         '--help'], capture_output=True, text=True, timeout=300, check=True,
+        cwd=os.path.dirname(root), env={**os.environ, 'PYTHONPATH': os.path.dirname(root)}).stdout
+    assert '--forced-fill-bkg-scatter' in ' '.join(out.split())
 
 
 # ---------------------------------------------------------------------------
@@ -605,18 +786,27 @@ def test_neighbour_subtraction_falls_back_without_the_model_file(tmp_path, capsy
     assert not sub['forced_nbrsub_f405n'][ndet]
     assert sub['flux_f405n'][ndet] == raw['flux_f405n'][ndet]
     assert sub['forced_snr_f405n'][ndet] == raw['forced_snr_f405n'][ndet]
+    # the raw fit would promote the neighbour's light to a detection; with no
+    # subtracted frame the row keeps its fit and stays an upper limit
+    assert not raw['mask_f405n'][ndet] and not raw['is_upper_limit_f405n'][ndet]
+    assert sub['mask_f405n'][ndet] and sub['is_upper_limit_f405n'][ndet]
 
 
-def test_neighbour_subtraction_without_the_catalogue_subtracts_and_adds_nothing(
+def test_neighbour_subtraction_without_the_catalogue_fits_unsubtracted(
         tmp_path, capsys):
+    # the model alone would remove the target's own same-star counterpart with
+    # nothing to add back (flux ~10 of 800), so the frame is fitted raw
     amp = 800.0
     tbl, prepare, ndet, _ = _crowded_scene(target_amp=amp, neighbour_amp=0.0)
     paths = _write_m7_products(tmp_path, (240, 240), [(60.5, 60.0, amp)],
                                catalogue=False)
+    raw = tbl.copy()
+    _fill_nbr(raw, prepare, paths)
     _fill_nbr(tbl, prepare, paths, nbrsub=True)
     assert paths[1] in capsys.readouterr().out
-    assert tbl['forced_nbrsub_f405n'][ndet]
-    assert tbl['flux_f405n'][ndet] < 0.3 * amp
+    assert not tbl['forced_nbrsub_f405n'][ndet]
+    assert tbl['flux_f405n'][ndet] == raw['flux_f405n'][ndet]
+    assert tbl['flux_f405n'][ndet] > 0.7 * amp
     assert np.isnan(tbl['forced_near_m7_sep_f405n'][ndet])
 
 
@@ -775,3 +965,227 @@ def test_nbrsub_and_nrand_are_wired_through_the_cli_and_both_m8_call_sites():
     assert "default=False, action='store_true'" in text[i:i + 200]
     i = text.index("'--forced-fill-nrand'")
     assert "default=0, type='int'" in text[i:i + 200]
+
+
+# ---------------------------------------------------------------------------
+# partial m7 coverage, add-back bookkeeping, wiring (#1284 review)
+# ---------------------------------------------------------------------------
+def _multi_scene(positions, sources, noise=1.0):
+    """Blank targets at ``positions`` = [(x, y)] on a frame that holds PSFs of
+    ``sources`` = [(x, y, flux)]."""
+    tbl, prepare_frame, ndet, _ = _blank_scene(nblank=len(positions), noise=noise)
+    ctx = prepare_frame()
+    ww, psf = ctx.ww, _MockPSF()
+    yy, xx = np.mgrid[0:240, 0:240]
+    image = np.array(ctx.nan_replaced_data)
+    for x, y, f in sources:
+        image += psf.evaluate(xx, yy, f, x, y)
+    ra, dec = ww.all_pix2world([p[0] for p in positions],
+                               [p[1] for p in positions], 0)
+    for i in range(len(positions)):
+        tbl['skycoord_ref'][ndet + i] = SkyCoord(ra[i] * u.deg, dec[i] * u.deg)
+
+    def prepare(**kw):
+        return SimpleNamespace(nan_replaced_data=image, err=ctx.err, mask=ctx.mask,
+                               ww=ww, dao_psf_model=psf, fwhm_pix=FWHM)
+
+    return tbl, prepare, ndet
+
+
+def _fill_frames(tbl, prepare, products, **kw):
+    """Fill through the frames named by the keys of ``products``
+    (``{frame: (model path, catalogue path)}``)."""
+    ff.forced_fill_band(tbl, 'f405n', list(products), prepare_frame=prepare,
+                        frame_arg_builder=lambda fn: {'fn': fn}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False,
+                        frame_products=lambda ctx, fkw: products[fkw['fn']], **kw)
+
+
+def _products(tmp_path, name, shape, sources, **kw):
+    d = tmp_path / name
+    d.mkdir()
+    return _write_m7_products(d, shape, sources, **kw)
+
+
+def test_unsubtracted_frames_leave_the_combine_of_a_subtracted_target(
+        tmp_path, capsys):
+    # frame A has its m7 products, frame B has no model: B still holds the
+    # 5000-flux neighbour at full weight and would promote the empty target
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0)
+    one, both = tbl.copy(), tbl.copy()
+    pa = _products(tmp_path, 'a', (240, 240), [nbr])
+    pb = _products(tmp_path, 'b', (240, 240), [nbr], model=False)
+    _fill_frames(one, prepare, {'A': pa}, nbrsub=True, addback_mas=10.0)
+    capsys.readouterr()
+    _fill_frames(both, prepare, {'A': pa, 'B': pb}, nbrsub=True, addback_mas=10.0)
+    assert both['flux_f405n'][ndet] == one['flux_f405n'][ndet]
+    assert both['forced_snr_f405n'][ndet] == one['forced_snr_f405n'][ndet]
+    assert both['forced_nbrsub_f405n'][ndet]
+    assert both['mask_f405n'][ndet] and both['is_upper_limit_f405n'][ndet]
+    assert abs(both['flux_f405n'][ndet]) < 0.01 * nbr[2]
+
+
+def test_a_band_summary_counts_the_subtracted_frames(tmp_path, capsys):
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0)
+    pa = _products(tmp_path, 'a', (240, 240), [nbr])
+    pb = _products(tmp_path, 'b', (240, 240), [nbr], model=False)
+    ff.forced_fill_band(tbl, 'f405n', ['A', 'B'], prepare_frame=prepare,
+                        frame_arg_builder=lambda fn: {'fn': fn}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=True, nbrsub=True,
+                        frame_products=lambda ctx, kw: {'A': pa, 'B': pb}[kw['fn']])
+    out = ' '.join(capsys.readouterr().out.split())
+    assert '1 of 2 fitted frames had their m7 model and catalogue' in out
+    assert '1 of 1 targets combine subtracted frames only (1 unsubtracted fits dropped)' in out
+
+
+def test_near_m7_separation_is_the_smallest_over_sources_and_frames(tmp_path):
+    tbl, prepare, ndet, _ = _crowded_scene(target_amp=0.0, neighbour_amp=0.0)
+    pa = _products(tmp_path, 'a', (240, 240),
+                   [(61.5, 60.0, 300.0), (60.5, 60.0, 300.0)])
+    pb = _products(tmp_path, 'b', (240, 240), [(61.0, 60.0, 300.0)])
+    _fill_frames(tbl, prepare, {'A': pa, 'B': pb}, nbrsub=True)
+    assert tbl['forced_near_m7_sep_f405n'][ndet] == pytest.approx(8.5, abs=0.1)
+
+
+def test_the_default_addback_radius_reaches_a_source_25_mas_away(tmp_path):
+    assert ff.NBRSUB_ADDBACK_MAS == 40.0
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0, offset=1.5)
+    paths = _write_m7_products(tmp_path, (240, 240), [nbr])
+    _fill_nbr(tbl, prepare, paths, nbrsub=True)
+    assert tbl['forced_near_m7_sep_f405n'][ndet] == pytest.approx(25.5, abs=0.2)
+
+
+def test_addback_for_one_target_does_not_leak_into_the_next(tmp_path):
+    # each target has an m7 counterpart 8.5 mas away that is added back for it
+    # (radius 10 mas); T2 sits 2.5 px from T1's counterpart and must be refitted
+    # on an image that no longer holds T1's add-back
+    sources = [(60.5, 60.0, 800.0), (63.0, 60.0, 600.0)]
+    both, prepare, ndet = _multi_scene([(60.0, 60.0), (62.5, 60.0)], sources)
+    first = _multi_scene([(60.0, 60.0)], sources)[0]
+    second = _multi_scene([(62.5, 60.0)], sources)[0]
+    paths = _products(tmp_path, 'a', (240, 240), sources)
+    for t in (both, first, second):
+        _fill_frames(t, prepare, {'A': paths}, nbrsub=True, addback_mas=10.0)
+    for i in (0, 1):
+        assert both['forced_near_m7_sep_f405n'][ndet + i] == pytest.approx(8.5,
+                                                                         abs=0.1)
+    assert both['flux_f405n'][ndet] == pytest.approx(first['flux_f405n'][ndet],
+                                                     rel=1e-9)
+    assert both['flux_f405n'][ndet + 1] == pytest.approx(
+        second['flux_f405n'][ndet], rel=1e-9)
+
+
+def test_nan_model_pixels_are_treated_as_zero(tmp_path):
+    from astropy.io import fits
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0)
+    paths = _write_m7_products(tmp_path, (240, 240), [nbr])
+    with fits.open(paths[0], mode='update') as hdul:
+        hdul['SCI'].data[60, 61] = np.nan
+    _fill_nbr(tbl, prepare, paths, nbrsub=True, addback_mas=10.0)
+    assert tbl['forced_filled_f405n'][ndet]
+    assert np.isfinite(tbl['flux_f405n'][ndet])
+    assert tbl['forced_nbrsub_f405n'][ndet]
+
+
+def test_a_model_of_the_wrong_shape_is_fitted_unsubtracted(tmp_path, capsys):
+    tbl, prepare, ndet, nbr = _crowded_scene(target_amp=0.0)
+    paths = _write_m7_products(tmp_path, (100, 100), [nbr])
+    raw = tbl.copy()
+    _fill_nbr(raw, prepare, paths)
+    _fill_nbr(tbl, prepare, paths, nbrsub=True)
+    assert 'shape' in capsys.readouterr().out
+    assert not tbl['forced_nbrsub_f405n'][ndet]
+    assert tbl['flux_f405n'][ndet] == raw['flux_f405n'][ndet]
+
+
+def test_frame_products_receive_the_frame_kwargs_and_context():
+    tbl, prepare, ndet, _ = _crowded_scene(target_amp=0.0)
+    seen = []
+
+    def products(ctx, fkw):
+        seen.append((ctx, fkw))
+        return ('/nonexistent/model.fits', '/nonexistent/cat.fits')
+
+    ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare,
+                        frame_arg_builder=lambda fn: {'tag': fn}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False, nbrsub=True,
+                        frame_products=products)
+    assert len(seen) == 1
+    assert seen[0][1] == {'tag': 'frame1'}
+    assert hasattr(seen[0][0], 'dao_psf_model')
+
+
+def test_run_forced_crossband_fill_passes_the_switches_to_every_band(
+        tmp_path, monkeypatch):
+    tbl, prepare, ndet, _ = _blank_scene(nblank=3)
+    path = str(tmp_path / 'm7.fits')
+    tbl.write(path, overwrite=True)
+    calls = []
+
+    def spy(tbl_, filt, frames, **kw):
+        calls.append((filt, list(frames), kw))
+        return 0
+
+    monkeypatch.setattr(ff, 'forced_fill_band', spy)
+    products = object()
+    ff.run_forced_crossband_fill(
+        path, str(tmp_path / 'm8.fits'), filternames=['F405N'], module='nrca',
+        frames_for=lambda f: ['x'], prepare_frame=prepare,
+        frame_arg_builder_for=lambda f: (lambda fn: {}), verbose=False,
+        nbrsub=True, frame_products=products, nrand=7)
+    assert len(calls) == 1
+    filt, frames, kw = calls[0]
+    assert (filt, frames) == ('F405N', ['x'])
+    assert kw['nbrsub'] is True and kw['nrand'] == 7
+    assert kw['frame_products'] is products
+
+
+def test_random_positions_avoid_the_firm_rows_by_the_addback_radius(monkeypatch):
+    tbl, prepare, ndet, _ = _blank_scene(nblank=60)
+    seen = []
+    orig = ff._random_positions
+
+    def spy(ref, rows, exclude, n, fwhm, exclude_mas, seed):
+        seen.append((len(ref), len(rows), exclude, n, exclude_mas, seed))
+        return orig(ref, rows, exclude, n, fwhm, exclude_mas, seed)
+
+    monkeypatch.setattr(ff, '_random_positions', spy)
+    _fill(tbl, prepare, nrand=60)
+    nref, nrows, exclude, n, exclude_mas, seed = seen[0]
+    assert (nref, nrows, n, exclude_mas, seed) == (ndet + 60, ndet + 60, 60, 40.0, 0)
+    firm = tbl['skycoord_ref'][:ndet]
+    assert len(exclude) == ndet
+    assert exclude.separation(firm).arcsec.max() < 1e-6
+
+
+def test_random_positions_survive_a_heavy_exclusion():
+    ref = SkyCoord([266.4, 266.401] * u.deg, [-29.0, -29.0] * u.deg)
+    fwhm = 0.13
+    det = ref[0].directional_offset_by(0 * u.deg, 1.5 * fwhm * u.arcsec)
+    ra, dec = ff._random_positions(ref, np.array([0]), SkyCoord([det]), 100,
+                                   fwhm, 150.0, 3)
+    pos = SkyCoord(ra * u.deg, dec * u.deg)
+    assert len(pos) == 100
+    assert pos.separation(det).arcsec.min() > 0.150
+
+
+def test_nrand_columns_are_reset_on_rerun():
+    tbl, prepare, ndet, _ = _blank_scene(nblank=300)
+    _fill(tbl, prepare, nrand=300)
+    still = np.asarray(tbl['mask_f405n'], bool)
+    assert np.isfinite(np.asarray(tbl['forced_err_scale_f405n'][still], float)).all()
+    ff.forced_fill_band(tbl, 'f405n', [], prepare_frame=prepare,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False, nrand=300)
+    assert still[ndet:].sum() > 100
+    assert np.isnan(np.asarray(tbl['forced_err_scale_f405n'][still], float)).all()
+    assert np.isnan(np.asarray(tbl['forced_snr_raw_f405n'][still], float)).all()
+
+
+def test_nrand_without_nbrsub_warns(capsys):
+    tbl, prepare, ndet, _ = _blank_scene(nblank=60)
+    _fill(tbl, prepare)
+    assert 'WARNING' not in capsys.readouterr().out
+    _fill(tbl, prepare, nrand=60)
+    out = ' '.join(capsys.readouterr().out.split())
+    assert 'WARNING' in out and '--forced-fill-nbrsub' in out
