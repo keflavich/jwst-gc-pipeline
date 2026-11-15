@@ -114,3 +114,76 @@ def test_cache_hit_serves_the_detector_vintage(tmp_path, monkeypatch):
     assert len(set(out['id'])) == len(out)
     assert out['x_fit'].max() > 100
     np.testing.assert_array_equal(out['x_fit'], _old_vintage()['xcentroid'])
+
+
+# ---- readers that must not move with the column change -------------------
+
+def test_miri_satstar_exclusion_positions_do_not_move_with_the_vintage():
+    """The MIRI satstar-coincidence drop has always been fed the STAMP values
+    of x_fit/y_fit (so it only acts near the stamp position, about (40, 40)).
+    #949 changes x_fit to detector pixels; the drop must keep getting the stamp
+    values from either vintage, so MIRI per-frame daophot output is unchanged.
+    Activating it on detector positions is a separate change."""
+    from jwst_gc_pipeline.photometry.cataloging import _miri_satstar_excl_xy
+
+    old = _old_vintage()
+    new = finalize_satstar_columns(_old_vintage())
+    xy_old = _miri_satstar_excl_xy(old)
+    xy_new = _miri_satstar_excl_xy(new)
+    np.testing.assert_array_equal(xy_new, xy_old)
+    np.testing.assert_array_equal(xy_new[:, 0], _old_vintage()['x_fit'])
+    # stamp-sized, not detector pixels
+    assert xy_new.max() < 100
+
+    # a daophot fit sitting on a satstar's DETECTOR position is not within the
+    # exclusion radius of any of these positions (the drop stays dormant there)
+    radius = 1.5 * 2.5
+    for xc, yc in zip(new['xcentroid'], new['ycentroid']):
+        assert np.min(np.hypot(xy_new[:, 0] - xc, xy_new[:, 1] - yc)) > radius
+    # and a fit at a stamp-position is still dropped, as before
+    x0, y0 = xy_new[0]
+    assert np.min(np.hypot(xy_new[:, 0] - x0, xy_new[:, 1] - y0)) < radius
+
+
+def test_miri_satstar_exclusion_positions_degenerate_tables():
+    from jwst_gc_pipeline.photometry.cataloging import _miri_satstar_excl_xy
+    assert _miri_satstar_excl_xy(None) is None
+    assert _miri_satstar_excl_xy(_old_vintage()[:0]) is None
+    assert _miri_satstar_excl_xy(Table({'flux_fit': [1.0]})) is None
+    nan = _old_vintage()
+    nan['x_fit'] = np.nan
+    assert _miri_satstar_excl_xy(nan) is None
+
+
+# ---- wiring in get_saturated_stars --------------------------------------
+
+def test_get_saturated_stars_finalizes_after_the_catalog_steps():
+    """The fit loop needs stamp coordinates, so the vintage change belongs
+    after it and after the flux steps, and before the table is published."""
+    import ast
+    import inspect
+    import textwrap
+    from jwst_gc_pipeline.reduction import saturated_star_finding as ssf
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ssf.get_saturated_stars)))
+    calls = {}
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ('finalize_satstar_columns',
+                                     'apply_uncapped_flux')):
+            calls.setdefault(node.func.id, []).append(node)
+    assert len(calls['finalize_satstar_columns']) == 1
+    fin = calls['finalize_satstar_columns'][0]
+    assert fin.lineno > calls['apply_uncapped_flux'][0].lineno
+    # the result is what gets published, not dropped
+    published = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                 and any(ast.unparse(t) == 'builtins.satstar_table'
+                         for t in n.targets)]
+    assert len(published) == 1 and published[0].lineno > fin.lineno
+    assign = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+              and n.value is fin]
+    assert len(assign) == 1 and ast.unparse(assign[0].targets[0]) == 'base_tab'
+    assert ast.unparse(published[0].value) == 'base_tab'
+    # not inside a loop over sources
+    for loop in (n for n in ast.walk(tree) if isinstance(n, (ast.For, ast.While))):
+        assert fin not in list(ast.walk(loop))
