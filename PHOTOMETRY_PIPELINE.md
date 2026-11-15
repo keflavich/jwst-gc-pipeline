@@ -248,7 +248,19 @@ rejection**.
   The dedup table records which pre-dedup row supplied each band
   (`dedup_src_<band>`, `dedup_band_swapped_<band>`, `dedup_primary`,
   `dedup_pos_spread_mas`; indices refer to the sibling `..._m8` file of the same
-  run, named in the `DEDUPSRC` header key).
+  run, named in the `DEDUPSRC` header key). The header also carries `DEDUPN0`
+  (row count of that m8 file, so a reader can tell whether a later rewrite of
+  the m8 moved the indices), `DEDUPRAT` (`--m8-dedup-winner-emag-ratio`, when
+  set) and `DEDUPRES` (the bands and mas of `--m8-dedup-band-resolve-mas` that
+  were applied, when the guard is active). `n_filt_independent` is recomputed
+  from `independently_detected_<band>` on the rows that took a band from
+  another row. Both options are checked when the command line is read (a
+  malformed or non-positive value stops the run at start); a band named in
+  `--m8-dedup-band-resolve-mas` that the table does not have, or that has no
+  `skycoord_<band>` column, is dropped with a warning, and the guard is
+  reported OFF when none is left. `m8_merge_partials.py` takes the same two
+  options as `--dedup-winner-emag-ratio` and `--dedup-band-resolve-mas`; pass
+  the values the cataloging run used.
 
 ### Merge + vet (per-phase barrier)
 
@@ -426,9 +438,9 @@ still run after m6.
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
 | `--mergedcat-render-procs` / `--forced-fill-procs` (forked processes over the frames of the merged-catalog render / of the m8 fill; output identical to the serial loop, #1230) | 1 / 1 | serial (set per job through the submitters' `EXTRA_ARGS`) | | |
-| `--forced-fill-bkg-scatter` (`forced_fill_bkg_scatter`; adds each m8 source's annulus scatter, 1.4826 MAD at 2.5-4.5 FWHM, to the crf ERR in quadrature; writes `forced_bkg_sigma_<filter>`; #1120) | off | crf ERR only | | |
-| `--forced-fill-nbrsub` (`forced_fill_nbrsub`; fits each m8 frame with its m7 star-only model removed and the m7 sources within 40 mas of a target added back; needs the m7 per-frame `_model.fits` and catalogue, a frame without them is fitted unsubtracted; writes `forced_nbrsub_<filter>`, `forced_near_m7_sep_<filter>`; #1284) | off | raw frame, neighbours left in | | |
-| `--forced-fill-nrand` (`forced_fill_nrand`; N random blank positions per band, 1-2 FWHM from random rows; every target's error is scaled by the half-width of their 16-84 percentile flux/error range, at least 1; writes `forced_err_scale_<filter>`, `forced_snr_raw_<filter>`; use with `--forced-fill-nbrsub`; #1284) | 0 | formal error | | |
+| `--forced-fill-bkg-scatter` (`forced_fill_bkg_scatter`; adds each m8 source's annulus scatter in excess of the crf ERR (1.4826 MAD at 2.5-4.5 FWHM, inner radius floored at 4 px, `median(ERR^2)` subtracted) to the crf ERR in quadrature; writes `forced_bkg_sigma_<filter>` (per pixel) and `forced_bkg_nframes_<filter>`; changes `forced_snr`, `flux_ulim`, `emag_ab` of promoted rows; #1120) | off | crf ERR only | | |
+| `--forced-fill-nbrsub` (`forced_fill_nbrsub`; fits each m8 frame with its m7 star-only model removed and the m7 sources within 40 mas of a target added back; needs the m7 per-frame `_model.fits` and catalogue, a frame without both is fitted unsubtracted and dropped from the combine of every target that has a subtracted frame, a target with none keeps its fit and upper limit but is not promoted; writes `forced_nbrsub_<filter>`, `forced_near_m7_sep_<filter>`; #1284) | off | raw frame, neighbours left in | | |
+| `--forced-fill-nrand` (`forced_fill_nrand`; N random blank positions per band, 1-2 FWHM from random rows; every target's error is scaled by the half-width of their 16-84 percentile flux/error range, at least 1, one factor per band and catalogue; scales `forced_snr`, `flux_ulim`, the detection cut, `emag_ab` and `mag_*_ulim`; writes `forced_err_scale_<filter>`, `forced_snr_raw_<filter>`; needs `--forced-fill-nbrsub` (warns without it); #1284) | 0 | formal error | | |
 | `--each-suffix` | `destreak_o001_crf` | per-reduction | | |
 | `--cutout-region` / `--cutout-label` / `--cutout-size-arcsec` | `''`/`''`/5.0 | full-frame | | |
 | `--inject-stars` / `--inject-seed` | `''`/0 | off (cutout-only; reference-field truth, `injection.py`) | | |

@@ -22,6 +22,7 @@ surface brightnesses (MJy/sr per pixel) and are left alone.
 """
 import math
 import os
+import re
 
 import numpy as np
 from astropy.io import fits
@@ -37,6 +38,10 @@ DEG2_PER_SR = (180.0 / math.pi) ** 2
 #: Columns that are sums of MJy/sr over native pixels, per catalogue flavour.
 DAOPHOT_FLUX_COLUMNS = ('flux_fit', 'flux_err', 'flux_unc', 'flux_init')
 CROWDSOURCE_FLUX_COLUMNS = ('flux', 'dflux', 'fluxiso')
+#: The satstar catalogue also keeps the pre-calibration fits as provenance
+#: (``flux_fit = flux_fit_raw / wingcal_ratio``); they are pixel sums too, so
+#: they follow ``flux_fit`` and the wing-calibration invariant stays intact.
+SATSTAR_FLUX_COLUMNS = DAOPHOT_FLUX_COLUMNS + ('flux_fit_raw', 'flux_fit_precap')
 
 #: Nominal pixel side in arcsec of the reference grid.
 _NOMINAL_PIXSCALE_ARCSEC = {
@@ -55,10 +60,11 @@ class FramePixelAreaError(ValueError):
 
 
 def _filter_number(filtername):
-    digits = ''.join(ch for ch in str(filtername) if ch.isdigit())
-    if not digits:
+    # leading digits only: F150W2 is 150 (short-wave), not 1502
+    match = re.search(r'\d+', str(filtername))
+    if match is None:
         raise FramePixelAreaError(f"cannot read a wavelength from filter {filtername!r}")
-    return int(digits)
+    return int(match.group())
 
 
 def reference_pixel_area_sr(filtername, instrument=None):
@@ -199,7 +205,7 @@ def apply_satstar_frame_pixel_area(tables, frames, filtername):
                                        if len(instruments) == 1 else None)
     for tbl, (area, _inst, _src) in zip(tables, resolved):
         scale_flux_columns(tbl, area / area_ref,
-                           [c for c in DAOPHOT_FLUX_COLUMNS if c in tbl.colnames])
+                           [c for c in SATSTAR_FLUX_COLUMNS if c in tbl.colnames])
     return area_ref
 
 

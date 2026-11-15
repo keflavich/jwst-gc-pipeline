@@ -82,8 +82,15 @@ Position and cross-match
 Flux and magnitudes
   flux_{filter}
       PSF-fit flux, weighted mean over exposures, in the image units summed
-      over the PSF: MJy/sr x pixels. Multiply by the pixel solid angle in
-      steradians to get Jy (flux_jy_{filter} is that conversion).
+      over the PSF: MJy/sr x pixels. Each exposure's flux was first scaled
+      by its own detector's pixel area (PIXAR_SR) relative to a reference
+      area, so the pixel in this unit is the reference pixel: 0.031" on a
+      side for NIRCam short-wave filters, 0.063" long-wave, 0.11" MIRI. Its
+      solid angle is the header keyword <nnn>PIXA in deg^2 (212PIXA for
+      F212N; <nnn>PXDG carries the same value). Multiply by that solid
+      angle, not by the PIXAR_SR of a mosaic, to get Jy
+      (flux_jy_{filter} is that conversion). Catalogs built before the
+      per-detector correction have no <nnn>PIXA keyword; see "Known issues".
   flux_err_{filter}
       Weighted mean of the per-exposure flux errors: the uncertainty of a
       single exposure, same units as flux_{filter}.
@@ -257,32 +264,43 @@ Forced photometry and independent detections (m8 catalogs)
       n_filt_independent >= 2. A table without n_filt_independent carries
       oksep_pass alone, and the CMDDEF header keyword names the test that
       was applied. Forced-fit values are not used by this selection.
-  forced_bkg_sigma_{filter}
-      Only in m8 catalogs built with --forced-fill-bkg-scatter. Mean over the
-      exposures of the local background scatter (1.4826 x MAD of the frame
-      data in a 2.5 to 4.5 FWHM annulus, in the exposure's image units) that
-      was added in quadrature to the crf error of the forced fit; it is
-      already included in forced_snr and flux_ulim. NaN when no exposure
-      could measure it.
+  forced_bkg_sigma_{filter}, forced_bkg_nframes_{filter}
+      Only in m8 catalogs built with --forced-fill-bkg-scatter. The local
+      background scatter that was added in quadrature to the crf error of the
+      forced fit: the 1.4826 x MAD of the frame data in an annulus about the
+      source (2.5 to 4.5 FWHM; at least 4 to 6 pixels for a small FWHM) with
+      the median crf error squared subtracted, per pixel, in the exposure's
+      image units (not a flux error, so not comparable to flux_ulim / 3).
+      forced_bkg_sigma is the mean over the exposures that measured it and
+      forced_bkg_nframes how many those were. NaN and 0 when no exposure could
+      measure it, where the fit keeps the crf error alone; with fewer exposures
+      than were fitted, forced_snr, flux_ulim and emag_ab are partly
+      uninflated. The scatter is included in forced_snr, flux_ulim and, for
+      detections, emag_ab.
   forced_nbrsub_{filter}
-      Only in m8 catalogs built with --forced-fill-nbrsub. True where every
-      exposure that contributed to the forced fit was fitted with its m7
+      Only in m8 catalogs built with --forced-fill-nbrsub. True for a filled
+      target whose forced fit combines only exposures fitted with their m7
       star-only model removed, so the other stars of the band do not add
-      light to the target's flux. False where an exposure lacked the m7
-      model file and was fitted on the unsubtracted image.
+      light to the target's flux. An exposure lacking the m7 model file or
+      the m7 frame catalogue is fitted unsubtracted and left out of the
+      combine of every target that has a subtracted exposure. False where no
+      exposure was subtracted (the fit is then on the unsubtracted image, the
+      row stays an upper limit however high its forced_snr) and for rows that
+      were not fitted.
   forced_near_m7_sep_{filter}
       Only in m8 catalogs built with --forced-fill-nbrsub. Separation in mas
       from the target to the nearest m7 source of that band within 40 mas,
-      the smallest over the exposures; that source was added back to the
-      fitted image, so its light is part of the target's flux. NaN when no
-      m7 source lay that close.
+      the smallest over the subtracted exposures; that source was added back
+      to the fitted image, so its light is part of the target's flux. NaN
+      when no m7 source lay that close and where forced_nbrsub is False.
   forced_err_scale_{filter}
       Only in m8 catalogs built with --forced-fill-nrand. The factor k, one
-      value per band, by which the formal forced-fit error was multiplied:
-      half the 16th to 84th percentile range of flux/error at random blank
-      positions, at least 1. It is already included in forced_snr,
-      flux_ulim and the detection cut. k = 1 when too few random positions
-      were fitted to measure it.
+      value per band and catalogue (the fill runs per module), by which the
+      formal forced-fit error was multiplied: half the 16th to 84th
+      percentile range of flux/error at random blank positions, at least 1.
+      It is already included in forced_snr, flux_ulim, mag_ab_ulim,
+      mag_vega_ulim, emag_ab and the detection cut. k = 1 when too few random
+      positions were fitted to measure it.
   forced_snr_raw_{filter}
       Only in m8 catalogs built with --forced-fill-nrand. The signal-to-noise
       of the forced fit before the scaling by forced_err_scale; forced_snr is
@@ -339,3 +357,10 @@ Known issues
   sqrt(nmatch_good_{filter}) to get the propagated error.
 * modelsub_bkg_rms and modelsub_bkg_npix are averages over exposures even
   though their names carry no _avg suffix.
+* Catalogs built before the per-detector pixel-area correction (#1238) have
+  no <nnn>PIXA keyword. Their PSF fluxes were converted to Jy with one pixel
+  area for every detector, so each NIRCam short-wave detector is off by up
+  to 34 mmag from its own area (mean about 12 mmag on brick F212N, which
+  the correction makes fainter); long-wave filters by up to 3.5 mmag. Their
+  pixel scale keyword (PIXSCALE) is the mosaic's 0.0312", not the 0.0310"
+  reference.
