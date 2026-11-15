@@ -28,6 +28,12 @@ TRUE_JY = 2.0e-3
 #: PIXAR_SR of three SW detectors (NRCB1, NRCA4, NRCA3)
 AREAS_SR = [2.2217e-14, 2.2455e-14, 2.3121e-14]
 
+def _close(expected, rel=1e-9):
+    """approx with no absolute slack: pytest's default abs=1e-12 exceeds a pixel
+    area in sr (~2e-14), which would make a comparison of areas vacuous."""
+    return pytest.approx(expected, rel=rel, abs=0.0)
+
+
 
 def _crf(tmp_path, name, area_sr, instrument='NIRCAM'):
     path = tmp_path / f'{name}.fits'
@@ -93,13 +99,13 @@ def test_frames_disagree_in_jy_without_the_rescale_and_agree_with_it(tmp_path):
 def test_reference_is_a_constant_of_the_filter_not_of_the_frames(tmp_path):
     ref_a = FPA.apply_frame_pixel_area(_frames(tmp_path), 'f212n')
     ref_b = FPA.apply_frame_pixel_area([_frame(tmp_path, 9, AREAS_SR[2])], 'f212n')
-    assert ref_a == ref_b == pytest.approx(0.031 ** 2 * FPA.SR_PER_ARCSEC2)
-    assert FPA.reference_pixel_area_sr('f480m') == pytest.approx(
+    assert ref_a == ref_b == _close(0.031 ** 2 * FPA.SR_PER_ARCSEC2)
+    assert FPA.reference_pixel_area_sr('f480m') == _close(
         0.063 ** 2 * FPA.SR_PER_ARCSEC2)
-    assert FPA.reference_pixel_area_sr('f770w') == pytest.approx(
+    assert FPA.reference_pixel_area_sr('f770w') == _close(
         0.11 ** 2 * FPA.SR_PER_ARCSEC2)
     # the instrument keyword decides where the filter name is ambiguous
-    assert FPA.reference_pixel_area_sr('f480m', 'NIRISS') == pytest.approx(
+    assert FPA.reference_pixel_area_sr('f480m', 'NIRISS') == _close(
         0.0656 ** 2 * FPA.SR_PER_ARCSEC2)
 
 
@@ -112,7 +118,7 @@ def test_reference_is_a_constant_of_the_filter_not_of_the_frames(tmp_path):
     ('f090w', 'NIRISS', 0.0656), ('f480m', 'NIRISS', 0.0656),
 ])
 def test_reference_side_per_instrument_and_filter(filt, instrument, side_arcsec):
-    assert FPA.reference_pixel_area_sr(filt, instrument) == pytest.approx(
+    assert FPA.reference_pixel_area_sr(filt, instrument) == _close(
         side_arcsec ** 2 * FPA.SR_PER_ARCSEC2, rel=1e-12)
 
 
@@ -161,7 +167,7 @@ def test_stamp_is_a_plain_float_in_deg2_and_pixscale_follows(tmp_path):
     area_ref = FPA.apply_frame_pixel_area(tbls, 'f212n')
     meta = tbls[0].meta
     assert type(meta['PIXAREF']) is float
-    assert meta['PIXAREF'] == pytest.approx(area_ref * (180 / np.pi) ** 2)
+    assert meta['PIXAREF'] == _close(area_ref * (180 / np.pi) ** 2)
     assert meta['pixscale'] == pytest.approx(0.031)
 
 
@@ -181,7 +187,7 @@ def test_combined_flux_converts_to_the_true_flux_with_the_stamped_area(tmp_path)
                                  verbose=False, filtername='f212n')
     assert 'PIXAREF' in out.meta
     area_sr = out.meta['PIXAREF'] / (180 / np.pi) ** 2
-    assert area_sr == pytest.approx(area_ref)
+    assert area_sr == _close(area_ref)
     np.testing.assert_allclose(_jy(out, area_sr, 'flux_fit_avg'), TRUE_JY, rtol=1e-6)
 
 
@@ -190,7 +196,7 @@ def test_pixscale_stands_in_when_pixar_sr_is_absent(tmp_path):
     t = _frame(tmp_path, 0, AREAS_SR[1], pixscale=side, header_area=False)
     area, _inst, source = FPA.frame_pixel_area(t.meta['FILENAME'], t.meta)
     assert source == 'pixscale'
-    assert area == pytest.approx(AREAS_SR[1])
+    assert area == _close(AREAS_SR[1])
 
 
 def test_missing_area_raises(tmp_path):
@@ -229,14 +235,14 @@ def test_stamped_area_has_precedence_over_the_i2d_area():
     stamp = (0.031 * u.arcsec).to(u.deg) ** 2
     meta = {'PIXAREF': float(stamp.value), 'filter': 'f212n'}
     area, side = MC._conversion_pixel_area(meta, _FakeI2dWcs())
-    assert area.to_value(u.deg ** 2) == pytest.approx(stamp.value)
+    assert area.to_value(u.deg ** 2) == _close(stamp.value)
     assert side.to_value(u.arcsec) == pytest.approx(0.031)
 
 
 def test_unstamped_table_keeps_the_legacy_order_and_warns(capsys):
     meta = {'filter': 'f212n', 'PIXSCALE': 0.0312}
     area, _ = MC._conversion_pixel_area(meta, _FakeI2dWcs())
-    assert area.to_value(u.deg ** 2) == pytest.approx(((0.030 * u.arcsec).to(u.deg) ** 2).value)
+    assert area.to_value(u.deg ** 2) == _close(((0.030 * u.arcsec).to(u.deg) ** 2).value)
     assert 'PIXAREF' in capsys.readouterr().out
     area, side = MC._conversion_pixel_area(meta, None)
     assert side.to_value(u.arcsec) == pytest.approx(0.0312)
@@ -273,13 +279,13 @@ def test_satstar_reference_follows_the_frames_instrument_when_unambiguous(tmp_pa
               _crf(tmp_path, 'nb', AREAS_SR[2], instrument='NIRISS')]
     tables = [_satstar(1.0), _satstar(1.0)]
     area_ref = FPA.apply_satstar_frame_pixel_area(tables, frames, 'f480m')
-    assert area_ref == pytest.approx(0.0656 ** 2 * FPA.SR_PER_ARCSEC2)
+    assert area_ref == _close(0.0656 ** 2 * FPA.SR_PER_ARCSEC2)
     # frames of mixed instruments fall back on the filter name (F480M: NIRCam LW)
     frames = [_crf(tmp_path, 'nc', AREAS_SR[0], instrument='NIRISS'),
               _crf(tmp_path, 'nd', AREAS_SR[2], instrument='NIRCAM')]
     area_ref = FPA.apply_satstar_frame_pixel_area([_satstar(1.0), _satstar(1.0)],
                                                   frames, 'f480m')
-    assert area_ref == pytest.approx(0.063 ** 2 * FPA.SR_PER_ARCSEC2)
+    assert area_ref == _close(0.063 ** 2 * FPA.SR_PER_ARCSEC2)
 
 
 def test_satstar_provenance_fluxes_follow_flux_fit(tmp_path):

@@ -33,6 +33,12 @@ TRUE_JY = 2.0e-3
 AREA_A, AREA_B = 2.2217e-14, 2.3121e-14
 DEG2_PER_SR = FPA.DEG2_PER_SR
 
+def _close(expected, rel=1e-9):
+    """approx with no absolute slack: pytest's default abs=1e-12 exceeds a pixel
+    area in sr (~2e-14), which would make a comparison of areas vacuous."""
+    return pytest.approx(expected, rel=rel, abs=0.0)
+
+
 
 def _set_area(path, area_sr, instrument='NIRCAM'):
     with fits.open(path, mode='update') as hdul:
@@ -83,7 +89,7 @@ def test_load_satstar_catalog_puts_the_exposures_on_one_area_and_stamps_it(tmp_p
 
     assert len(out) == 1
     area_ref_sr = 0.031 ** 2 * FPA.SR_PER_ARCSEC2
-    assert out.meta['PIXAREF'] == pytest.approx(area_ref_sr * DEG2_PER_SR, rel=1e-9)
+    assert out.meta['PIXAREF'] == _close(area_ref_sr * DEG2_PER_SR)
     jy = float(out['flux_fit'][0]) * area_ref_sr * 1e6
     assert jy == pytest.approx(TRUE_JY, rel=1e-6)
     assert float(out['flux_err'][0]) * area_ref_sr * 1e6 == pytest.approx(
@@ -256,7 +262,7 @@ def _crowdsource_run(tmp_path, monkeypatch, meta_area_deg2, i2d_side_arcsec=0.03
 def test_merge_crowdsource_converts_with_pixaref_not_the_i2d_area(tmp_path, monkeypatch):
     stamp_deg2 = ((0.031 * u.arcsec).to(u.deg) ** 2).value
     tbl = _crowdsource_run(tmp_path, monkeypatch, stamp_deg2)
-    assert tbl.meta['pixelscale_deg2'].to_value(u.deg ** 2) == pytest.approx(stamp_deg2)
+    assert tbl.meta['pixelscale_deg2'].to_value(u.deg ** 2) == _close(stamp_deg2)
     assert tbl.meta['pixelscale_arcsec'].to_value(u.arcsec) == pytest.approx(0.031)
     np.testing.assert_allclose(
         np.asarray(tbl['flux_jy'], dtype=float),
