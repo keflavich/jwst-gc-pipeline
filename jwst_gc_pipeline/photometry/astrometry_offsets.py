@@ -30,8 +30,9 @@ small, then take the PRECISE bulk value same-star, from ``local_residual_map``
 (single giant cell) -- or simply call
 ``visit_consensus.measure_reference_tie``, which does the whole detect-then-
 refine sequence and reports which route produced its number
-(``bulk_source``: ``"same-star"`` / ``"histogram"``).  A shipped correction must
-come from the same-star bulk.  See CLAUDE.md and the
+(``bulk_source``: ``"same-star"`` / ``"histogram"``, or ``"same-star-prior"`` /
+``"prior"`` when an opt-in ``bulk_prior`` unlocked the estimator, issue #819).
+A shipped correction must come from the same-star bulk.  See CLAUDE.md and the
 ``histogram-vs-samestar-offset-bias`` note.
 """
 
@@ -335,6 +336,22 @@ def min_peak_significance(window_arcsec, bin_arcsec):
     """
     n_bins = max(np.pi * (window_arcsec / bin_arcsec) ** 2, 2.0)
     return float(np.sqrt(2.0 * np.log(n_bins)) + PEAK_SIGNIFICANCE_EXTRA_SIGMA)
+
+
+def refusal_reason(res, min_contrast):
+    """Words for why a ``measure_offset`` result is not ``ok`` on the peak itself
+    (contrast, or at windows above ``SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC`` the
+    Poisson significance).  A peak whose contrast clears ``min_contrast`` but
+    whose significance does not must not be reported as "contrast < floor"
+    (issue #1232)."""
+    contrast = res["contrast"]
+    floor = res.get("min_peak_significance")
+    if contrast >= min_contrast and floor is not None:
+        return (f"best contrast {contrast:.1f} clears {min_contrast} but the peak at "
+                f"the {res['window_arcsec']:.0f}\" window reads "
+                f"{res['peak_significance']:.2f} sigma against the trial-corrected "
+                f"significance floor {floor:.2f}")
+    return f"best contrast {contrast:.1f} < {min_contrast}"
 
 
 def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
@@ -728,8 +745,18 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         selection stays on contrast, except that a wide peak refused by the
         significance floor yields to a narrower window that passes its own gate
         and reads the same peak (within ``CONFIRM_MIN_TOL_MAS`` or three
-        thousand of the coarser bin, as in ``confirm_peak_windows``).  ``bin_arcsec`` is the histogram bin of the
-        reported window (``_window_bin_arcsec``).
+        thousand of the coarser bin, as in ``confirm_peak_windows``).  The 3"
+        and 10" windows have no significance test of their own, so a noise
+        maximum that clears the contrast floor within that tolerance of a
+        refused wide-window maximum is readmitted: of 50 pairs of independent
+        uniform 50" fields (0.05-1.5 stars/arcsec^2) the default sweep reads
+        ``ok`` for 1, where the base reads 50 of 50 ``ok`` (an independent
+        review's 125-pair run found 2).
+        Broad scatter is refused as well: at 0.3" scatter, 1.5 stars/arcsec^2
+        and 20-30" true shifts, 11 of 24 fields read ``ok`` (7 within 150 mas of
+        the truth) against 24 of 24 at the base, of which 11 are within 150 mas.
+        ``bin_arcsec`` is the histogram bin of the reported window
+        (``_window_bin_arcsec``).
         ``window_arcsec`` is the window the reported peak came from -- a value
         >> your expected offset is the tell that the tie was only found after
         widening (investigate: the frame is grossly shifted).  ``dra_err`` /
@@ -870,8 +897,8 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
                 f"footprint geometry, not a tie (issue #158).")
         raise NoCoherentTieError(
             f"No coherent astrometric tie ({context or 'unspecified'}) at any window "
-            f"up to {windows[-1]:.0f}\": best contrast {best['contrast']:.1f} < "
-            f"{min_contrast} ({best['npairs']} pairs). The two source lists are not "
+            f"up to {windows[-1]:.0f}\": {refusal_reason(best, min_contrast)} "
+            f"({best['npairs']} pairs). The two source lists are not "
             f"registered (broken/untied WCS). Do NOT trust a NN-median 'agreement'.")
     return best
 

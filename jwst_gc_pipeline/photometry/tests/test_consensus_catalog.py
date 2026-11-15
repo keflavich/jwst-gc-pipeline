@@ -275,15 +275,97 @@ def test_overlapping_tiles_in_a_mosaic_are_still_gated():
         pool_visit_consensi(per_visit)
 
 
-def test_sliver_overlap_is_not_comparable():
+def test_sliver_overlap_is_too_thin_not_no_overlap():
     """A strip a few stars wide shares sky but not enough stars for a tie (the
-    1.15 arcsec alias of cloudef visit 2)."""
+    1.15 arcsec alias of cloudef visit 2).  It is NOT "no footprint overlap":
+    the two states are counted apart, and the whole-catalog check that a thin
+    pair gets does not turn the tiles' geometric step into a refusal."""
     field = _field()
     per_visit = {'001': _tile(field, 266.50, 266.52),
                  '002': _tile(field, 266.5199, 266.54, shift_mas=500.0)}
     pooled = pool_visit_consensi(per_visit)
-    assert pooled.meta['IVNOOVL'] == 2
-    assert 'NOT COMPARABLE' in pooled.meta['IV_002']
+    assert pooled.meta['IVTHIN'] == 2
+    assert pooled.meta['IVNOOVL'] == 0
+    assert 'OVERLAP TOO THIN' in pooled.meta['IV_002']
+    assert 'NOT COMPARABLE' not in pooled.meta['IV_002']
+
+
+def _shared_stars_pair(k):
+    """Two tiles whose footprint-intersection box holds exactly ``k`` stars of
+    each: the same ``k`` stars, at the same positions, seen by both."""
+    rng = np.random.default_rng(11)
+    dec = lambda n: -28.70 + rng.uniform(0.0, 0.01, n)
+    shared_ra = 266.52 + rng.uniform(0.0, 0.002, k)
+    shared_dec = dec(k)
+    a = _consensus(np.concatenate([266.50 + rng.uniform(0.0, 0.0199, 300),
+                                   shared_ra]),
+                   np.concatenate([dec(300), shared_dec]))
+    b = _consensus(np.concatenate([shared_ra,
+                                   266.5221 + rng.uniform(0.0, 0.02, 300)]),
+                   np.concatenate([shared_dec, dec(300)]))
+    return {'001': a, '002': b}
+
+
+def test_the_thin_overlap_boundary_is_thirty_stars():
+    """29 stars of each in the shared footprint is too thin to test; 30 is not.
+    (The 30-star pair may or may not hold a confirmed tie; it is no longer
+    ``OVERLAP TOO THIN``.)"""
+    thin = pool_visit_consensi(_shared_stars_pair(29))
+    assert thin.meta['IVTHIN'] == 2
+    enough = pool_visit_consensi(_shared_stars_pair(30))
+    assert enough.meta['IVTHIN'] == 0
+    assert enough.meta['IVNOOVL'] == 0
+
+
+def _small_footprint_pair(shift_arcsec):
+    """Two visits of one 36 arcsec square, the second shifted in Dec."""
+    rng = np.random.default_rng(3)
+    ra = 266.5 + rng.uniform(0.0, 0.01, 1500)
+    dec = -28.7 + rng.uniform(0.0, 0.01, 1500)
+    return {'001': _consensus(ra, dec),
+            '002': _consensus(ra, dec + shift_arcsec / 3600.0)}
+
+
+def test_a_large_shift_on_a_small_footprint_refuses_to_pool():
+    """A 20 arcsec shift of a 36 arcsec square leaves no true pair in the
+    footprint-intersection box (their partners lie outside it), so the box
+    cannot confirm a tie.  Main refused this; the box-only rule pooled 2,914
+    rows (every star twice) as NOT MEASURABLE.  Not verifiable in the box,
+    verified on the whole catalogs, refused."""
+    with pytest.raises(InterVisitOffsetError, match='001.002.*20000'):
+        pool_visit_consensi(_small_footprint_pair(20.0))
+
+
+def test_the_refusal_names_the_whole_catalog_measurement():
+    with pytest.raises(InterVisitOffsetError, match='whole catalogs'):
+        pool_visit_consensi(_small_footprint_pair(20.0))
+
+
+def test_a_large_unconfirmed_peak_that_nothing_verifies_warns(monkeypatch):
+    """If even the whole catalogs cannot confirm a tie, the pair stays
+    NOT MEASURABLE and pooled -- but the large raw box peak is said out loud
+    and counted, not passed over as nothing."""
+    from jwst_gc_pipeline.photometry import consensus_catalog
+    monkeypatch.setattr(consensus_catalog, '_whole_catalog_tie',
+                        lambda *a, **k: None)
+    with pytest.warns(UserWarning, match='001.002.*not confirmed|neither it'):
+        pooled = pool_visit_consensi(_small_footprint_pair(20.0))
+    assert pooled.meta['IVNOMEAS'] == 1
+    assert pooled.meta['IVTHIN'] == 0
+    assert 'NOT MEASURABLE' in pooled.meta['IV_002']
+
+
+def test_the_inter_visit_offset_sign_is_this_visit_onto_the_earlier():
+    """Visit 002 sits +20 mas in Dec from 001; the shift that moves it onto
+    001 is -20, the sign ``IV_<visit>`` carried before the pairwise rewrite."""
+    ra, dec = _grid(266.5, -28.7)
+    per_visit = {'001': _consensus(ra, dec),
+                 '002': _consensus(ra, dec + 20.0 / 3.6e6)}
+    pooled = pool_visit_consensi(per_visit)
+    text = pooled.meta['IV_002']
+    assert 'ddec=-' in text and 'vs 001' in text, text
+    ddec = float(text.split('ddec=')[1].split()[0])
+    assert ddec == pytest.approx(-20.0, abs=3.0)
 
 
 def test_overlapping_tiles_good_tie_pool_and_merge_seam_stars():
