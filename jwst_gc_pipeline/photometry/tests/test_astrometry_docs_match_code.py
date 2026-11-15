@@ -246,18 +246,38 @@ REF_BOUND_CELL_FIELDS = ("n_ref", "expected_pairs_src", "expected_pairs_ref",
                          "ref_bound_applied")
 
 
-def test_reference_bound_coverage_is_documented_and_returned():
+def test_reference_bound_coverage_is_documented():
     """The checkpoint doc names the guard constant, its live value and every
-    record field the reference bound adds, and the map returns each of them."""
+    record field the reference bound adds (the code half, that the map
+    returns each of them, is the next test)."""
     md = _md()
     assert "REGION_REFERENCE_UNTESTABLE_FRACTION" in md
     assert f"({ao.REGION_REFERENCE_UNTESTABLE_FRACTION:.0%})" in md, (
         "the documented guard fraction no longer matches the constant")
     for name in REF_BOUND_RECORD_FIELDS + REF_BOUND_CELL_FIELDS:
         assert f"`{name}`" in md, f"{name} is not in ASTROMETRY_CHECKPOINTS.md"
-    src = inspect.getsource(ao.same_star_region_map)
+
+
+def test_reference_bound_fields_are_present_on_a_returned_map():
+    """The code half of the guard above reads RETURNED values, not source text:
+    the ``same_star_region_map`` docstring lists every field, so a source-text
+    check stays green when one is dropped from the returned dict (and the
+    parameter name ``n_ref_by_cell`` contains ``n_ref``)."""
+    from .test_same_star_region_map import _crowded_core_field, _sky, _tie
+    ax, ay, ref = _crowded_core_field((-30, 30, -30, 30), crowd=8, ref_keep=0.1)
+    ay = ay.copy()
+    ay[ay > 40.0] += 20.0               # a displaced strip -> uncovered entries
+    a = _sky(ax, ay)
+    m = ao.same_star_region_map(a, ref, _tie(a, ref), context="docs")
+    assert m["measurable"] is True, m["reason"]
     for name in REF_BOUND_RECORD_FIELDS:
-        assert name in src, f"same_star_region_map no longer returns {name}"
-    scan = inspect.getsource(ao._region_coverage_scan)
-    for name in REF_BOUND_CELL_FIELDS:
-        assert name in scan, f"_region_coverage_scan no longer records {name}"
+        assert name in m, f"same_star_region_map no longer returns {name}"
+    assert m["n_ref_in_footprint"] > 0
+    assert np.isfinite(m["coverage_rate_ref_all"])
+    assert np.isfinite(m["coverage_rate_ref_tight"])
+    assert m["ref_untestable_limit"] == ao.REGION_REFERENCE_UNTESTABLE_FRACTION
+    singles = [c for c in m["uncovered_cells"] if "ix" in c]
+    assert singles, m["uncovered_cells"]
+    for c in singles:
+        for name in REF_BOUND_CELL_FIELDS:
+            assert name in c, f"a single-cell entry no longer records {name}"

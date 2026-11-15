@@ -186,3 +186,112 @@ def test_weak_small_tie_is_not_lost_to_the_wide_window_floor(seed):
     assert r["window_arcsec"] <= 15.0
     assert r["min_peak_significance"] is None
     assert np.hypot(r["dra"] + 30.0, r["ddec"] - 20.0) < 60.0
+
+
+# --- the narrower-window fallback, one decision per test ---------------------
+# ``_measure_at_window`` is replaced by a table of per-window readings so each
+# branch of the fallback is driven directly instead of through a seeded field.
+# The significance floors are ``min_peak_significance(w, 0.1)``: 8.01 at 30",
+# 8.28 at 60".
+
+def _reading(window, dra, ddec, contrast, sig, bin_arcsec=None):
+    from jwst_gc_pipeline.photometry import astrometry_offsets as ao
+    return dict(dra=float(dra), ddec=float(ddec), off=float(np.hypot(dra, ddec)),
+                npairs=5000, contrast=float(contrast), window_arcsec=float(window),
+                dra_err=5.0, ddec_err=5.0, n_peak=20, peak_margin=2.0,
+                peak_significance=float(sig),
+                bin_arcsec=(ao._window_bin_arcsec(window, 0.02)
+                            if bin_arcsec is None else bin_arcsec))
+
+
+def _measure_from_table(monkeypatch, readings, windows=(3.0, 10.0, 30.0, 60.0)):
+    from jwst_gc_pipeline.photometry import astrometry_offsets as ao
+    by_window = {r["window_arcsec"]: r for r in readings}
+    monkeypatch.setattr(
+        ao, "_measure_at_window",
+        lambda a, b, w, bin_arcsec, min_pairs: (
+            dict(by_window[w]) if w in by_window else None))
+    return ao.measure_offset(None, None, sweep=True,
+                             sweep_windows=windows[1:])
+
+
+def test_fallback_takes_the_narrower_window_that_reads_the_same_peak(monkeypatch):
+    r = _measure_from_table(monkeypatch, [
+        _reading(3, 100, 50, 3.0, 0.0), _reading(10, 100, 50, 6.0, 0.0),
+        _reading(60, 120, 40, 9.0, 5.0)])
+    assert r["ok"] and r["window_arcsec"] == 10.0
+    assert r["min_peak_significance"] is None
+
+
+def test_fallback_picks_the_highest_contrast_of_the_narrower_windows(monkeypatch):
+    r = _measure_from_table(monkeypatch, [
+        _reading(3, 100, 50, 6.0, 0.0), _reading(10, 100, 50, 9.0, 0.0),
+        _reading(60, 100, 50, 12.0, 5.0)])
+    assert r["ok"] and r["window_arcsec"] == 10.0 and r["contrast"] == 9.0
+    r = _measure_from_table(monkeypatch, [
+        _reading(3, 100, 50, 9.0, 0.0), _reading(10, 100, 50, 6.0, 0.0),
+        _reading(60, 100, 50, 12.0, 5.0)])
+    assert r["ok"] and r["window_arcsec"] == 3.0 and r["contrast"] == 9.0
+
+
+def test_fallback_needs_the_narrower_window_to_pass_its_own_gate(monkeypatch):
+    # contrast 4 < 5: the 3" window reads the same peak but is itself refused
+    r = _measure_from_table(monkeypatch, [
+        _reading(3, 100, 50, 4.0, 0.0), _reading(60, 100, 50, 9.0, 5.0)])
+    assert not r["ok"] and r["window_arcsec"] == 60.0
+
+
+def test_fallback_never_goes_to_a_wider_window(monkeypatch):
+    # the 30" window wins on contrast and is refused; the 60" window passes
+    # its own floor on the same peak but is not narrower, so it cannot certify it
+    r = _measure_from_table(monkeypatch, [
+        _reading(30, 100, 50, 20.0, 5.0), _reading(60, 100, 50, 8.0, 9.0)])
+    assert not r["ok"] and r["window_arcsec"] == 30.0
+
+
+def test_fallback_is_not_tried_when_the_winner_is_already_ok(monkeypatch):
+    r = _measure_from_table(monkeypatch, [
+        _reading(3, 100, 50, 6.0, 0.0), _reading(60, 100, 50, 9.0, 12.0)])
+    assert r["ok"] and r["window_arcsec"] == 60.0
+    assert r["peak_significance"] == 12.0
+
+
+def test_fallback_tolerance_is_three_thousand_of_the_coarser_bin(monkeypatch):
+    # bin 0.1" -> 300 mas: a peak 200 mas from the refused wide peak is the same
+    # peak, one 400 mas away is a different one and stays refused.  (The 100 mas
+    # floor alone would reject the first, an unbounded tolerance accept the second.)
+    r = _measure_from_table(monkeypatch, [
+        _reading(10, 100, 50, 6.0, 0.0), _reading(60, 300, 50, 9.0, 5.0)])
+    assert r["ok"] and r["window_arcsec"] == 10.0
+    r = _measure_from_table(monkeypatch, [
+        _reading(10, 100, 50, 6.0, 0.0), _reading(60, 500, 50, 9.0, 5.0)])
+    assert not r["ok"] and r["window_arcsec"] == 60.0
+
+
+# --- the refusal text names the gate that refused ----------------------------
+
+def test_refusal_text_names_the_significance_floor_when_contrast_clears(monkeypatch):
+    # contrast 11.0 clears the 5.0 floor; the 60" peak reads 4.57 sigma against
+    # 8.28.  "contrast 11.0 < 5.0" would send the reader to the wrong cause.
+    from jwst_gc_pipeline.photometry import astrometry_offsets as ao
+    by_window = {60.0: _reading(60, 100, 50, 11.0, 4.57)}
+    monkeypatch.setattr(ao, "_measure_at_window",
+                        lambda a, b, w, bin_arcsec, min_pairs: (
+                            dict(by_window[w]) if w in by_window else None))
+    with pytest.raises(ao.NoCoherentTieError) as exc:
+        ao.measure_offset(None, None, maxsep=60.0, sweep=False,
+                          raise_on_low_contrast=True, context="probe")
+    msg = str(exc.value)
+    assert "clears 5.0" in msg and "4.57 sigma" in msg and "8.28" in msg, msg
+    assert "< 5.0" not in msg, msg
+
+
+def test_refusal_text_keeps_the_contrast_wording_when_contrast_is_low(monkeypatch):
+    from jwst_gc_pipeline.photometry import astrometry_offsets as ao
+    by_window = {3.0: _reading(3, 100, 50, 2.0, 0.0)}
+    monkeypatch.setattr(ao, "_measure_at_window",
+                        lambda a, b, w, bin_arcsec, min_pairs: (
+                            dict(by_window[w]) if w in by_window else None))
+    with pytest.raises(ao.NoCoherentTieError) as exc:
+        ao.measure_offset(None, None, sweep=False, raise_on_low_contrast=True)
+    assert "best contrast 2.0 < 5.0" in str(exc.value)
