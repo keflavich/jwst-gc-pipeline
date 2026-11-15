@@ -289,10 +289,12 @@ def _load_m7_frame_model(model_path, shape, filt):
 
 def _read_m7_frame_sources(cat_path, filt):
     """``(x, y, flux)`` of the finite rows of one frame's m7 per-frame
-    catalogue (the unvetted one), or ``None`` with the path printed."""
+    catalogue (the unvetted one), or ``None`` with the path printed (the frame is
+    then fitted without its m7 model)."""
     if not os.path.exists(cat_path):
         print(f"  [m8 {filt}] neighbour subtraction: no m7 frame catalogue "
-              f"{cat_path}; nothing is added back on this frame", flush=True)
+              f"{cat_path}; this frame is fitted without the m7 model",
+              flush=True)
         return None
     try:
         cat = Table.read(cat_path)
@@ -301,8 +303,8 @@ def _read_m7_frame_sources(cat_path, filt):
         flux = np.asarray(cat['flux_fit'], dtype=float)
     except (OSError, ValueError, KeyError) as ex:
         print(f"  [m8 {filt}] neighbour subtraction: cannot read m7 frame "
-              f"catalogue {cat_path}: {ex}; nothing is added back on this "
-              f"frame", flush=True)
+              f"catalogue {cat_path}: {ex}; this frame is fitted without the "
+              f"m7 model", flush=True)
         return None
     ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(flux)
     return x[ok], y[ok], flux[ok]
@@ -370,11 +372,11 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
     ``(model_path, catalogue_path)`` of the frame.  Each m7 source in the
     catalogue within ``addback_mas`` of a target is added back to that target's
     fit, so a counterpart of the target that the merge left unpaired remains in
-    its flux.  A frame whose model file is unusable is fitted unsubtracted.  The
-    tuple gains a last element ``(subtracted, near_sep_mas)``: a bool per fit,
-    True where the model was removed, and the separation in mas to the nearest
-    added-back source (NaN when none).  Without ``nbrsub`` the fit is
-    unchanged.
+    its flux.  A frame whose model file or catalogue is missing or unusable is
+    fitted unsubtracted.  The tuple gains a last element ``(subtracted,
+    near_sep_mas)``: a bool per fit, True where the model was removed, and the
+    separation in mas to the nearest added-back source (NaN when none).
+    Without ``nbrsub`` the fit is unchanged.
     """
     # A dropped frame here silently weakens the inverse-variance combine
     # (no-silent-frame-drops rule): catch only the exceptions frame prep
@@ -405,10 +407,15 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
     seed = Table({'x_init': xpix[inb], 'y_init': ypix[inb]})
     image = ctx.nan_replaced_data
     subtracted = False
+    src = None
     if nbrsub:
         model_path, cat_path = frame_products(ctx, kw)
         model = _load_m7_frame_model(model_path, image.shape, filt)
-        if model is not None:
+        # the model without the catalogue would remove the target's own
+        # same-star counterpart with nothing to add back, so the frame is
+        # fitted unsubtracted unless both products are there
+        src = _read_m7_frame_sources(cat_path, filt) if model is not None else None
+        if model is not None and src is not None:
             image = image - model
             subtracted = True
     bkg_sigma = None
@@ -428,8 +435,7 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
     e = np.asarray(res['flux_err'], dtype=float)
     near_sep = np.full(f.size, np.nan)
     if subtracted:
-        src = _read_m7_frame_sources(cat_path, filt)
-        if src is not None and src[0].size:
+        if src[0].size:
             from scipy.spatial import cKDTree
             sx, sy, sflux = src
             pix_mas = 1000.0 * _pixel_scale_arcsec(ctx.ww, nx, ny)
@@ -564,11 +570,14 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     ``nbrsub`` fits each frame with its own m7 star-only model removed and the
     m7 sources within ``addback_mas`` of a target added back
     (``_forced_fit_frame``); ``frame_products`` is the callable that names the
-    m7 model and catalogue of a frame.  It writes ``forced_nbrsub_{filt}`` (True
-    where every contributing frame was subtracted) and
-    ``forced_near_m7_sep_{filt}`` (mas to the nearest added-back source, the
-    smallest over the frames; NaN when none).  Off (the default), these columns
-    are not created and the fit is unchanged.
+    m7 model and catalogue of a frame.  A frame without both is fitted
+    unsubtracted and left out of the combine of every position that has a
+    subtracted frame; a target with none keeps its fit and upper limit but is
+    not promoted.  It writes ``forced_nbrsub_{filt}`` (True where the combine
+    holds subtracted frames only) and ``forced_near_m7_sep_{filt}`` (mas to the
+    nearest added-back source, the smallest over the frames; NaN when none).
+    Off (the default), these columns are not created and the fit is unchanged.
+    ``nrand`` without ``nbrsub`` prints a warning.
 
     ``nrand > 0`` fits ``nrand`` random positions with the targets (through the
     same frames, ``nbrsub`` and ``bkg_scatter`` included) and scales the
@@ -584,6 +593,12 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     if nbrsub and frame_products is None:
         raise ValueError('nbrsub needs frame_products, the callable that names '
                          "a frame's m7 model and catalogue")
+    if nrand > 0 and not nbrsub:
+        print(f"  [m8 {filt}] WARNING: nrand={nrand} without nbrsub: the random "
+              f"positions then sit 1-2 FWHM from stars whose light is not "
+              f"removed, so k measures the crowding and not the noise and "
+              f"inflates every error; use --forced-fill-nrand with "
+              f"--forced-fill-nbrsub", flush=True)
     n = len(tbl)
     fl = filt.lower()  # merged-catalog columns are lowercase; frames keep orig case
     filt = fl
@@ -648,15 +663,22 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
             addback_mas, rand_seed)
         ra = np.r_[ra, rra]
         dec = np.r_[dec, rdec]
-    # inverse-variance accumulators over frames (targets, then random positions)
+    # inverse-variance accumulators over frames (targets, then random
+    # positions), kept apart for the frames fitted with the m7 model removed
+    # (_s) and the others (_r): under nbrsub a position with any subtracted
+    # frame combines only those, since an unsubtracted frame still holds the
+    # neighbours' light at full weight
     ntot = ra.size
-    wsum = np.zeros(ntot)      # sum 1/var
-    wfsum = np.zeros(ntot)     # sum flux/var
-    nseen = np.zeros(ntot, dtype=int)
-    bsum = np.zeros(ntot)      # sum of the frames' annulus scatter
-    bseen = np.zeros(ntot, dtype=int)
-    nsub = np.zeros(ntot, dtype=int)   # frames fitted with the m7 model removed
+
+    def _acc():
+        return dict(w=np.zeros(ntot),       # sum 1/var
+                    wf=np.zeros(ntot),      # sum flux/var
+                    n=np.zeros(ntot, dtype=int),
+                    b=np.zeros(ntot),       # sum of the frames' annulus scatter
+                    bn=np.zeros(ntot, dtype=int))   # frames that measured it
+    acc_s, acc_r = _acc(), _acc()
     near_min = np.full(ntot, np.nan)   # nearest added-back m7 source, mas
+    frames_sub = frames_fit = 0
 
     def _fit(filename):
         return _forced_fit_frame(filename, filt, ra, dec,
@@ -677,18 +699,39 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
         if fit is None:
             continue
         loc, f, var = fit[:3]
-        wsum[loc] += 1.0 / var
-        wfsum[loc] += f / var
-        nseen[loc] += 1
+        was_sub, sep = fit[-1] if nbrsub else (np.zeros(0, dtype=bool), None)
+        is_sub = bool(nbrsub and was_sub.all())
+        acc = acc_s if is_sub else acc_r
+        frames_sub += is_sub
+        frames_fit += 1
+        acc['w'][loc] += 1.0 / var
+        acc['wf'][loc] += f / var
+        acc['n'][loc] += 1
         if bkg_scatter:
             bs = fit[3]
             got = np.isfinite(bs)
-            bsum[loc[got]] += bs[got]
-            bseen[loc[got]] += 1
+            acc['b'][loc[got]] += bs[got]
+            acc['bn'][loc[got]] += 1
         if nbrsub:
-            was_sub, sep = fit[-1]
-            nsub[loc] += was_sub
             near_min[loc] = np.fmin(near_min[loc], sep)
+
+    # a position with any subtracted frame combines only those
+    use_sub = acc_s['n'] > 0
+    dropped = int(acc_r['n'][use_sub].sum())
+
+    def _comb(key):
+        return acc_s[key] + np.where(use_sub, 0, acc_r[key])
+
+    wsum, wfsum, nseen = _comb('w'), _comb('wf'), _comb('n')
+    bsum, bseen = _comb('b'), _comb('bn')
+    sub_all = use_sub[:ntgt]       # every frame in the combine was subtracted
+    if nbrsub and verbose:
+        print(f"  [m8 {filt}] neighbour subtraction: {frames_sub} of "
+              f"{frames_fit} fitted frames had their m7 model and catalogue; "
+              f"{int(sub_all.sum())} of {ntgt} targets combine subtracted "
+              f"frames only ({dropped} unsubtracted fits dropped), "
+              f"{int((~sub_all & (nseen[:ntgt] > 0)).sum())} fitted targets "
+              f"have no subtracted frame and are not promoted", flush=True)
 
     fitted_all = nseen > 0
     flux_all = np.full(ntot, np.nan)
@@ -714,7 +757,6 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     snr = np.where(ferr > 0, flux / ferr, np.nan)
     bkg_mean = np.full(ntgt, np.nan)
     bkg_mean[bseen[:ntgt] > 0] = bsum[:ntgt][bseen[:ntgt] > 0] / bseen[:ntgt][bseen[:ntgt] > 0]
-    sub_all = fitted & (nsub[:ntgt] == nseen[:ntgt])
     near_sep = near_min[:ntgt]
     with np.errstate(divide='ignore', invalid='ignore'):
         snr_raw = np.where(ferr_raw > 0, flux / ferr_raw, np.nan)
@@ -740,6 +782,10 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
         _ensure(f'forced_snr_raw_{filt}', float, np.nan)
 
     detected = fitted & np.isfinite(snr) & (snr >= nsigma) & (flux > 0)
+    if nbrsub:
+        # a target with no subtracted frame still carries the neighbours'
+        # light: it keeps its fit and upper limit but is not promoted
+        detected &= sub_all
     not_detected = fitted & ~detected
     fjy = flux * conv_jy
 

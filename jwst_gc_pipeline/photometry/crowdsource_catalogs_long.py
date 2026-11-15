@@ -5563,8 +5563,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'sources within 40 mas of a target, so the other '
                             'stars of the band stop contributing to the fit.  '
                             'Needs the m7 per-frame model and catalogue; a '
-                            'frame without them is fitted unsubtracted.  '
-                            'Writes forced_nbrsub_<filter> and '
+                            'frame without both is fitted unsubtracted and '
+                            'left out of the combine of any target that has '
+                            'a subtracted frame; a target with none is not '
+                            'promoted.  Writes forced_nbrsub_<filter> and '
                             'forced_near_m7_sep_<filter>.  Default off '
                             '(#1284).'))
     parser.add_option('--forced-fill-nrand', dest='forced_fill_nrand',
@@ -5575,8 +5577,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'flux/error (at least 1), so forced_snr, '
                             'flux_ulim and the detection cut rest on the '
                             'measured scatter.  Writes forced_err_scale_ and '
-                            'forced_snr_raw_<filter>.  Default 0 = off; use '
-                            'with --forced-fill-nbrsub (#1284).'))
+                            'forced_snr_raw_<filter>.  Default 0 = off; needs '
+                            '--forced-fill-nbrsub (warns without it) '
+                            '(#1284).'))
     (options, args) = parser.parse_args()
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the
