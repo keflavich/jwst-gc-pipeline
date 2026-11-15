@@ -54,8 +54,10 @@ a ``#`` comment line, which YAML ignores, so the block can be pasted as it is.
 ``--emit-tiles`` prints the ``tiles:`` block (observation -> MAST
 ``target_name``, i.e. ``GC_<n>``) with the fetch date.  It lists every selected
 tile, built or not, because the name comes from MAST and not from a build.
-It does not skip the build step: add ``--dry-run`` to print the block without
-building any catalog.
+It is printed before any build, and needs no ``--epoch``.  It does not skip the
+build step: add ``--dry-run`` to print the block and build nothing (with
+``--emit-tiles --dry-run`` alone, no per-tile command is formed, so a tile
+MAST gives no ``t_min`` does not need ``--epoch``).
 
 ``--dry-run`` prints the exact per-tile command and builds nothing.  Without it
 the tiles are built one subprocess at a time; this is a long query against
@@ -513,6 +515,22 @@ def main(argv=None):
     print(f'{len(tiles)} tile(s) of proposal {args.proposal}; base {base}',
           flush=True)
 
+    # The tiles block needs only the fetched tiles (no epoch, no catalog), so it
+    # is printed before the build loop: build_command raises for a tile MAST
+    # gives no t_min (an unexecuted visit) when --epoch is missing, and that
+    # must not stop the block from printing.
+    if args.emit_tiles:
+        print('\n# fields.yaml: fields.gc-treasury.observations.'
+              f"'{args.proposal}'", flush=True)
+        print(tiles_block(tiles, datetime.date.today().isoformat()),
+              flush=True)
+        if args.dry_run and not args.emit_registry:
+            # Nothing else to show: the per-tile commands below need an epoch
+            # that this request does not supply.
+            print('\n--dry-run --emit-tiles: the MAST query ran; no build '
+                  'command was formed and nothing was written.', flush=True)
+            return 0
+
     epochs, todo, skipped = {}, [], []
     for tile in tiles:
         epochs[tile.obsid] = tile.epoch if tile.epoch is not None else args.epoch
@@ -558,11 +576,6 @@ def main(argv=None):
                 print(f'  o{tile.obsid} FAILED (rc={rc})', flush=True)
             if args.stop_on_error:
                 break
-
-    if args.emit_tiles:
-        print('\n# fields.yaml: fields.gc-treasury.observations.'
-              f"'{args.proposal}'")
-        print(tiles_block(tiles, datetime.date.today().isoformat()))
 
     if args.emit_registry:
         registered, paths, unregistered = registrable_tiles(

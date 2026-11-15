@@ -61,8 +61,9 @@ shuffling the file and comparing.
 
 `obsids: {nircam: '*'}` claims every observation of the proposal for that
 instrument. It is for a field that owns a whole proposal whose plan is long and
-provisional — 10678, the GC Treasury, whose 139 observation numbers (001..139,
-the same set for NIRCam and MIRI) are published today and are re-issued by
+provisional — 10678, the GC Treasury, whose 139 observation numbers (001..139
+with seven renumbered, see the `tiles` map; the same set for NIRCam and MIRI)
+are published today and are re-issued by
 every replan. The wildcard records the ownership, which survives a replan, in
 place of a 139-entry list.
 

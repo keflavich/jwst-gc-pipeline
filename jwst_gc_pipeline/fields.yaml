@@ -167,7 +167,8 @@ fields:
         filters: [f162m, f210m, f360m, f480m]
 
   gc-treasury:
-    # The GC Treasury (program 10678): 139 observations, 001..139, the same
+    # The GC Treasury (program 10678): 139 observations (001..139 with seven
+    # renumbered, see the tiles: note below), the same
     # set for NIRCAM/IMAGE and MIRI/IMAGE, over ~1668 planned exposure-level
     # MAST rows (data-qa mast_monitor.py:79-83), tiling the inner Galactic
     # Centre as GC_<n> targets, every visit NIRCam F212N+F480M prime with MIRI
