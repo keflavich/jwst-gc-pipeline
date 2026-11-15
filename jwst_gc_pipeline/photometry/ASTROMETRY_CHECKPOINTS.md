@@ -334,17 +334,28 @@ cross-filter" = the m7 cross-band merge.
 it within `manual_crossband_seed_max_sep_mas` (30 mas). On a two-band target
 such as gc-treasury (F212N, F480M), bands registered worse than that radius
 confirm almost nothing: o111, o113, o063 and o138 sat 66-272 mas apart and the
-seed held a few hundred rows against roughly 100k good detections.
+seed held only a small fraction of the good detections (about 0.003-0.05 on the
+collapsed tiles checked, 0.69-0.82 on the healthy ones; 7 tiles, measured with
+the earlier pooled `n_seed / min(n_good)` form, which agrees with the per-band
+form below to within a few percent for two bands; not re-measured on all 68).
 
-The build now divides the seed size by the good-detection count of the sparser
-band (summed over modules). Below `manual_crossband_seed_min_frac` (0.3) it
-prints one `WARNING [m7] crossband seed collapsed` line per process, naming the
-counts and a coarse band-to-band offset (offset-histogram stacking of the two
-highest-S/N bands in a 0.3 arcsec window; skipped under 200 pairs). The numbers
-are stored in the seed table meta (`SEEDFRAC`, `SEEDCOLL`, `SEEDNGD`,
-`SEEDOFFX`, `SEEDOFFY`) and in `crossband_seed_manual<obs>.health.json` beside
-the seed. `manual_crossband_seed_collapse_action` is `warn` (default) or
-`raise` (`CrossbandSeedCollapsedError`, after the files are written).
+For each band the build counts the fraction of its good detections (summed over
+modules) that sit in a cluster the seed kept; this is at most 1. The smallest
+band fraction is the seed's health, so with three or more bands a single
+mis-registered band is flagged even when the others agree with each other (a
+pooled seed-size over smallest-band-count would not see it). Below
+`manual_crossband_seed_min_frac` (0.3) the build prints one
+`WARNING [m7] crossband seed collapsed` line per process, naming the counts, the
+per-band fractions and the worst band. A coarse offset between the worst band
+and the highest-S/N other band (offset-histogram stacking in a 0.3 arcsec
+window; skipped under 200 pairs) is printed and stored only when the
+measurement reports a coherent peak; a pair registered further apart than the
+window gives the highest noise bin, which is reported as "no coherent peak",
+with `offset_ok` False and the contrast in the JSON. The numbers are stored in
+the seed table meta (`SEEDFRAC`, `SEEDCOLL`, `SEEDNGD`, `SEEDOFFX`, `SEEDOFFY`)
+and in `crossband_seed_manual<obs>.health.json` beside the seed.
+`manual_crossband_seed_collapse_action` is `warn` (default) or `raise`
+(`CrossbandSeedCollapsedError`, after the files are written).
 
 There is no wider-radius fallback: the repair is the reference tie (#921,
 #1198). The offset is a diagnostic confined to its window. The m7 cross-filter

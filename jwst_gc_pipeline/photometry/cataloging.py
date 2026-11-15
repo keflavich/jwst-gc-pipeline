@@ -5326,38 +5326,60 @@ class CrossbandSeedCollapsedError(RuntimeError):
 _CROSSBAND_SEED_COLLAPSE_WARNED = set()
 
 
-def _crossband_seed_health(n_good, n_seed, ras, decs, snrs, filtidx, flist, *,
-                           max_sep_mas, min_frac):
-    """Health of a cross-band seed: the fraction of the sparser band it confirms
-    and a coarse band-to-band offset.
+def _crossband_seed_health(n_good, n_in_seed, n_seed, ras, decs, snrs, filtidx,
+                           flist, *, max_sep_mas, min_frac):
+    """Health of a cross-band seed: per-band confirmed fraction and a coarse
+    band-to-band offset.
 
-    The fraction is ``n_seed / min(n_good)`` over the filters that contributed
-    good detections; ``n_good`` is accumulated across modules by the caller.  A
+    The fraction of a band is ``n_in_seed[band] / n_good[band]``: how many of its
+    good detections sit in a cluster the seed kept (``n_good`` and ``n_in_seed``
+    are accumulated across modules by the caller; a cluster can hold several
+    detections of one band, but never more than the band has, so the fraction
+    is at most 1).  ``frac`` is the smallest band fraction, so one band
+    registered away from the others flags the seed even when the rest agree
+    (with three bands a pooled ``n_seed / min(n_good)`` would not).  A
     single-filter target has nothing to confirm against, so its fraction is None
     and it is never flagged.
 
-    The offset is measured between the two filters with the highest median S/N
-    by offset-histogram stacking in a 0.3 arcsec window
+    The offset is measured between the worst band and the highest median-S/N
+    other band by offset-histogram stacking in a 0.3 arcsec window
     (``astrometry_offsets.measure_offset``, ``sweep=False``), as (second minus
-    first) in mas with dRA carrying the cos(dec) factor.  It is a diagnostic:
-    the histogram peak is only meaningful when the offset lies inside that
-    window.  The authority on registration is the m7 cross-filter checkpoint.
+    first, the pair ordered by median S/N) in mas with dRA carrying the cos(dec)
+    factor.  It is a diagnostic: the histogram peak is only meaningful when the
+    offset lies inside that window, so it is recorded only when the measurement
+    reports a coherent peak (``offset_ok``); otherwise the offset is None and
+    ``offset_ok`` False.  The authority on registration is the m7 cross-filter
+    checkpoint.
     """
-    from astropy.coordinates import SkyCoord
     from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
     health = dict(n_good={k: int(v) for k, v in n_good.items()},
+                  n_in_seed={k: int(n_in_seed.get(k, 0)) for k in n_good},
                   n_seed=int(n_seed), max_sep_mas=float(max_sep_mas),
-                  min_frac=float(min_frac), frac=None, collapsed=False,
+                  min_frac=float(min_frac), frac=None, band_frac=None,
+                  worst_band=None, collapsed=False,
                   offset_filters=None, offset_dra_mas=None,
-                  offset_ddec_mas=None, offset_npairs=None)
-    counts = [v for v in n_good.values() if v > 0]
-    if len(counts) >= 2:
-        health['frac'] = float(n_seed) / float(min(counts))
+                  offset_ddec_mas=None, offset_npairs=None, offset_ok=None,
+                  offset_contrast=None, offset_window_edge_fraction=None)
+    bands = [k for k, v in n_good.items() if v > 0]
+    worst = None
+    if len(bands) >= 2:
+        band_frac = {k: float(n_in_seed.get(k, 0)) / float(n_good[k])
+                     for k in bands}
+        worst = min(bands, key=lambda k: band_frac[k])
+        health['band_frac'] = band_frac
+        health['worst_band'] = worst
+        health['frac'] = band_frac[worst]
         health['collapsed'] = bool(health['frac'] < min_frac)
     if len(flist) >= 2:
         med = [(float(np.nanmedian(snrs[filtidx == k])) if np.any(filtidx == k)
                 else -np.inf) for k in range(len(flist))]
-        k1, k2 = (int(k) for k in np.argsort(-np.asarray(med), kind="stable")[:2])
+        rank = [int(k) for k in np.argsort(-np.asarray(med), kind="stable")]
+        if worst is None:
+            pair = rank[:2]
+        else:
+            kw = flist.index(worst)
+            pair = sorted([kw, next(k for k in rank if k != kw)], key=rank.index)
+        k1, k2 = pair
         m1, m2 = filtidx == k1, filtidx == k2
         if m1.any() and m2.any():
             res = measure_offset(
@@ -5367,25 +5389,38 @@ def _crossband_seed_health(n_good, n_seed, ras, decs, snrs, filtidx, flist, *,
                 sweep=False)
             if res is not None:
                 health['offset_filters'] = [flist[k1], flist[k2]]
-                health['offset_dra_mas'] = float(res['dra'])
-                health['offset_ddec_mas'] = float(res['ddec'])
                 health['offset_npairs'] = int(res['npairs'])
+                health['offset_ok'] = bool(res['ok'])
+                health['offset_contrast'] = float(res['contrast'])
+                health['offset_window_edge_fraction'] = float(
+                    res['window_edge_fraction'])
+                if res['ok']:
+                    health['offset_dra_mas'] = float(res['dra'])
+                    health['offset_ddec_mas'] = float(res['ddec'])
     return health
 
 
 def _crossband_seed_health_message(health):
     """One-line description of a collapsed seed, naming the counts and offset."""
     counts = ', '.join(f"{k}={v}" for k, v in sorted(health['n_good'].items()))
+    fracs = ', '.join(f"{k}={v:.3f}"
+                      for k, v in sorted(health['band_frac'].items()))
     msg = (f"WARNING [m7] crossband seed collapsed: {health['n_seed']} positions "
-           f"confirmed from good m6 detections ({counts}); fraction of the "
-           f"sparser band {health['frac']:.3f} < {health['min_frac']:g} at a "
-           f"{health['max_sep_mas']:g} mas match radius.")
+           f"confirmed from good m6 detections ({counts}); confirmed fraction "
+           f"of each band's good detections ({fracs}); worst band "
+           f"{health['worst_band']} {health['frac']:.3f} < {health['min_frac']:g} "
+           f"at a {health['max_sep_mas']:g} mas match radius.")
     if health['offset_dra_mas'] is not None:
         a, b = health['offset_filters']
         msg += (f" Measured {b}-{a} offset (diagnostic, 0.3 arcsec window): "
                 f"dRA*cos(dec)={health['offset_dra_mas']:.1f} mas, "
                 f"dDec={health['offset_ddec_mas']:.1f} mas "
                 f"({health['offset_npairs']} pairs).")
+    elif health['offset_ok'] is False:
+        a, b = health['offset_filters']
+        msg += (f" No coherent {b}-{a} offset peak inside the 0.3 arcsec "
+                f"window (offset larger than the window, or unregistered); no "
+                f"offset is reported.")
     msg += (" The bands are probably mis-registered by more than the match "
             "radius; repair the reference tie (issues #921, #1198) rather "
             "than widening the radius.  The m7 cross-filter checkpoint and "
@@ -5435,10 +5470,13 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
 
     Seed health (issue #981): bands registered worse than ``max_sep_mas`` apart
     confirm almost nothing (gc-treasury has two NIRCam bands, so one band offset
-    by 70-270 mas collapsed the seed on o111, o113, o063 and o138).  When the
-    seed holds fewer than ``manual_crossband_seed_min_frac`` (0.3) of the
-    sparser band's good detections the build prints a ``WARNING [m7] crossband
-    seed collapsed`` line with the counts and a coarse band offset.  The numbers
+    by 66-272 mas collapsed the seed on o111, o113, o063 and o138).  For each
+    band the build counts the fraction of its good detections that sit in a
+    kept cluster (at most 1; the smallest over bands is ``SEEDFRAC``, so with
+    three or more bands one mis-registered band is flagged too).  Below
+    ``manual_crossband_seed_min_frac`` (0.3) it prints a ``WARNING [m7]
+    crossband seed collapsed`` line with the counts and, when the offset
+    measurement finds a coherent peak, a coarse band offset.  The numbers
     go into the seed table meta (SEEDFRAC, SEEDCOLL, SEEDNGD, SEEDOFFX/Y) and a
     ``crossband_seed_manual<obs>.health.json`` beside it.
     ``manual_crossband_seed_collapse_action='raise'`` raises
@@ -5517,20 +5555,23 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     for i, r in enumerate(roots):
         members[r].append(i)
     seed_ra = []; seed_dec = []; nfilt = []; confl = []
+    n_in_seed = {}   # good detections per filter inside a kept cluster
     for r, mem in members.items():
         mem = np.array(mem)
         ufilt = np.unique(filtidx[mem])
         if len(ufilt) < min_filters:
             continue
+        for k in filtidx[mem]:
+            n_in_seed[flist[k]] = n_in_seed.get(flist[k], 0) + 1
         # seed position = highest-SNR member of the cluster
         best = mem[np.nanargmax(snrs[mem])]
         seed_ra.append(ras[best]); seed_dec.append(decs[best])
         nfilt.append(len(ufilt))
         confl.append(','.join(sorted(flist[k] for k in ufilt)))
     out = crossband_seed_file(cut_bp, options)
-    health = _crossband_seed_health(n_good, len(seed_ra), ras, decs, snrs,
-                                    filtidx, flist, max_sep_mas=max_sep_mas,
-                                    min_frac=min_frac)
+    health = _crossband_seed_health(n_good, n_in_seed, len(seed_ra), ras, decs,
+                                    snrs, filtidx, flist,
+                                    max_sep_mas=max_sep_mas, min_frac=min_frac)
     # the JSON is written first so that an empty or raising build leaves it
     with atomic_write(out.replace('.fits', '.health.json')) as _tmp:
         with open(_tmp, 'w') as _fh:

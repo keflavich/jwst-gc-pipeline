@@ -5186,16 +5186,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option('--manual-crossband-seed-min-frac', type=float,
                       dest='manual_crossband_seed_min_frac', default=MANUAL_DEFAULTS['manual_crossband_seed_min_frac'],
                       help=('Seed health (#981): the m7 cross-band seed is flagged as '
-                            'collapsed when it holds fewer than this fraction of the '
-                            "sparser band's good m6 detections (bands mis-registered "
-                            'by more than the match radius).  Default 0.3.'),
+                            'collapsed when any band has fewer than this fraction of '
+                            'its good m6 detections inside a kept cluster (bands '
+                            'mis-registered by more than the match radius).  '
+                            'Default %default.'),
                       metavar='manual_crossband_seed_min_frac')
     parser.add_option('--manual-crossband-seed-collapse-action', type='choice',
                       choices=['warn', 'raise'],
                       dest='manual_crossband_seed_collapse_action', default=MANUAL_DEFAULTS['manual_crossband_seed_collapse_action'],
                       help=("What a collapsed m7 cross-band seed does: 'warn' prints "
-                            "a WARNING and continues (default); 'raise' stops the run "
-                            'before the m7 compute is spent.'),
+                            "a WARNING and continues; 'raise' stops the run "
+                            'before the m7 compute is spent.  Default %default.'),
                       metavar='manual_crossband_seed_collapse_action')
     parser.add_option('--manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
                       action='store_true',
