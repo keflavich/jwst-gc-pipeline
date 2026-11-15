@@ -404,8 +404,8 @@ NIRCAM_REFERENCE_CATALOGS = {
     ('3523', '005'): 'gaia_refcat.fits',
     ('1334', '001'): 'gaia_refcat.fits',
     ('1979', '001'): 'gaia_refcat.fits',
-    ('7213', '001'): 'gaia_virac2_refcat_epoch2026.30.fits',
-    ('6778', '001'): 'gaia_virac2_refcat_epoch2024.68.fits',
+    ('7213', '001'): 'gaia_virac2_refcat_epoch2026.30_j7213.fits',
+    ('6778', '001'): 'gaia_virac2_refcat_epoch2024.68_j6778.fits',
 }
 
 

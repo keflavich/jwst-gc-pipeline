@@ -75,6 +75,7 @@ Usage:
 import argparse
 import contextlib
 import os
+import re
 import signal
 import threading
 import time
@@ -546,7 +547,14 @@ def refcat_filename(epoch_tag, obs_token=None, proposal_token=None):
     """
     jtok = ''
     if proposal_token not in (None, ''):
-        jtok = '_j' + str(proposal_token).lstrip('jJ')
+        pid = str(proposal_token).lstrip('jJ')
+        # the selector (astrometry_utils._REFCAT_J_TOKEN) only reads a 4-5
+        # digit id; any other spelling would build a file it ignores
+        if not re.fullmatch(r'\d{4,5}', pid):
+            raise ValueError(
+                f"--proposal-token {proposal_token!r}: expected a 4-5 digit "
+                f"proposal id such as 6778 or 10678")
+        jtok = '_j' + pid
     otok = ''
     if obs_token not in (None, ''):
         token = str(obs_token).lstrip('oO')

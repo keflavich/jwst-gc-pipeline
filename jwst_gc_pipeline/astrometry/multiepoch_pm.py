@@ -213,8 +213,13 @@ STD_RA_APPLY_COSDEC = False
 def std_columns_to_arcsec(t, filt, dec_deg=None, apply_cosdec=False):
     """Per-axis position scatter ``(ex, ey)`` in ARCSEC from ``std_ra``/``std_dec``.
 
-    ``std_ra``/``std_dec`` (bare, else ``_{filt}``) are degrees; see
-    ``STD_DEG_TO_ARCSEC``.  With ``apply_cosdec`` the RA axis is multiplied by
+    The bare ``std_ra``/``std_dec`` column is used when present, else
+    ``std_ra_{filt}``/``std_dec_{filt}`` (so a table carrying both is read from
+    the bare pair).  Columns with no unit are degrees, see
+    ``STD_DEG_TO_ARCSEC``; a column that carries an angular unit is converted
+    from that unit, and one with a non-angular unit raises
+    ``astropy.units.UnitConversionError`` rather than being multiplied by 3600
+    as if it were degrees.  With ``apply_cosdec`` the RA axis is multiplied by
     cos(``dec_deg``), converting the coordinate scatter to an on-sky one;
     ``dec_deg`` (per-row array or scalar, degrees) is then required.
 
@@ -225,11 +230,19 @@ def std_columns_to_arcsec(t, filt, dec_deg=None, apply_cosdec=False):
     def _get(base):
         for name in (base, f'{base}_{filt}'):
             if name in t.colnames:
-                return np.asarray(np.ma.filled(t[name].astype(float), np.nan), float)
+                col = t[name]
+                unit = getattr(col, 'unit', None)
+                if isinstance(col, u.Quantity):
+                    vals = np.asarray(col.value, float)
+                else:
+                    vals = np.asarray(np.ma.filled(col.astype(float), np.nan), float)
+                if unit is None or unit == u.dimensionless_unscaled:
+                    return vals * STD_DEG_TO_ARCSEC
+                return (vals * unit).to_value(u.arcsec)
         return np.full(len(t), np.nan)
 
-    ex = _get('std_ra') * STD_DEG_TO_ARCSEC
-    ey = _get('std_dec') * STD_DEG_TO_ARCSEC
+    ex = _get('std_ra')
+    ey = _get('std_dec')
     if apply_cosdec:
         if dec_deg is None:
             raise ValueError('apply_cosdec=True needs dec_deg')
@@ -243,7 +256,18 @@ def load_jwst_m7(path, ref_filter='f200w'):
     """Load a per-obs m7 cross-band catalog -> dict with sky + errors + mag + epoch.
 
     ``ex``/``ey`` are in arcsec, converted from the degree-valued
-    ``std_ra_/std_dec_{ref_filter}`` columns (see ``std_columns_to_arcsec``).
+    ``std_ra_/std_dec_{ref_filter}`` columns (see ``std_columns_to_arcsec``,
+    which reads a bare ``std_ra``/``std_dec`` first if the table has one).
+    Rows with no measured scatter (absent, NaN, non-positive) take a 5 mas
+    floor.  That floor is not small next to the measured scatter: in the brick
+    o001 m7 catalogue the median measured scatter is 1.7 mas (RA) / 1.3 mas
+    (Dec) in F182M but 5.3 / 4.0 mas in F212N, so floor rows are penalised
+    against measured rows in F182M and not in F212N.  With a floor on both epochs and a 1.2 yr baseline
+    pm_err = hypot(5, 5) mas / 1.2 yr = 5.9 mas/yr, above the default ``err_cap_mas=3``
+    cut, so floor rows never pass the ``trustworthy`` error cut.
+    ``std_ra`` is the scatter of the per-exposure positions, not the error of
+    their mean (that would be smaller by about sqrt(nmatch)); the error model
+    is unchanged from before the unit fix.
     """
     t = Table.read(path)
     sc = SkyCoord(t['skycoord_ref'])

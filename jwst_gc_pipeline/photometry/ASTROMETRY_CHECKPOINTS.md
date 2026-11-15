@@ -291,10 +291,19 @@ observation `001`) needs `--proposal-token <PPPP>` instead, which stamps
 `_j<PPPP>` before any observation token (`..._epoch2024.68_j6778.fits`).
 `pick_refcat(cands, field, proposal=...)` prefers `_j<proposal>_o<NNN>`, then
 `_j<proposal>`, then `_o<NNN>`, then an untokened file, and never falls back to
-another proposal's `_j` file.  For a proposal in
-`naming.SHARED_TREE_PROPOSALS` it refuses several untokened candidates, naming
-them and the fix (rename, or `ASTROM_REFCAT`); before this, the newest-sorting
-name won and 6778 was tied to 7213's epoch-2026.30 file (#818).
+another proposal's `_j` file.  `_j<proposal>` outranks `_o<NNN>` even for the
+matching observation, because the proposal fixes the epoch and footprint and an
+observation number alone does not (7213 and 6778 are both `001`).  It refuses
+(naming the files and the fix, rename or `ASTROM_REFCAT`) several `_j<proposal>`
+files with no observation token for one proposal, and, for a proposal in
+`naming.SHARED_TREE_PROPOSALS`, several untokened candidates or several
+`_o<NNN>` candidates for the run's observation; before this, the newest-sorting
+name won and 6778 was tied to 7213's epoch-2026.30 file (#818).  Proposal ids
+are 4 or 5 digits (`_j6778`, `_j10678`); `--proposal-token` rejects any other
+spelling.  On a shared tree build with `--proposal-token`, not `--obs-token`:
+the `_o<NNN>` name is the same for both proposals.  Among several `_j<P>_o<NNN>`
+(or several `_o<NNN>` off the shared tree) the last in sorted order wins, as
+before.  The ngc6334 `fields.yaml` entries name the `_j6778` / `_j7213` files.
 
 `ALLOW_CONSENSUS_ONLY_ASTROMETRY=1` runs without one, for a deliberate first
 look at a field whose catalog has not been built.  It never lets a run borrow

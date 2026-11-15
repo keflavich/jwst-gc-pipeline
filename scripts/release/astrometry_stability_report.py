@@ -35,7 +35,13 @@ import json
 import math
 import os
 import statistics
+import sys
 from collections import defaultdict
+from pathlib import Path
+
+# Runnable from a checkout without the package installed (the usual call is
+# a bare `python scripts/release/astrometry_stability_report.py`).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     current_records, parse_record_name)
