@@ -1517,6 +1517,36 @@ def _subset_model_image(phot, keep, shape):
         phot.__dict__.pop('_model_image_params', None)
 
 
+def _miri_satstar_excl_xy(satstar_table):
+    """Positions for the MIRI satstar-coincidence drop in ``_manual_phot_pass``.
+
+    Returns the ``(N, 2)`` array of ``x_fit``/``y_fit`` values the drop has
+    always been given, or None when there is none.  Those are the fit STAMP
+    coordinates (about 40, 40), not detector pixels, so the drop only ever
+    acted near that stamp position and was effectively dead.  Since #949 a
+    satstar table holds detector pixels in ``x_fit``/``y_fit`` and keeps the
+    stamp values in ``x_fit_cutout``/``y_fit_cutout``; this reads the stamp
+    values from either vintage so the MIRI per-frame daophot output does not
+    change with #949.  Activating the drop on detector positions (read
+    ``xcentroid``/``ycentroid``) removes daophot rows from every MIRI frame
+    and goes in its own PR.
+    """
+    if satstar_table is None or not len(satstar_table):
+        return None
+    names = satstar_table.colnames
+    for xcol, ycol in (('x_fit_cutout', 'y_fit_cutout'), ('x_fit', 'y_fit')):
+        if xcol in names and ycol in names:
+            break
+    else:
+        return None
+    sxv = np.asarray(satstar_table[xcol], dtype=float)
+    syv = np.asarray(satstar_table[ycol], dtype=float)
+    ok = np.isfinite(sxv) & np.isfinite(syv)
+    if not ok.any():
+        return None
+    return np.column_stack([sxv[ok], syv[ok]])
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -4821,15 +4851,10 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # the satstar pixel positions once.  NIRCam: leave disabled (pix=0).
     _satstar_xy = None
     _satstar_excl_pix = 0.0
-    if _is_miri and ctx.satstar_table is not None and len(ctx.satstar_table):
-        _sst = ctx.satstar_table
-        if 'x_fit' in _sst.colnames and 'y_fit' in _sst.colnames:
-            _sxv = np.asarray(_sst['x_fit'], dtype=float)
-            _syv = np.asarray(_sst['y_fit'], dtype=float)
-            _ok = np.isfinite(_sxv) & np.isfinite(_syv)
-            if _ok.any():
-                _satstar_xy = np.column_stack([_sxv[_ok], _syv[_ok]])
-                _satstar_excl_pix = 1.5 * ctx.fwhm_pix
+    if _is_miri:
+        _satstar_xy = _miri_satstar_excl_xy(ctx.satstar_table)
+        if _satstar_xy is not None:
+            _satstar_excl_pix = 1.5 * ctx.fwhm_pix
 
     # Coadd-confirmed seed protection (extended-emission/crowded fields only):
     # exempt fits at i2d-seed positions from the satstar-wing / near-saturation

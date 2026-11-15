@@ -18,6 +18,12 @@ vintage:
 * ``meta['XYFRAME'] = 'detector'`` marks the table.  A table without the key is
   the older stamp-local vintage.
 
+``id`` is a positional index of ONE table, stable only while its row order is
+unchanged.  Per-exposure ids restart at 1 in every file and the consolidated
+table is renumbered at every rebuild, so it is not a persistent key across
+files or rebuilds.  ``replace_saturated`` numbers the rows it appends after the
+host catalog's own ids.  Key on the exposure and position columns, not on ``id``.
+
 The helper is idempotent through that key, so it is safe to call on every read
 path: a catalog written before this change is normalised in memory, one written
 after it passes through untouched.
