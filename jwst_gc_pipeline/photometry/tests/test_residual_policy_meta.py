@@ -457,6 +457,23 @@ def test_integrated_ratio_is_nan_above_the_dropped_fraction():
     assert nd[0] == limit + 1 and np.isnan(ratio[0])   # one more: not a ratio
 
 
+def test_dropped_fraction_limit_is_a_fifth_of_the_box():
+    """Pinned against literals: 10% dropped is measured, 40% is not."""
+    n, h = 161, 5
+    w = _tan_wcs(n)
+    model = np.ones((n, n))
+    stars = _sky_at(w, [80], [80])
+    half, sky = np.array([h]), np.array([5.0])
+    assert MAX_DROPPED_FRACTION == 0.2
+    for k, finite in ((12, True), (48, False)):       # of 121 box pixels
+        flat = np.full(121, 6.0)
+        flat[:k] = np.nan
+        data = np.full((n, n), 6.0)
+        data[75:86, 75:86] = flat.reshape(11, 11)
+        ratio = integrated_ratio(model, data, w, stars, half, sky)
+        assert bool(np.isfinite(ratio[0])) is finite
+
+
 def test_dropped_count_is_nan_where_the_box_is_off_the_image():
     w = _tan_wcs()
     stars = _sky_at(w, [2], [80])
@@ -546,6 +563,7 @@ def test_gross_test_ignores_nan_and_needs_enough_stars():
     ratio = np.append(np.full(25, 1.0), np.full(20, np.nan))
     assert integrated_gross_failure(ratio) is None
     assert "need" in integrated_gross_failure(np.full(INTEGRATED_MIN_STARS - 1, 1.0))
+    assert integrated_gross_failure(np.full(INTEGRATED_MIN_STARS, 1.0)) is None
 
 
 def test_integrated_products_record_the_residual_fraction_and_dropped_count():
