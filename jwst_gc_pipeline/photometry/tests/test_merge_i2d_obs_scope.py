@@ -8,7 +8,9 @@ as the WCS and pixel-area source for all of them.
 """
 import glob
 import os
+import subprocess
 import types
+from pathlib import Path
 
 import pytest
 from astropy.coordinates import SkyCoord
@@ -109,6 +111,15 @@ def test_wildcard_registration_accepts_a_field_on_shape():
         MC._obsid_for_glob('gc-treasury', '10678', 'f212n', field='1234')
 
 
+@pytest.mark.parametrize('joint', ['040-041', '002-998'])
+def test_a_joint_token_is_refused_for_a_wildcard_registration(joint):
+    """gc-treasury has no observation list, so the registered-list membership
+    test cannot reject a joint token; the explicit check has to, or the glob is
+    built from ``'040-041'`` and matches nothing."""
+    with pytest.raises(naming.ObservationFieldError, match='joint token'):
+        MC._obsid_for_glob('gc-treasury', '10678', 'f212n', field=joint)
+
+
 def test_single_observation_registrations_ignore_field():
     """The registry answer is already one observation; ``field`` changes nothing."""
     before = _fields.glob_obsid('cloudc', '2221', 'nircam')
@@ -138,16 +149,17 @@ def test_merge_daophot_takes_the_wcs_from_its_own_observation(tmp_path, monkeypa
         ['jw03571-o003_t001_miri_f770w_mirimage_i2d.fits']
 
 
-def test_unscoped_glob_matches_every_tile_and_leads_with_o001(tmp_path):
-    """The failure this fixes: the unscoped glob matches both tiles and the
-    first (o001) is the WCS source for the o003 merge."""
-    for obs in ('001', '003'):
-        _touch(tmp_path / 'F770W' / 'pipeline' /
-               f'jw03571-o{obs}_t001_miri_f770w_mirimage_i2d.fits')
-    pooled = sorted(os.path.basename(x) for x in glob.glob(
-        f"{tmp_path}/F770W/pipeline/jw03571-o*_t001_miri*f770w*mirimage_i2d.fits"))
-    assert pooled[0].startswith('jw03571-o001')
-    assert len(pooled) == 2
+def test_merge_daophot_wcs_source_does_not_depend_on_glob_order(tmp_path, monkeypatch):
+    """Where a glob still matches several tiles (cloudef MIRI under ``'*'``),
+    the first match is the WCS and pixel-area source.  ``glob.glob`` returns the
+    filesystem's order, so the first match must be taken after sorting."""
+    real_glob = glob.glob
+    monkeypatch.setattr(MC.glob, 'glob', lambda pat, *a, **k: sorted(real_glob(pat, *a, **k), reverse=True))
+    monkeypatch.setattr(MC, '_obsid_for_glob', lambda *a, **k: '*')
+    monkeypatch.setattr(MC, 'PER_OBS_MERGED_PROPOSALS', ())
+    seen = _run_daophot(tmp_path, monkeypatch, '003', ['001', '003'])
+    assert [os.path.basename(f) for f in seen] == \
+        ['jw03571-o001_t001_miri_f770w_mirimage_i2d.fits']
 
 
 def _fake_svo(monkeypatch):
@@ -156,11 +168,9 @@ def _fake_svo(monkeypatch):
         MC, 'SvoFps', types.SimpleNamespace(get_filter_list=lambda fac: jfilts))
 
 
-def test_merge_daophot_with_no_matching_mosaic_keeps_the_fallback(
-        tmp_path, monkeypatch, capsys):
-    """The observation's mosaic not being on disk is the existing no-match
-    path: a warning, no ``frame_wcs`` call, and the catalogue's own
-    ``skycoord`` and ``PIXSCALE``.  o001's mosaic must not stand in for o003's."""
+def _run_daophot_fallback(tmp_path, monkeypatch, i2d_names):
+    """``merge_daophot`` for gc3571 o003 over a tree holding only ``i2d_names``;
+    ``frame_wcs`` fails the test if the merge reaches for any of them."""
     monkeypatch.setattr(MC, 'frame_wcs',
                         lambda fn: pytest.fail(f'frame_wcs called on {fn}'))
     _fake_svo(monkeypatch)
@@ -172,11 +182,38 @@ def test_merge_daophot_with_no_matching_mosaic_keeps_the_fallback(
     Table({'Filter': ['F770W'], 'PSF FWHM (arcsec)': [0.27],
            'PSF FWHM (pixel)': [2.5]}).write(
         tmp_path / 'reduction' / 'fwhm_table.ecsv')
-    _touch(tmp_path / 'F770W' / 'pipeline' /
-           'jw03571-o001_t001_miri_f770w_mirimage_i2d.fits')
+    for name in i2d_names:
+        _touch(tmp_path / 'F770W' / 'pipeline' / name)
     MC.merge_daophot(module='mirimage', daophot_type='basic', indivexp=True,
                      target='gc3571', basepath=str(tmp_path), progid='3571',
                      filternames_override=['f770w'], field='003')
+    return calls
+
+
+def test_merge_daophot_with_no_matching_mosaic_keeps_the_fallback(
+        tmp_path, monkeypatch, capsys):
+    """The observation's mosaic not being on disk is the existing no-match
+    path: a warning, no ``frame_wcs`` call, and the catalogue's own
+    ``skycoord`` and ``PIXSCALE``.  o001's mosaic must not stand in for o003's."""
+    calls = _run_daophot_fallback(
+        tmp_path, monkeypatch, ['jw03571-o001_t001_miri_f770w_mirimage_i2d.fits'])
+    assert len(calls) == 1
+    assert 'no mirimage i2d for filter f770w' in capsys.readouterr().out
+
+
+def test_miri_mosaic_names_on_disk_still_take_the_catalogue_fallback(
+        tmp_path, monkeypatch, capsys):
+    """Recorded, not endorsed.  The MIRI mosaics are named
+    ``jw03571-o003_t001_miri_clear-f770w-mirimage_data_i2d.fits`` and
+    ``..._miri_f770w_i2d.fits``; the glob ends in ``{module}_i2d.fits``, which
+    neither satisfies for module ``mirimage``, so the real ``merge_daophot``
+    never reaches ``frame_wcs`` for them and uses the catalogue ``PIXSCALE``.
+    Widening the glob would switch it to ``proj_plane_pixel_area()`` of the i2d
+    and change ``flux_jy``, so it needs its own comparison; this test fails
+    (``frame_wcs`` is called) when that happens."""
+    calls = _run_daophot_fallback(tmp_path, monkeypatch, [
+        'jw03571-o003_t001_miri_clear-f770w-mirimage_data_i2d.fits',
+        'jw03571-o003_t001_miri_f770w_i2d.fits'])
     assert len(calls) == 1
     assert 'no mirimage i2d for filter f770w' in capsys.readouterr().out
 
@@ -224,6 +261,57 @@ def test_guard_is_quiet_for_one_observation_or_none(capsys):
 
 
 # ---------------------------------------------------------------------------
+# the guard is wired into both merges
+# ---------------------------------------------------------------------------
+
+def _pool_every_observation(monkeypatch, per_obs):
+    """Make the i2d glob match every tile, as the unscoped glob used to."""
+    monkeypatch.setattr(MC, '_obsid_for_glob', lambda *a, **k: '*')
+    if not per_obs:
+        monkeypatch.setattr(MC, 'PER_OBS_MERGED_PROPOSALS', ())
+
+
+def test_merge_daophot_raises_when_a_per_obs_glob_pools_observations(tmp_path, monkeypatch):
+    _pool_every_observation(monkeypatch, per_obs=True)
+    with pytest.raises(ValueError, match=r"observations \['001', '003'\]"):
+        _run_daophot(tmp_path, monkeypatch, '003', ['001', '003'])
+
+
+def test_merge_daophot_warns_when_another_proposal_pools_observations(
+        tmp_path, monkeypatch, capsys):
+    _pool_every_observation(monkeypatch, per_obs=False)
+    _run_daophot(tmp_path, monkeypatch, '003', ['001', '003'])
+    assert "observations ['001', '003']" in capsys.readouterr().out
+
+
+def _crowdsource_two_tiles(tmp_path, monkeypatch):
+    for obs in ('001', '003'):
+        _touch(tmp_path / 'F770W' / 'pipeline' /
+               f'jw03571-o{obs}_t001_miri_f770w_mirimage_i2d.fits')
+    monkeypatch.setattr(MC, '_obs_filters_for', lambda target: {'3571': ['f770w']})
+    _fake_svo(monkeypatch)
+
+
+def test_merge_crowdsource_raises_when_a_per_obs_glob_pools_observations(tmp_path, monkeypatch):
+    _crowdsource_two_tiles(tmp_path, monkeypatch)
+    _pool_every_observation(monkeypatch, per_obs=True)
+    with pytest.raises(ValueError, match=r"observations \['001', '003'\]"):
+        MC.merge_crowdsource(module='mirimage', target='gc3571', indivexp=True,
+                             basepath=str(tmp_path), field='003')
+
+
+def test_merge_crowdsource_warns_when_another_proposal_pools_observations(
+        tmp_path, monkeypatch, capsys):
+    _crowdsource_two_tiles(tmp_path, monkeypatch)
+    _pool_every_observation(monkeypatch, per_obs=False)
+    # no catalogues on disk, so the merge stops after the glob it just warned about
+    with pytest.raises(ValueError, match='had no matches'):
+        MC.merge_crowdsource(module='mirimage', target='gc3571', indivexp=True,
+                             basepath=str(tmp_path), field='003')
+    assert "observations ['001', '003']" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # merge_crowdsource and the CLI
 # ---------------------------------------------------------------------------
 
@@ -266,23 +354,61 @@ def test_merge_crowdsource_without_a_field_raises_for_a_per_obs_proposal(tmp_pat
                              basepath=str(tmp_path))
 
 
+def test_merge_crowdsource_names_the_filter_whose_scoped_glob_is_empty(tmp_path, monkeypatch):
+    """With ``indivexp=False`` the catalogues pair with the i2d list by position
+    and ``zip`` stops at the shorter one.  When one filter's observation-scoped
+    glob is empty, the other filter's WCS would go to this table (and the
+    mosaic-less table would lack ``flux_jy``); it must fail naming the filter."""
+    monkeypatch.setattr(MC, '_obs_filters_for',
+                        lambda target: {'3571': ['f770w', 'f1000w']})
+    _fake_svo(monkeypatch)
+    monkeypatch.setattr(MC, 'frame_wcs',
+                        lambda fn: pytest.fail(f'frame_wcs called on {fn}'))
+    # both filters have a catalogue; only f1000w has an o003 mosaic
+    for filt in ('f770w', 'f1000w'):
+        _touch(tmp_path / filt.upper() / f'{filt}_mirimage_crowdsource.fits')
+    _touch(tmp_path / 'F1000W' / 'pipeline' /
+           'jw03571-o003_t001_miri_f1000w_mirimage_i2d.fits')
+    _touch(tmp_path / 'F770W' / 'pipeline' /
+           'jw03571-o001_t001_miri_f770w_mirimage_i2d.fits')
+    with pytest.raises(ValueError, match=r"filter\(s\) \['f770w'\]"):
+        MC.merge_crowdsource(module='mirimage', target='gc3571', indivexp=False,
+                             basepath=str(tmp_path), field='003')
+
+
 # ---------------------------------------------------------------------------
-# the MIRI mosaic spelling: recorded so a later change is deliberate
+# submit_merge.sbatch hands --field to the driver
 # ---------------------------------------------------------------------------
 
-def test_miri_mosaic_names_on_disk_do_not_match_the_i2d_glob():
-    """Recorded, not endorsed.  The MIRI mosaics are named
-    ``jw03571-o001_t001_miri_clear-f770w-mirimage_data_i2d.fits`` and
-    ``..._miri_f770w_i2d.fits``, and the glob ends in ``{module}_i2d.fits``,
-    which neither spelling satisfies for module ``mirimage``.  Every MIRI merge
-    therefore takes the catalogue-``PIXSCALE`` fallback.  Widening the glob would
-    switch it to ``proj_plane_pixel_area()`` of the i2d and change ``flux_jy``,
-    so it needs its own comparison; this test fails when that happens."""
-    import fnmatch
-    pattern = 'jw03571-o001_t001_miri*f770w*mirimage_i2d.fits'
-    for name in ('jw03571-o001_t001_miri_clear-f770w-mirimage_data_i2d.fits',
-                 'jw03571-o001_t001_miri_f770w_i2d.fits'):
-        assert not fnmatch.fnmatch(name, pattern)
+SUBMIT_MERGE = Path(MC.__file__).resolve().parents[2] / 'scripts' / 'reduction' / 'submit_merge.sbatch'
+
+
+def _submit_merge_driver_args(tmp_path, **env):
+    """Run the batch script with a stub interpreter; return the argv the
+    stub received for the ``merge_catalogs`` driver."""
+    stub = tmp_path / 'stubpy'
+    stub.write_text('#!/bin/bash\necho "ARGV $*"\n')
+    stub.chmod(0o755)
+    run_env = {'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path), 'PYTHON': str(stub),
+               'TMPDIR': str(tmp_path), 'GC_SCRIPTS_DIR': str(SUBMIT_MERGE.parent),
+               **env}
+    out = subprocess.run(['bash', str(SUBMIT_MERGE)], env=run_env, cwd=tmp_path,
+                         capture_output=True, text=True, timeout=60, check=True).stdout
+    lines = [x for x in out.splitlines()
+             if x.startswith('ARGV') and 'photometry.merge_catalogs' in x]
+    assert len(lines) == 1, out
+    return lines[0].split()[1:]
+
+
+def test_submit_merge_passes_field_through(tmp_path):
+    args = _submit_merge_driver_args(tmp_path, TARGET='gc3571', FIELD='003')
+    assert '--field=003' in args
+    assert '--target=gc3571' in args
+
+
+def test_submit_merge_adds_no_field_flag_without_one(tmp_path):
+    args = _submit_merge_driver_args(tmp_path, TARGET='brick')
+    assert not [a for a in args if a.startswith('--field')]
 
 
 # ---------------------------------------------------------------------------

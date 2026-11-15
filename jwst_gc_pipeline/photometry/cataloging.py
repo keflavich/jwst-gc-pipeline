@@ -5958,6 +5958,24 @@ def write_crossband_ecsv(merged_path):
     return f'{stem}.ecsv'
 
 
+def _write_crossband_ecsv_guarded(module, ecsv_modules, merged_path, phase):
+    """``write_crossband_ecsv`` for the modules that get a twin; never raises.
+
+    A failed write is reported and the run continues, as for the annotation
+    steps before it.  Returns the ECSV path, or None when the module has no
+    twin, the FITS is absent or the write failed.
+    """
+    if module not in ecsv_modules:
+        return None
+    try:
+        return write_crossband_ecsv(merged_path)
+    except (OSError, ValueError, KeyError,
+            yaml.representer.RepresenterError) as exc:
+        print(f"manual [{phase}]: writing the ECSV twin of "
+              f"{os.path.basename(merged_path)} failed ({exc})", flush=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
@@ -11422,13 +11440,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             # Last step of the post-annotation block (after any column added
             # to the FITS): the ECSV twin carries the FITS table's columns.  It
             # is written even when annotation failed, without the flags.
-            if module in _xb_ecsv_modules:
-                try:
-                    write_crossband_ecsv(_xb)
-                except (OSError, ValueError, KeyError,
-                        yaml.representer.RepresenterError) as _eex:
-                    print(f"manual [{last_phase}]: writing the ECSV twin of "
-                          f"{os.path.basename(_xb)} failed ({_eex})", flush=True)
+            _write_crossband_ecsv_guarded(module, _xb_ecsv_modules, _xb, last_phase)
             # provenance sidecar for the m7 cross-band catalog (after annotate,
             # which mutates the file); stamp as stage 'm7'.  Its seed parent is
             # the POOL of every filter's m6 merged catalog (the cross-band seed

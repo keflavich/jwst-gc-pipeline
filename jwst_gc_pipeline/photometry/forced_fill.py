@@ -55,20 +55,40 @@ is NOT by itself evidence that a row is a limit.  Gate on
 
 With ``bkg_scatter`` (``--forced-fill-bkg-scatter``, default off) each
 source's per-frame error stamp becomes ``sqrt(ERR**2 + sigma**2)``, where
-``sigma`` is ``1.4826 * MAD`` of the valid, finite pixels of the frame's
-satstar-subtracted data in an annulus of 2.5 to 4.5 FWHM about the source (the
-estimator of ``SATSTAR_ERR_BKG_SCATTER``,
-``psf_fitting.annulus_scatter_sigma``).  A source whose annulus has fewer than
-20 usable pixels keeps the ERR-only error in that frame.  ``ferr``,
-``forced_snr_{filt}``, ``flux_ulim_{filt}`` and the detection cut then all rest
-on the inflated error, and ``forced_bkg_sigma_{filt}`` records the mean
-``sigma`` over the frames that measured it (image units, NaN when none did).
-The term is white and per pixel, so it under-corrects scatter that is
-correlated over the PSF footprint.  It is an error term only: an annulus median
+``sigma**2 = max(s**2 - median(ERR**2), 0)``, ``s`` is ``1.4826 * MAD`` of the
+valid, finite pixels of the frame's satstar-subtracted data in an annulus about
+the source, and the median runs over the same annulus pixels.  Subtracting the
+formal part keeps the Poisson and read noise that ERR already holds from
+counting twice: on a frame whose scatter equals ERR the term is 0 and the error
+is unchanged, where adding ``s`` itself would raise it by sqrt(2).  The annulus
+spans 2.5 to 4.5 FWHM (``bkg_scatter_annulus``), with the inner radius floored
+at ``0.5 * max(fit_shape) + 1.5`` pixels and the outer radius at ``inner + 2``
+pixels, so for a FWHM below 1.6 pixels (5x5 stamp) it is wider than that
+(4 to 6 pixels at 1 pixel FWHM).  The annulus estimator is the one of
+``SATSTAR_ERR_BKG_SCATTER`` (``psf_fitting.annulus_scatter_sigma``), which does
+not subtract the formal part.  A source
+whose annulus has fewer than 20 usable pixels keeps the ERR-only error in that
+frame.  ``ferr``, ``forced_snr_{filt}``, ``flux_ulim_{filt}``,
+``emag_ab_{filt}`` of the promoted rows and the detection cut then all rest on
+the inflated error.  ``forced_bkg_sigma_{filt}`` records the mean ``sigma``
+(per pixel, image units, not a flux error) over the frames that measured it
+and ``forced_bkg_nframes_{filt}`` how many frames those were (NaN / 0 when
+none did).
+
+Limits of the term.  It is white and per pixel, so it under-corrects scatter
+that is correlated over the PSF footprint.  It over-corrects smooth structure:
+the annulus MAD grows with a gradient across the annulus (with unit noise and unit ERR a
+linear gradient of 0.5 per pixel raised ``sigma`` from 0.1 to 6.1 over 200
+realisations)
+although the 5x5 fit, to which a gradient that vanishes at the source is odd
+and so cancels, does not see it.  It is an error term only: an annulus median
 offset still enters ``flux_{filt}`` directly, since the closed-form fit has no
-background parameter.  Overlapping frames share their background structure but
-are still combined as independent, so ``ferr`` shrinks as ``1/sqrt(N)`` for a
-shared sky.
+background parameter.  A source measured in only some frames takes the ERR-only
+error from the others, and those frames carry the larger inverse-variance
+weights, so ``ferr`` is pulled toward the uninflated value there (compare
+``forced_bkg_nframes_{filt}`` with the number of frames).  Overlapping frames
+share their background structure but are still combined as independent, so
+``ferr`` shrinks as ``1/sqrt(N)`` for a shared sky.
 
 With ``nbrsub`` (``--forced-fill-nbrsub``, default off) each frame is fitted
 with its own m7 star-only model removed (``{stub}_daophot_basic_model.fits``,
@@ -303,6 +323,21 @@ def _model_stamp(psf_model, x0, y0, flux, shape, half=NBRSUB_STAMP_HALF):
     return ylo, yhi, xlo, xhi, stamp
 
 
+def bkg_scatter_annulus(fwhm_pix, fit_shape):
+    """Inner and outer radius (pixels) of the scatter annulus.
+
+    ``BKG_SCATTER_INNER_FWHM`` and ``BKG_SCATTER_OUTER_FWHM`` times the FWHM,
+    except that the inner radius is floored at ``0.5 * max(fit_shape) + 1.5``
+    pixels so the annulus stays clear of the fit stamp and the outer radius at
+    ``inner + 2`` pixels so it keeps a width.  The floors bind for a FWHM below
+    ``(0.5 * max(fit_shape) + 1.5) / BKG_SCATTER_INNER_FWHM`` (1.6 pixels for
+    the 5x5 stamp), where the annulus is wider than 2.5 to 4.5 FWHM.
+    """
+    inner = max(BKG_SCATTER_INNER_FWHM * fwhm_pix, 0.5 * max(fit_shape) + 1.5)
+    outer = max(BKG_SCATTER_OUTER_FWHM * fwhm_pix, inner + 2.0)
+    return inner, outer
+
+
 def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
                       frame_arg_builder, fit_shape, conv_jy=None,
                       frame_area_sr=None, bkg_scatter=False,
@@ -323,9 +358,11 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
     area the m7 conversion used.
 
     With ``bkg_scatter`` each source's error stamp gains the annulus scatter of
-    the fitted image in quadrature (``psf_fitting.annulus_scatter_sigma``), and
-    the tuple gains the per-source scatter in image units (NaN where
-    unmeasured) as its fourth element.
+    the frame's data in excess of the formal ERR, in quadrature
+    (``psf_fitting.annulus_scatter_sigma(error=)``), and the return value is
+    ``(loc, flux, var, bkg_sigma)`` with the per-source excess scatter per
+    pixel in image units (NaN where unmeasured).  Without it the return value
+    is the three-tuple above and the fit is unchanged.
 
     With ``nbrsub`` the frame's own m7 star-only model is subtracted from the
     fitted image, so the other stars of the frame no longer add light to the
@@ -376,15 +413,13 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
             subtracted = True
     bkg_sigma = None
     if bkg_scatter:
-        fwhm = float(ctx.fwhm_pix)
-        # keep the annulus clear of the fit stamp whatever the FWHM
-        inner = max(BKG_SCATTER_INNER_FWHM * fwhm,
-                    0.5 * max(fit_shape) + 1.5)
-        outer = max(BKG_SCATTER_OUTER_FWHM * fwhm, inner + 2.0)
+        inner, outer = bkg_scatter_annulus(float(ctx.fwhm_pix), fit_shape)
+        # the formal ERR is subtracted from the measured scatter: it is
+        # added back in quadrature in the fit, so it must not count twice
         bkg_sigma = annulus_scatter_sigma(
             image, ~np.asarray(ctx.mask, dtype=bool),
             xpix[inb], ypix[inb], inner, outer,
-            min_pixels=BKG_SCATTER_MIN_PIXELS)
+            min_pixels=BKG_SCATTER_MIN_PIXELS, error=ctx.err)
     fit_kw = dict(error=ctx.err, mask=ctx.mask, fit_shape=fit_shape,
                   nonnegative=False)
     res = forced_psf_photometry(image, ctx.dao_psf_model, seed,
@@ -696,6 +731,7 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     _ensure(f'is_upper_limit_{filt}', bool, False)
     if bkg_scatter:
         _ensure(f'forced_bkg_sigma_{filt}', float, np.nan)
+        _ensure(f'forced_bkg_nframes_{filt}', int, 0)
     if nbrsub:
         _ensure(f'forced_nbrsub_{filt}', bool, False)
         _ensure(f'forced_near_m7_sep_{filt}', float, np.nan)
@@ -748,8 +784,12 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     tbl[f'mag_ab_ulim_{filt}'][ridx] = np.nan
     tbl[f'mag_vega_ulim_{filt}'][ridx] = np.nan
     tbl[f'is_upper_limit_{filt}'][ridx] = False
-    if bkg_scatter:
+    # reset whenever the columns exist, not only under bkg_scatter: a rerun
+    # with the switch off over an on-run's table must not keep its values
+    if f'forced_bkg_sigma_{filt}' in tbl.colnames:
         tbl[f'forced_bkg_sigma_{filt}'][ridx] = np.nan
+    if f'forced_bkg_nframes_{filt}' in tbl.colnames:
+        tbl[f'forced_bkg_nframes_{filt}'][ridx] = 0
     if nbrsub:
         tbl[f'forced_nbrsub_{filt}'][ridx] = False
         tbl[f'forced_near_m7_sep_{filt}'][ridx] = np.nan
@@ -775,6 +815,7 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     tbl[f'is_upper_limit_{filt}'][ridx[not_detected]] = True
     if bkg_scatter:
         tbl[f'forced_bkg_sigma_{filt}'][ridx[fitted]] = bkg_mean[fitted]
+        tbl[f'forced_bkg_nframes_{filt}'][ridx[fitted]] = bseen[:ntgt][fitted]
     if nbrsub:
         tbl[f'forced_nbrsub_{filt}'][ridx[fitted]] = sub_all[fitted]
         tbl[f'forced_near_m7_sep_{filt}'][ridx[fitted]] = near_sep[fitted]
@@ -804,6 +845,13 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
               f"recovered(SNR>={nsigma:.0f})={int(detected.sum())} "
               f"conv_jy={conv_jy:.3e} vega_zp={'%.3e' % vega_zp if vega_zp else 'NA'}",
               flush=True)
+        if bkg_scatter:
+            bs_t, ns_t = bseen[:ntgt], nseen[:ntgt]
+            print(f"  [m8 {filt}] bkg scatter measured in all fitted frames for "
+                  f"{int((fitted & (bs_t == ns_t)).sum())}, in some for "
+                  f"{int((fitted & (bs_t > 0) & (bs_t < ns_t)).sum())}, in "
+                  f"none (ERR-only error) for {int((fitted & (bs_t == 0)).sum())} "
+                  f"fitted targets", flush=True)
     return int(detected.sum())
 
 
