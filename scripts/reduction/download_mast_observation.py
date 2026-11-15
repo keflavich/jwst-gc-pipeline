@@ -48,6 +48,8 @@ def main():
     # query scope, the uncal selector, the on-disk count and every message agree
     # on `--obsid 8`, `08` and `008`.
     obs = observation_number(args.obsid)
+    if not obs:
+        ap.error('--obsid is empty; give an observation number such as 008')
 
     Observations.clear_cache()
     Observations.TIMEOUT = 300

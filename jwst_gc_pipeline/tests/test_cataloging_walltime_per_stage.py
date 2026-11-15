@@ -45,9 +45,11 @@ SCRIPT = (Path(__file__).resolve().parents[2] / "scripts" / "reduction"
 # The mid fan-out m3-m7 values were re-measured for issue #1172 from sacct jobs
 # of 2026-09-20 to 2026-11-13 (sgra1939-o001, gc2211-o028, gc2211-o046,
 # crowded_l209438-o007, sgrc4147-o012), which replaces the 5.0-6.5 h of the
-# first window.  The m7 value is also CENSORED: four shards of sgrc4147-o012's
-# array 50450810 were still RUNNING at 34 h of a 36 h limit on 2026-11-13, so
-# 34.0 h is a lower bound on the true maximum.
+# first window.  The m7 value is also CENSORED: sgrc4147-o012's array 50450810
+# ended with tasks 1, 3 and 5 at TIMEOUT after 36:00:00 (task 0 COMPLETED at
+# 34.97 h), so 36.0 h is a lower bound on the true maximum.  The large m3-m7
+# fan-out values are the longest COMPLETED shards of ngc6334-6778-o001 (m3 19.8,
+# m4 21.0) and sgrb2-5365-o001 (m5 17.3, m6 19.5, m7 22.7) in the same window.
 MEASURED = {
     "small": {
         ("m12", "fanout"): 6.5, ("m3", "fanout"): 3.3, ("m4", "fanout"): 3.3,
@@ -58,15 +60,15 @@ MEASURED = {
     },
     "mid": {
         ("m12", "fanout"): 23.5, ("m3", "fanout"): 15.9, ("m4", "fanout"): 13.4,
-        ("m5", "fanout"): 13.8, ("m6", "fanout"): 17.4, ("m7", "fanout"): 34.0,
+        ("m5", "fanout"): 13.8, ("m6", "fanout"): 17.4, ("m7", "fanout"): 36.0,
         ("m12", "finalize"): 20.0, ("m3", "finalize"): 18.2,
         ("m4", "finalize"): 16.2, ("m5", "finalize"): 12.7,
         ("m6", "finalize"): 18.6, ("m7", "finalize"): 13.9,
     },
     "large": {
-        ("m12", "fanout"): 21.8, ("m3", "fanout"): 13.1,
-        ("m4", "fanout"): 13.5, ("m5", "fanout"): 10.0,
-        ("m6", "fanout"): 9.8, ("m7", "fanout"): 7.0,
+        ("m12", "fanout"): 21.8, ("m3", "fanout"): 19.8,
+        ("m4", "fanout"): 21.0, ("m5", "fanout"): 17.3,
+        ("m6", "fanout"): 19.5, ("m7", "fanout"): 22.7,
         ("m12", "finalize"): 55.3, ("m3", "finalize"): 19.0,
         ("m4", "finalize"): 24.0, ("m5", "finalize"): 21.3,
         ("m6", "finalize"): 18.8, ("m7", "finalize"): 20.7,
@@ -94,8 +96,9 @@ def _upto(tier, stage):
     """Longest run of this stage at this tier or any SMALLER one.
 
     A bigger field is never assumed to be faster, so a limit is allowed to
-    carry the worst run seen at or below its own size -- mid's 21.8 h
-    m7-fanout is why the large tier gets 36 h there on a 7.0 h measurement.
+    carry the worst run seen at or below its own size -- mid's 36.0 h
+    (censored) m7-fanout is why the large tier gets 60 h there on a 22.7 h
+    measurement.
     """
     return max(MEASURED[t][stage] for t in TIERS[:TIERS.index(tier) + 1])
 
@@ -177,12 +180,30 @@ def test_nothing_is_shorter_than_the_flat_default_it_replaces(tier, stage,
 def test_a_censored_maximum_is_sized_above_not_to(tier, stage, emitted):
     """cloudc's m4-finalize TIMED OUT at 24 h, so 24 h is a lower bound.
 
-    The mid m7 fan-out is the same case: four shards were still running at 34 h.
+    The mid m7 fan-out is the same case: three shards of the sgrc4147-o012 array
+    TIMED OUT at 36 h.
 
     Sizing to it would reproduce the kill on the next field that is slower.
     """
     assert _hours(emitted[tier][stage]) > MEASURED[tier][stage] + 12, (
         emitted[tier][stage])
+
+
+@pytest.mark.parametrize("tier", ("mid", "large"))
+@pytest.mark.parametrize("stage", [("m3", "fanout"), ("m4", "fanout"),
+                                   ("m5", "fanout"), ("m6", "fanout")])
+def test_mid_and_large_m3_to_m6_fanouts_ask_36_hours(tier, stage, emitted):
+    """The 1.5x-3x band alone passes a 24 h wall for m3-m5 (1.5 x 15.9 h).
+
+    m6's 17.4 h is what holds the table at 36 h, and the others share it so
+    that one field's chain does not hit a wall in some phases and not others.
+    """
+    assert _hours(emitted[tier][stage]) == 36.0, emitted[tier][stage]
+
+
+@pytest.mark.parametrize("tier", ("mid", "large"))
+def test_mid_and_large_m7_fanouts_ask_60_hours(tier, emitted):
+    assert _hours(emitted[tier][("m7", "fanout")]) == 60.0
 
 
 @pytest.mark.parametrize("stage", STAGES)
