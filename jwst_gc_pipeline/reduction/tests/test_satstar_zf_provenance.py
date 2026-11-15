@@ -20,7 +20,8 @@ from astropy.table import Table
 import jwst_gc_pipeline.reduction.saturated_star_finding as SSF
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
     stamp_zeroframe_provenance, zeroframe_default_provenance,
-    zeroframe_fit_anchor, zeroframe_row_provenance)
+    zeroframe_fit_anchor, zeroframe_reconcile_provenance,
+    zeroframe_row_provenance)
 
 SATBIT = 2
 
@@ -147,6 +148,26 @@ def test_row_flags_with_a_component_slice_match_the_full_frame():
     assert zeroframe_row_provenance(prov, rim, sources, 2, sl2) == (1, 0, 0)
 
 
+def test_one_rim_pixel_is_rim_in_core():
+    sources, rim = _two_components()
+    rim[:] = False
+    rim[6, 6] = True
+    prov = {'mode': 'rim', 'n_rim': 1, 'n_deep': 4, 'R': 0.17}
+    assert zeroframe_row_provenance(prov, rim, sources, 1) == (1, 1, 1)
+
+
+def test_rim_pixels_of_another_component_do_not_count_with_a_slice():
+    """The slice is the bounding box of the component, which can hold pixels of
+    a neighbouring component; only ``sources == src_label`` counts."""
+    sources, rim = _two_components()
+    sources[7:9, 7:9] = 2                  # neighbour inside component 1's box
+    rim[7, 7] = True
+    prov = {'mode': 'rim', 'n_rim': 3, 'n_deep': 4, 'R': 0.17}
+    sl1 = (slice(5, 10), slice(5, 10))
+    assert zeroframe_row_provenance(prov, rim, sources, 1, sl1) == (1, 1, 2)
+    assert zeroframe_row_provenance(prov, rim, sources, 2, sl1)[2] == 1
+
+
 def test_blob_rows_read_zero():
     sources, rim = _two_components()
     rim[:] = False
@@ -169,6 +190,90 @@ def test_forced_seed_has_no_component():
     assert zeroframe_row_provenance(prov, rim, sources, None) == (1, 0, -1)
     blob = zeroframe_default_provenance()
     assert zeroframe_row_provenance(blob, None, sources, None) == (0, 0, -1)
+
+
+# --------------------------------------------------------------------------
+# the fit mask, not the anchor's report, decides the treatment
+# --------------------------------------------------------------------------
+
+def test_reconcile_deep_core_with_default_prov_is_a_deep_core_fit():
+    deep = np.zeros((6, 6), bool)
+    deep[2:4, 2:4] = True
+    rim = np.zeros((6, 6), bool)
+    rim[1, 1] = rim[1, 2] = True
+    prov = zeroframe_reconcile_provenance(zeroframe_default_provenance(),
+                                          deep, rim)
+    assert prov['mode'] == 'rim' and prov['n_rim'] == 2 and prov['n_deep'] == 4
+    prov = zeroframe_reconcile_provenance(zeroframe_default_provenance(),
+                                          deep, np.zeros_like(rim))
+    assert prov['mode'] == 'keepfinite' and prov['n_rim'] == 0
+    prov = zeroframe_reconcile_provenance(zeroframe_default_provenance(),
+                                          deep, None)
+    assert prov['mode'] == 'keepfinite'
+
+
+def test_reconcile_no_deep_core_is_blob_and_keeps_r():
+    rim = np.ones((4, 4), bool)
+    prov = {'mode': 'rim', 'n_rim': 16, 'n_deep': 3, 'R': 0.2}
+    zeroframe_reconcile_provenance(prov, None, rim)
+    assert prov == {'mode': 'blob', 'n_rim': 0, 'n_deep': 0, 'R': 0.2}
+
+
+def test_reconcile_leaves_an_agreeing_report_alone():
+    deep = np.ones((3, 3), bool)
+    prov = {'mode': 'keepfinite', 'n_rim': 0, 'n_deep': 9, 'R': 0.2}
+    before = dict(prov)
+    zeroframe_reconcile_provenance(prov, deep, np.zeros((3, 3), bool))
+    assert prov == before
+
+
+def test_get_saturated_stars_stamps_from_the_mask_when_the_anchor_is_silent(
+        monkeypatch):
+    """An anchor that returns a deep core but never fills ``provenance`` still
+    gives ``zf_fit = 1``: the mask is what the fit used."""
+    n = 200
+    sci = np.ones((n, n))
+    dq = np.zeros((n, n), dtype=np.uint32)
+    dq[98:103, 98:103] = SATBIT
+    sci[dq != 0] = np.nan
+    wcs_hdr = fits.Header({'CTYPE1': 'RA---TAN', 'CTYPE2': 'DEC--TAN',
+                           'CRPIX1': 100, 'CRPIX2': 100, 'CRVAL1': 150.0,
+                           'CRVAL2': 2.0, 'CDELT1': -1.7e-5, 'CDELT2': 1.7e-5,
+                           'BUNIT': 'MJy/sr'})
+    fh = fits.HDUList([
+        fits.PrimaryHDU(header=fits.Header({
+            'INSTRUME': 'NIRCAM', 'FILTER': 'F150W', 'PUPIL': 'CLEAR',
+            'DETECTOR': 'NRCB3', 'MODULE': 'B', 'CHANNEL': 'SHORT'})),
+        fits.ImageHDU(sci, header=wcs_hdr, name='SCI'),
+        fits.ImageHDU(np.full((n, n), 0.1), name='ERR'),
+        fits.ImageHDU(dq, name='DQ'),
+        fits.ImageHDU(np.where(dq != 0, np.nan, 0.01), name='VAR_POISSON')])
+    deep = np.zeros((n, n), bool)
+    deep[99:102, 99:102] = True
+    rim = (dq != 0) & ~deep
+
+    def _silent_anchor(data, dq, zeroframe, provenance=None, **kw):
+        return data, deep, rim, None
+
+    real_switches = SSF.satstar_fit_switches
+
+    def _stop(*a, **kw):
+        # first read after the anchor (and after the stamp) ends the frame
+        if hasattr(builtins, 'satstar_zf_provenance'):
+            raise _AnchorReached
+        return real_switches(*a, **kw)
+    monkeypatch.setattr(SSF, 'zeroframe_fit_anchor', _silent_anchor)
+    monkeypatch.setattr(SSF, 'satstar_fit_switches', _stop)
+    monkeypatch.delattr(builtins, 'satstar_zf_provenance', raising=False)
+    with pytest.raises(_AnchorReached):
+        SSF.get_saturated_stars(fh, zeroframe=np.ones((n, n)), plot=False)
+    prov = builtins.satstar_zf_provenance
+    assert prov['mode'] == 'rim'
+    assert prov['n_rim'] == int(rim.sum()) and prov['n_deep'] == 9
+    hdr = fits.Header()
+    stamp_zeroframe_provenance(hdr, prov)
+    assert hdr['SATZFFIT'] is True
+    assert zeroframe_row_provenance(prov, rim, np.ones((n, n), int), 1)[0] == 1
 
 
 # --------------------------------------------------------------------------
@@ -282,15 +387,53 @@ def test_remove_saturated_stars_stamps_catalog_and_images(
 
 
 def test_deblend_stats_are_stamped_only_when_the_deblend_ran():
-    """#1196: DBLNCMP / DBLNSPL / DBLFAIL record the deblend counts."""
+    """#1196: DBLNCMP / DBLNSPL / DBLFAIL / DBLNVET record the deblend counts,
+    as bare integers in a table's meta and as (value, comment) cards in a
+    FITS header."""
     from jwst_gc_pipeline.reduction.saturated_star_finding import (
         stamp_deblend_stats)
+    keys = ('DBLNCMP', 'DBLNSPL', 'DBLFAIL', 'DBLNVET')
     meta = {}
     stamp_deblend_stats(meta, None)
     assert meta == {}
     stamp_deblend_stats(meta, {'n_components': 12, 'n_split': 3,
-                               'n_failed': 1, 'psf_veto': {'applied': 12}})
-    assert (meta['DBLNCMP'][0], meta['DBLNSPL'][0], meta['DBLFAIL'][0]) == (12, 3, 1)
+                               'n_failed': 1, 'n_vetoed': 7,
+                               'psf_veto': {'applied': 12}})
+    assert [meta[k] for k in keys] == [12, 3, 1, 7]
+    assert all(type(meta[k]) is int for k in keys)
     meta = {}
     stamp_deblend_stats(meta, {})
-    assert (meta['DBLNCMP'][0], meta['DBLNSPL'][0], meta['DBLFAIL'][0]) == (0, 0, 0)
+    assert [meta[k] for k in keys] == [0, 0, 0, 0]
+    hdr = fits.Header()
+    stamp_deblend_stats(hdr, {'n_components': 12, 'n_vetoed': 7})
+    assert (hdr['DBLNCMP'], hdr['DBLNVET']) == (12, 7)
+    assert hdr.comments['DBLNVET']
+
+
+def test_remove_saturated_stars_resets_a_stale_provenance(tmp_path,
+                                                          monkeypatch):
+    """A provenance left by a previous frame must not leak into this one when
+    the fit never sets it."""
+    fn = tmp_path / 'jw03523005001_10101_00001_nrcb3_align_o005_crf.fits'
+    fits.HDUList([fits.PrimaryHDU(header=fits.Header(
+                      {'INSTRUME': 'NIRCAM', 'DETECTOR': 'NRCB3',
+                       'FILTER': 'F150W', 'CRPIX1': 1})),
+                  fits.ImageHDU(np.ones((8, 8), 'float32'), name='SCI'),
+                  fits.ImageHDU(np.zeros((8, 8), 'int32'), name='DQ')]
+                 ).writeto(fn)
+    for attr in ('satstar_wingcal_measurements', 'satstar_rejected',
+                 'satstar_resid', 'satstar_flagimg'):
+        monkeypatch.delattr(builtins, attr, raising=False)
+    monkeypatch.setattr(builtins, 'satstar_zf_provenance',
+                        {'mode': 'rim', 'n_rim': 9, 'n_deep': 9, 'R': 0.3},
+                        raising=False)
+
+    def _fit(fh, **kw):
+        builtins.satstar_model = np.zeros((8, 8))
+        builtins.satstar_resid = np.zeros((8, 8))
+        return Table({'flux_fit': [1.0]})
+    monkeypatch.setattr(SSF, 'get_saturated_stars', _fit)
+    SSF.remove_saturated_stars(str(fn), recovery_signature='off')
+    cat = Table.read(str(fn)[:-len('.fits')] + '_satstar_catalog.fits')
+    assert bool(cat.meta['SATZFFIT']) is False
+    assert cat.meta['SATZFMOD'] == 'blob'

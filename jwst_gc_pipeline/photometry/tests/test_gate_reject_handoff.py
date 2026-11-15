@@ -293,7 +293,7 @@ BIG = (40.3, 50.2)            # gate reject with a 7x7 late-group SATURATED core
 BIG_AMP = 3000.0
 
 
-def _write_crf(path, with_truly_lost=False):
+def _write_crf(path, with_truly_lost=False, dnu_row=False):
     from astropy.io import fits
     from astropy.wcs import WCS
     w = WCS(naxis=2)
@@ -311,6 +311,11 @@ def _write_crf(path, with_truly_lost=False):
     if with_truly_lost:
         dq[50, 40] |= L.dqflags.pixel['DO_NOT_USE']
         img[50, 40] = np.nan
+    if dnu_row:
+        # an unrecoverable edge row; the rest of the 7x7 block was recovered
+        # (finite SCI, no DO_NOT_USE) and keeps its measured value
+        dq[47, 37:44] |= L.dqflags.pixel['DO_NOT_USE']
+        img[47, 37:44] = np.nan
     h0 = fits.Header()
     h0['INSTRUME'] = 'NIRCAM'
     h0['TELESCOP'] = 'JWST'
@@ -329,7 +334,7 @@ def _write_crf(path, with_truly_lost=False):
 NO_DEFAULT_TARGET = 'arches'
 
 
-def _prep_options(target='gc-treasury'):
+def _prep_options(target='gc-treasury', **extra):
     return types.SimpleNamespace(
         desaturated=False, epsf=False, blur=False, group=False, cutout_region='',
         bgsub=False, use_iter3_residual_bg=False, each_exposure=True,
@@ -337,12 +342,12 @@ def _prep_options(target='gc-treasury'):
         fit_satstar_outside_fov=False, satstar_partner_seed=False,
         satstar_zeroframe_recover=False, satstar_ramp_recover=False,
         deblend_satstars=False, satstar_artifact_sigK=3.0,
-        satstar_artifact_ratio=1.0)
+        satstar_artifact_ratio=1.0, **extra)
 
 
 def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
              with_truly_lost=False, peaks=None, resbg=None,
-             target='gc-treasury'):
+             target='gc-treasury', dnu_row=False, **opt_extra):
     from astropy.io import fits
     for k, v in (('NIRCAM_SATSTAR_TIGHT_BOUND', '0'),
                  ('SATSTAR_COMPONENT_OVERLAP_FRAC', '0'),
@@ -352,7 +357,7 @@ def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
     d = tmp_path / 'F480M' / 'pipeline'
     d.mkdir(parents=True)
     fn = str(d / 'jw10678132001_02101_00004_nrcalong_destreak_o132_crf.fits')
-    img = _write_crf(fn, with_truly_lost=with_truly_lost)
+    img = _write_crf(fn, with_truly_lost=with_truly_lost, dnu_row=dnu_row)
     # an accepted satstar elsewhere: its (zero here) model file triggers the fill
     fits.PrimaryHDU(np.zeros(SHAPE)).writeto(
         fn.replace('.fits', '_m7_satstar_model.fits'))
@@ -371,7 +376,8 @@ def _prepare(tmp_path, monkeypatch, *, reject_reason='implied_peak_gate',
     monkeypatch.setattr(L, 'load_or_make_satstar_catalog',
                         lambda *a, **k: None)
     ctx = C._prepare_frame_for_photometry(
-        _prep_options(target), 'F480M', 'nrcalong', '132', str(tmp_path), fn,
+        _prep_options(target, **opt_extra), 'F480M', 'nrcalong', '132',
+        str(tmp_path), fn,
         '10678', exposurenumber=4, visit_id=1, vgroup_id='02101',
         bg_boxsizes=None, use_webbpsf=True, pupil='clear',
         resbg_path=resbg_path, satstar_label='m7')
@@ -390,7 +396,7 @@ def _gaussian_grid_psf_fwhm(fwhm):
                                                  'oversampling': ov}))
 
 
-def _ctx_pass(ctx, *, handoff):
+def _ctx_pass(ctx, *, handoff, dq=None):
     seed = Table()
     seed['x_init'] = [BIG[0]]
     seed['y_init'] = [BIG[1]]
@@ -400,7 +406,8 @@ def _ctx_pass(ctx, *, handoff):
         dao_psf_model=ctx.dao_psf_model, init_params=seed,
         aperture_radius_pix=ctx.aperture_radius_pix,
         localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
-        grouper=None, options=_prep_options(), dq=ctx.dqarr,
+        grouper=None, options=_prep_options(),
+        dq=ctx.dqarr if dq is None else dq,
         satstar_model_subtracted=np.zeros(SHAPE), label='t',
         near_sat_dist_pix=1.0,
         handoff_xy=ctx.handoff_xy if handoff else None,

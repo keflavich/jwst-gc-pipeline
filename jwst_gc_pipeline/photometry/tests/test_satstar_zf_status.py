@@ -131,3 +131,29 @@ def test_dedup_of_mixed_vintages_counts_only_known_members():
 def test_summary_of_a_catalog_with_no_column_and_of_an_empty_one():
     assert '3 unknown' in satstar_zf_summary(_cat(zf=None))
     assert '0 unknown' in satstar_zf_summary(_cat(zf=1, n=0))
+
+
+def test_out_of_range_values_read_unknown():
+    t = _cat(zf=1, n=3)
+    t['zf_fit'] = np.array([0, 2, -1], dtype=np.int32)
+    st = satstar_zf_status(t)
+    assert list(np.ma.getmaskarray(st)) == [False, True, True]
+
+
+def test_dedup_fraction_with_a_nan_position_first_row():
+    """A row with a NaN position is dropped from the dedup, so the member index
+    ``orig`` is not the identity and the status must be indexed by it, not
+    sliced.  Star A was fitted on the deep core, star B on the blob."""
+    t = Table()
+    ra = np.array([np.nan, RA0, RA0 + 0.01])
+    t['skycoord_fit'] = SkyCoord(ra * u.deg, np.full(3, DEC0) * u.deg,
+                                 frame='icrs')
+    t['flux_fit'] = np.array([1.0e4, 1.0e4, 1.0e4])
+    t[mc._SATSTAR_EXPKEY_COL] = np.array(['e0', 'e1', 'e2'])
+    t['zf_fit'] = np.array([0, 1, 0], dtype=np.int32)
+    out = mc._dedup_satstar_catalog(t)
+    assert len(out) == 2
+    frac = {round(float(r.ra.deg), 3): float(f)
+            for r, f in zip(out['skycoord_fit'], out['zf_fit_frac'])}
+    assert frac[round(RA0, 3)] == 1.0
+    assert frac[round(RA0 + 0.01, 3)] == 0.0
