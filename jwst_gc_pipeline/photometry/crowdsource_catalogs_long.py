@@ -5547,10 +5547,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False, action='store_true',
                       help=('Add each m8 forced-fill source\'s local background '
                             'scatter (1.4826 MAD of the frame data in a 2.5-4.5 '
-                            'FWHM annulus) to the per-pixel crf ERR in '
-                            'quadrature, so forced_snr, flux_ulim and the '
-                            'detection cut rest on the larger error.  Writes '
-                            'forced_bkg_sigma_<filter>.  Default off: the crf '
+                            'FWHM annulus, inner radius at least 4 pixels, with '
+                            'median ERR^2 subtracted) to the per-pixel crf ERR '
+                            'in quadrature, so forced_snr, flux_ulim, emag_ab '
+                            'and the detection cut rest on the larger error.  '
+                            'Writes forced_bkg_sigma_<filter> (per pixel) and '
+                            'forced_bkg_nframes_<filter>.  Default off: the crf '
                             'ERR holds no term for background structure and '
                             'the m8 limits on bright extended emission are '
                             'deeper than the local noise (#1120).'))

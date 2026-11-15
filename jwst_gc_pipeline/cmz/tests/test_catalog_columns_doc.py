@@ -65,7 +65,9 @@ def test_every_released_column_is_described(mw):
 def test_forced_bkg_sigma_column_is_described(mw):
     # written by the m8 fill under --forced-fill-bkg-scatter (#1120); not in
     # RELEASED_COLUMNS because no released catalog carries it yet
-    assert 'forced_bkg_sigma_{filter}' in mw.CATALOG_COLUMNS_SRC.read_text()
+    text = mw.CATALOG_COLUMNS_SRC.read_text()
+    assert 'forced_bkg_sigma_{filter}' in text
+    assert 'forced_bkg_nframes_{filter}' in text
 
 
 def test_file_is_plain_ascii(mw):

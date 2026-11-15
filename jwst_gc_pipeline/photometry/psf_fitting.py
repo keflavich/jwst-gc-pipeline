@@ -128,7 +128,8 @@ class CachingGriddedPSFModel(GriddedPSFModel):
         return float(flux) * unit_stamp
 
 
-def annulus_scatter_sigma(image, valid, x, y, inner, outer, min_pixels=20):
+def annulus_scatter_sigma(image, valid, x, y, inner, outer, min_pixels=20,
+                          error=None):
     """Robust scatter of ``image`` in an annulus about each ``(x, y)``.
 
     ``1.4826 * MAD`` of the pixels with ``inner <= r < outer`` that are
@@ -136,6 +137,13 @@ def annulus_scatter_sigma(image, valid, x, y, inner, outer, min_pixels=20):
     a flat annulus returns 0.0.  This is the one estimator behind
     ``saturated_star_finding.bkg_scatter_fit_error`` (satstar fit) and the m8
     forced fill's ``bkg_sigma``.
+
+    With ``error`` (the per-pixel formal error that the result will be added to
+    in quadrature) the formal part is removed first: the result is
+    ``sqrt(max(MAD_sigma**2 - median(error**2), 0))`` with the median over the
+    finite-error annulus pixels, so a frame whose scatter the error already
+    explains returns 0.0 instead of double counting it.  Without finite error
+    pixels in the annulus nothing is subtracted.
 
     Parameters
     ----------
@@ -147,6 +155,8 @@ def annulus_scatter_sigma(image, valid, x, y, inner, outer, min_pixels=20):
         Annulus radii in pixels.
     min_pixels : int
         Fewest usable annulus pixels needed to measure the scatter.
+    error : 2D ndarray, optional
+        Formal per-pixel error, same shape as ``image``; see above.
 
     Returns
     -------
@@ -177,7 +187,14 @@ def annulus_scatter_sigma(image, valid, x, y, inner, outer, min_pixels=20):
         if sel.sum() < min_pixels:
             continue
         vals = cut[sel]
-        out[i] = 1.4826 * np.median(np.abs(vals - np.median(vals)))
+        sigma = 1.4826 * np.median(np.abs(vals - np.median(vals)))
+        if error is not None:
+            ecut = error[y_lo:y_hi, x_lo:x_hi][sel]
+            ecut = ecut[np.isfinite(ecut)]
+            if ecut.size:
+                sigma = np.sqrt(max(sigma ** 2 - np.median(ecut.astype(float) ** 2),
+                                    0.0))
+        out[i] = sigma
     return float(out[0]) if scalar else out
 
 
