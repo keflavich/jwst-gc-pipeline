@@ -77,9 +77,10 @@ def satstar_position_qa(tbl, pixscale_mas=None):
     Returns
     -------
     dict
-        ``{'available': False}`` when the table has no anchor columns (a
-        catalog from before ``sat_com_*`` existed) or no ``skycoord_fit``.
-        Otherwise ``available`` (True), ``n`` (rows), ``n_finite_anchor`` (rows
+        ``{'available': False, 'reason': ...}`` when the table cannot be
+        compared: ``reason`` is ``'no_anchor_columns'`` for a catalog from
+        before ``sat_com_*`` existed, ``'no_skycoord_fit'`` when the anchor is
+        present but the fitted sky position is not.  Otherwise ``available`` (True), ``n`` (rows), ``n_finite_anchor`` (rows
         compared; rows with a NaN anchor or fit, such as forced outside-FOV
         seeds, are excluded), ``median_mas``, ``p16_mas``, ``p84_mas``,
         ``frac_gt_200mas``, ``frac_locked`` (separation < ``LOCK_TOL_MAS``),
@@ -88,19 +89,20 @@ def satstar_position_qa(tbl, pixscale_mas=None):
         maps each ``seed_kind`` to its median when that column exists.  When no
         row has a finite anchor the statistics are NaN.
     """
-    if (ANCHOR_RA_COL not in tbl.colnames or ANCHOR_DEC_COL not in tbl.colnames
-            or FIT_SKY_COL not in tbl.colnames):
-        return {'available': False}
+    if ANCHOR_RA_COL not in tbl.colnames or ANCHOR_DEC_COL not in tbl.colnames:
+        return {'available': False, 'reason': 'no_anchor_columns'}
+    if FIT_SKY_COL not in tbl.colnames:
+        return {'available': False, 'reason': 'no_skycoord_fit'}
 
     n = len(tbl)
     fit = tbl[FIT_SKY_COL]
-    if isinstance(fit, SkyCoord):
-        fit_ra = np.asarray(fit.ra.deg, dtype=float)
-        fit_dec = np.asarray(fit.dec.deg, dtype=float)
-    else:
+    if not isinstance(fit, SkyCoord):
         fit = SkyCoord(fit)
-        fit_ra = np.asarray(fit.ra.deg, dtype=float)
-        fit_dec = np.asarray(fit.dec.deg, dtype=float)
+    # The anchor is ICRS degrees; a fit stored in another frame is moved there
+    # rather than read as .ra/.dec of that frame.
+    fit = fit.icrs
+    fit_ra = np.asarray(fit.ra.deg, dtype=float)
+    fit_dec = np.asarray(fit.dec.deg, dtype=float)
     anc_ra = _as_float_array(tbl[ANCHOR_RA_COL])
     anc_dec = _as_float_array(tbl[ANCHOR_DEC_COL])
 
@@ -150,10 +152,14 @@ def format_satstar_position_qa(qa, label=''):
     """
     head = f"Satstar position QA{' ' + label if label else ''}:"
     if not qa.get('available'):
+        if qa.get('reason') == 'no_skycoord_fit':
+            return (f"{head} no skycoord_fit column (the component anchor is "
+                    f"present); fit-vs-component separation not computed")
         return (f"{head} pre-anchor catalog vintage (no sat_com_ra/dec); "
                 f"fit-vs-component separation not computed")
     if qa['n_finite_anchor'] == 0:
-        return (f"{head} 0/{qa['n']} rows carry a finite component anchor")
+        return (f"{head} 0/{qa['n']} rows carry both a finite fit position "
+                f"and a finite component anchor")
     parts = [f"fit-to-component separation over {qa['n_finite_anchor']}/{qa['n']} rows"
              f": median {qa['median_mas']:.1f} mas"
              f" (p16 {qa['p16_mas']:.1f}, p84 {qa['p84_mas']:.1f})"]
@@ -186,12 +192,19 @@ def _catalog_pixel_scale_mas(tbl, frame_path):
     ok = np.isfinite(x) & np.isfinite(y)
     if not ok.any():
         return None
-    from jwst_gc_pipeline.frame_wcs import frame_wcs
+    import jwst_gc_pipeline.frame_wcs as _fw
+    # frame_wcs() counts every resolution in a process-level tally that
+    # cataloging stamps into the WCSSRC/WCSNGW/WCSNSIP cards of catalogs written
+    # later in this process.  This read builds nothing, so it must not move the
+    # tally (the QA is log-only).
+    tally = dict(_fw._RESOLUTION_TALLY)
     try:
-        wcs = frame_wcs(frame_path, warn_missing=False)
+        wcs = _fw.frame_wcs(frame_path, warn_missing=False)
         return frame_pixel_scale_mas(wcs, np.median(x[ok]), np.median(y[ok]))
     except (OSError, ValueError, KeyError, RuntimeError):
         return None
+    finally:
+        _fw._RESOLUTION_TALLY.update(tally)
 
 
 def log_satstar_position_qa(tbl, frame_path=None, label=''):

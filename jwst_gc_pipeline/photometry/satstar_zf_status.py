@@ -11,7 +11,17 @@ stars.  ``get_saturated_stars`` records the outcome per row:
 * ``zf_rim_in_core`` (int32): 1 when the source's own saturated component held
   at least one rewritten rim pixel;
 * ``zf_nrim_src`` (int32): that pixel count, -1 for a forced or outside-FOV
-  seed with no component.
+  seed with no component;
+* ``zf_fit_frac`` (float32, consolidated catalog only): the fraction of a
+  deduplicated source's member rows with ``zf_fit == 1``, over members with a
+  known status that are not position-only (NaN when none is).
+
+``zf_fit`` on a deduplicated row is the representative member's own value (the
+brightest member, which varies by chance), so filter a consolidated catalog on
+``zf_fit_frac``, not on ``zf_fit``.  The fraction counts member rows, not
+distinct exposures, and includes members whose flux is non-finite.  The columns
+exist in the per-filter satstar catalogs only; ``replace_saturated`` drops them,
+so the merged catalogs do not carry them.
 
 Catalogs written before #681 have none of these columns.  They read as
 UNKNOWN, never as 0: :func:`satstar_zf_status` returns a masked array whose
