@@ -339,18 +339,37 @@ def test_fraction_equal_to_the_floor_is_not_collapsed(tmp_path):
     assert _load_health(out)['collapsed'] is True
 
 
-def test_the_sparser_band_sets_the_fraction(tmp_path):
-    """Band A has 10 good detections and 4 confirmed (0.4), band B has 20 and 4
-    (0.2): the health is the worse band, not the better one."""
+def test_unequal_depth_bands_share_the_smallest_denominator(tmp_path):
+    """Band A has 10 good detections, band B 20, and 4 of each are confirmed: the
+    fraction is 4 / min(n_good) = 0.4 for both, not 4/20 = 0.2 for the deeper
+    band (its extra detections can never be confirmed by the shallower one)."""
     cut_bp = str(tmp_path)
     filts = _sparse_pair(cut_bp, 10, 20, 4)
     out = C._build_crossband_seed(cut_bp, ['merged'], filts, _opts())
     h = _load_health(out)
-    assert h['band_frac'] == {'f212n': pytest.approx(0.4), 'f480m': pytest.approx(0.2)}
-    assert h['worst_band'] == 'f480m'
-    assert h['frac'] == pytest.approx(0.2) and h['collapsed'] is True
+    assert h['band_frac'] == {'f212n': pytest.approx(0.4), 'f480m': pytest.approx(0.4)}
+    assert h['frac'] == pytest.approx(0.4) and h['collapsed'] is False
     assert h['n_good'] == {'f212n': 10, 'f480m': 20}
     assert Table.read(out).meta['SEEDNGD'] == 10
+
+
+def test_unequal_depth_collapse_is_still_flagged(tmp_path):
+    """Same depths, 2 confirmed: 2 / min(n_good) = 0.2 < 0.3 is a collapse."""
+    cut_bp = str(tmp_path)
+    filts = _sparse_pair(cut_bp, 10, 20, 2)
+    h = _load_health(C._build_crossband_seed(cut_bp, ['merged'], filts, _opts()))
+    assert h['frac'] == pytest.approx(0.2) and h['collapsed'] is True
+
+
+def test_deep_band_does_not_trip_a_healthy_pair(tmp_path):
+    """gc-treasury shape (#981 review): F480M 2.4x deeper than F212N, 70% of the
+    shallow band confirmed.  The pooled form gave 0.70; dividing the deep band by
+    its own n_good gave 0.29 and a false collapse warning."""
+    cut_bp = str(tmp_path)
+    filts = _sparse_pair(cut_bp, 100, 240, 70)
+    h = _load_health(C._build_crossband_seed(cut_bp, ['merged'], filts, _opts()))
+    assert h['band_frac']['f480m'] == pytest.approx(0.70)
+    assert h['frac'] == pytest.approx(0.70) and h['collapsed'] is False
 
 
 def test_good_detections_are_summed_over_modules(tmp_path):

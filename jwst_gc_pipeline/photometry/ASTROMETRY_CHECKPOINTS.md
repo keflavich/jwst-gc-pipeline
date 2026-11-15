@@ -336,11 +336,17 @@ such as gc-treasury (F212N, F480M), bands registered worse than that radius
 confirm almost nothing: o111, o113, o063 and o138 sat 66-272 mas apart and the
 seed held only a small fraction of the good detections (about 0.003-0.05 on the
 collapsed tiles checked, 0.69-0.82 on the healthy ones; 7 tiles, measured with
-the earlier pooled `n_seed / min(n_good)` form, which agrees with the per-band
-form below to within a few percent for two bands; not re-measured on all 68).
+the earlier pooled `n_seed / min(n_good)` form; not re-measured on all 68).
+On the 68 two-band gc-treasury tiles the pooled form gives 0.63-0.82 while a
+per-band count over each band's *own* `n_good` gives 0.28-0.63 (six tiles, o042,
+o043, o045, o069, o070 and o076, at 0.282-0.298, under the 0.3 floor), because
+F480M is deeper than F212N and its extra detections can never be confirmed. The
+two forms therefore agree only for bands of equal depth, and the per-band count
+uses the smallest band's `n_good` for every band (below).
 
-For each band the build counts the fraction of its good detections (summed over
-modules) that sit in a cluster the seed kept; this is at most 1. The smallest
+For each band the build counts the detections (summed over modules) that sit in
+a cluster the seed kept and divides by the smallest band's good-detection count,
+capping at 1. The smallest
 band fraction is the seed's health, so with three or more bands a single
 mis-registered band is flagged even when the others agree with each other (a
 pooled seed-size over smallest-band-count would not see it). Below

@@ -5316,8 +5316,8 @@ def _check_crossband_dva_consistency(states, label='m7 crossband seed'):
 
 
 class CrossbandSeedCollapsedError(RuntimeError):
-    """The m7 cross-band seed confirmed too small a fraction of the sparser
-    band (``manual_crossband_seed_collapse_action='raise'``)."""
+    """The m7 cross-band seed confirmed too small a fraction of the smallest
+    band's good detections (``manual_crossband_seed_collapse_action='raise'``)."""
 
 
 #: Seed files whose collapse warning this process has already printed.  Every
@@ -5331,13 +5331,17 @@ def _crossband_seed_health(n_good, n_in_seed, n_seed, ras, decs, snrs, filtidx,
     """Health of a cross-band seed: per-band confirmed fraction and a coarse
     band-to-band offset.
 
-    The fraction of a band is ``n_in_seed[band] / n_good[band]``: how many of its
-    good detections sit in a cluster the seed kept (``n_good`` and ``n_in_seed``
-    are accumulated across modules by the caller; a cluster can hold several
-    detections of one band, but never more than the band has, so the fraction
-    is at most 1).  ``frac`` is the smallest band fraction, so one band
-    registered away from the others flags the seed even when the rest agree
-    (with three bands a pooled ``n_seed / min(n_good)`` would not).  A
+    The fraction of a band is ``n_in_seed[band] / min(n_good)``, capped at 1:
+    how many of its good detections sit in a cluster the seed kept, over the
+    size of the *shallowest* band (``n_good`` and ``n_in_seed`` are accumulated
+    across modules by the caller).  The common denominator is deliberate: a
+    star can only be confirmed if the shallowest band detects it, so dividing a
+    deeper band by its own, larger ``n_good`` would flag every pair of unequal
+    depth as collapsed although every shallow-band star is confirmed.  A
+    cluster can hold several detections of one band, hence the cap.  ``frac``
+    is the smallest band fraction, so one band registered away from the others
+    flags the seed even when the rest agree (with three bands a pooled
+    ``n_seed / min(n_good)`` would not).  A
     single-filter target has nothing to confirm against, so its fraction is None
     and it is never flagged.
 
@@ -5363,7 +5367,8 @@ def _crossband_seed_health(n_good, n_in_seed, n_seed, ras, decs, snrs, filtidx,
     bands = [k for k, v in n_good.items() if v > 0]
     worst = None
     if len(bands) >= 2:
-        band_frac = {k: float(n_in_seed.get(k, 0)) / float(n_good[k])
+        n_ref = float(min(n_good[k] for k in bands))
+        band_frac = {k: min(1.0, float(n_in_seed.get(k, 0)) / n_ref)
                      for k in bands}
         worst = min(bands, key=lambda k: band_frac[k])
         health['band_frac'] = band_frac
@@ -5407,7 +5412,7 @@ def _crossband_seed_health_message(health):
                       for k, v in sorted(health['band_frac'].items()))
     msg = (f"WARNING [m7] crossband seed collapsed: {health['n_seed']} positions "
            f"confirmed from good m6 detections ({counts}); confirmed fraction "
-           f"of each band's good detections ({fracs}); worst band "
+           f"of the smallest band's good detections ({fracs}); worst band "
            f"{health['worst_band']} {health['frac']:.3f} < {health['min_frac']:g} "
            f"at a {health['max_sep_mas']:g} mas match radius.")
     if health['offset_dra_mas'] is not None:
