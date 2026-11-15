@@ -268,6 +268,12 @@ def _keyword_calls(module, func):
     (C, '_satstar_cofit_positions', 'phase', 'merge_label'),
     # _prepare_frame_for_photometry: the partner seeds read the phase being fit
     (C, '_partner_satstar_seed_files', 'phase', 'satstar_label'),
+    # ... and the frame variant of the frame being fit (#1194)
+    (C, '_partner_satstar_seed_files', 'frame_variants',
+     '_frame_variants_of_paths([original_filename])'),
+    # the co-fit dedup reads the variant of the frames the merge reads (#1194)
+    (C, '_satstar_cofit_positions', 'frame_variants',
+     "_frame_variants_of_paths(frame_cache.get((module, filt), []))"),
     # load_satstar_catalog: primary and consolidated branches
     (MC, 'apply_pooled_wingcal', 'phase', 'phase'),
 ])

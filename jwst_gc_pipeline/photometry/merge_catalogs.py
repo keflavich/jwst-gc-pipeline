@@ -65,8 +65,8 @@ from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.satstar_zf_status import (
     satstar_zf_status, satstar_zf_summary, zf_fit_fraction)
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
-    format_phase_report, normalise_frame_variants, satstar_frame_variant,
-    satstar_phase_rank, satstar_phase_selection_signature,
+    format_phase_report, frame_variant_families, normalise_frame_variants,
+    satstar_frame_variant, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.wingcal import (
@@ -2315,7 +2315,9 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     _frame_variants = _frame_variants_of_tables(tables)
     minimal_table.meta['FRMVAR'] = (','.join(sorted(_frame_variants))
                                     or FRAME_VARIANT_NONE)
-    if len(_frame_variants) > 1:
+    # Variants of different observations (align_o002_crf, align_o005_crf) are
+    # one kind of frame; warn only when the kinds differ.
+    if len(frame_variant_families(_frame_variants)) > 1:
         print(f"WARNING: {filtername.upper()}/{module}: the per-frame catalogs "
               f"span {len(_frame_variants)} frame variants "
               f"({', '.join(sorted(_frame_variants))}); an exposure with "
@@ -3304,15 +3306,21 @@ def load_satstar_catalog(filtername, target='brick',
     those frames are read, so an exposure fit on both ``_align_`` and
     ``_destreak_`` frames no longer takes whichever was written last; an
     exposure with none of the read variant contributes no rows (#1194).
-    ``None`` keeps every variant eligible.
+    ``None`` keeps every variant eligible.  The NIRCam ``merged_i2d`` primary
+    catalog (:func:`_primary_satstar_catalog_path`), when it exists, is read
+    whole and ignores ``frame_variants``: it is one product per target and
+    filter, not one per exposure and variant.
     """
     obs_scope = satstar_obs_scope(proposal_id, field)
     _primary = _primary_satstar_catalog_path(filtername, target, basepath,
                                              proposal_id, field)
     if _primary is not None:
         print(f"Using saturated star catalog {_primary}")
-        _cat = apply_pooled_wingcal(Table.read(_primary), filtername,
-                                    basepath=basepath, phase=phase)
+        # In memory only (idempotent): a primary product written before #949
+        # is served in the same detector-frame vintage as the other paths.
+        _cat = apply_pooled_wingcal(
+            finalize_satstar_columns(Table.read(_primary)), filtername,
+            basepath=basepath, phase=phase)
         # cache_path=None: NEVER rewrite the raw pipeline satstar product on
         # a read path.  Persisting the wingcal-divided flux_fit would make the
         # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
@@ -3680,6 +3688,12 @@ def select_wingcal_calibrator_files(filtername, basepath, phase=None):
     band's calibrators share its PSF grid).  Files without a phase token are
     left out, as the satstar readers leave them out.
 
+    The pool is deliberately variant-agnostic (#1194): the C(r) table is per
+    band and shared by every observation and frame variant, so it cannot follow
+    one merge's ``frame_variants``, and the wing profile does not depend on
+    which frame's WCS the merge reads.  A same-phase tie between variants is
+    settled by file time and flagged in the report.
+
     Returns ``(files, report)`` as
     :func:`~jwst_gc_pipeline.photometry.satstar_phase_selection.select_satstar_phase_files`.
     """
@@ -3912,7 +3926,8 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     ``..._satstar_rejected.fits`` (``None`` when it has none).
 
     ``frame_variants`` is the set :func:`load_satstar_catalog` takes; it
-    chooses the accepted catalogs the rejected files follow.
+    chooses the accepted catalogs the rejected files follow.  Like the accepted
+    channel, the primary-catalog branch above ignores it.
     """
     # The accepted channel reads the NIRCam merged_i2d primary catalog when it
     # exists; the rejected candidates then come from that same product's
@@ -4762,6 +4777,24 @@ def _blank_for_dtype(dtype, length):
     return np.full(length, np.nan)
 
 
+def _continue_host_ids(satstar_toadd, cat):
+    """Number appended satstar rows after the host catalog's own ``id`` values.
+
+    A satstar table's ``id`` is a running index of that table (#949), so on an
+    appended row it would repeat an id the host catalog already uses.  Rows that
+    replace a host row keep the host's id.  No-op when either side has no
+    ``id`` column.  Mutates ``satstar_toadd`` in place.
+    """
+    if 'id' not in cat.colnames or 'id' not in satstar_toadd.colnames:
+        return
+    if not len(satstar_toadd):
+        return
+    host = np.ma.filled(np.ma.asarray(cat['id']).astype(float), np.nan)
+    last = int(np.nanmax(host)) if np.isfinite(host).any() else 0
+    satstar_toadd['id'] = (last + np.arange(1, len(satstar_toadd) + 1)
+                           ).astype(cat['id'].dtype)
+
+
 def _fill_satstar_added_columns(satstar_toadd, cat):
     """Give appended satstar rows every column ``cat`` has.
 
@@ -5149,6 +5182,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd.rename_column(xerr_colname, 'dx')
             satstar_toadd.rename_column(yerr_colname, 'dy')
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:
@@ -5191,6 +5225,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
             satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:

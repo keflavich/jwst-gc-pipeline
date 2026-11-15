@@ -5000,7 +5000,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "SATURATED pixel, as before.  Applies to the "
                           "manual/cataloging path only; the legacy crowdsource "
                           "step, the injection-recovery tests and the "
-                          "cross-exposure coverage mask keep the raw flag."),
+                          "cross-exposure coverage mask keep the raw flag.  "
+                          "Recorded per frame as catalog header TLSATFIT.  The "
+                          "two arms write the same product names and "
+                          "--skip-if-done markers do not record the arm: run "
+                          "this arm in its own basepath."),
                     )
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=MANUAL_DEFAULTS['manual_group_min_sep_fwhm'],

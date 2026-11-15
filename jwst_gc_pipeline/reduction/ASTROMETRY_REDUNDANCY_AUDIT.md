@@ -93,7 +93,10 @@ retired 2026-07-11), and tests
 offsets table (distinct visits of a filter sharing an offset to within ~20 mas,
 **and that shared offset larger than the same ~20 mas** — two visits that each
 legitimately needed no correction also share one value, and nothing was
-overwritten there because nothing was applied) and
+overwritten there because nothing was applied; the whole-consensus tie rows,
+`Module == "all"` / `Exposure == -1`, are excluded from the per-visit median so
+that it does not follow the row count of a visit, and a (filter, visit) that
+holds only a tie is reported as unmeasurable by a warning, issue #831) and
 runs inside `unified_alignment._shift_from_locked`, on the `fix_alignment` path — both
 its readers, the locked table and the pre-locked `_average` fallback — where
 it RAISES `CollapsedOffsetsTableError` (PR #770 — that call site passes
