@@ -330,6 +330,11 @@ Joint catalog (gc-treasury)
       the source is in one tile only. Among duplicates the row kept is the
       one with the most filters measured, then the largest distance from its
       tile edge, then the smallest F212N flux error.
+      A joint catalog built from the m8_dedup tiles (header card CMZTKIND =
+      m8_dedup, tile_kind in the .prov.json file) keeps every row of each tile
+      and has the same columns as that table. There the row kept is the one
+      with cmd_default True, then the larger n_filt_independent, then the
+      three criteria above.
 
 
 Seed source list

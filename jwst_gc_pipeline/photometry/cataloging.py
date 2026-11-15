@@ -7194,6 +7194,17 @@ def _maybe_annotate_cmd_default(paths, label='m8'):
     return done
 
 
+def _annotate_cmd_default_m7(xb_path, label='m7'):
+    """``_maybe_annotate_cmd_default`` on a cross-band table and its ``_qualcuts*`` subsets.
+
+    Every subset the merge wrote is matched by glob, so the field's oksep
+    suffix (whatever proposal number it carries) needs no spelling here.
+    """
+    return _maybe_annotate_cmd_default(
+        [xb_path] + sorted(glob.glob(f"{xb_path[:-len('.fits')]}_qualcuts*.fits")),
+        label)
+
+
 def _maybe_flag_m8_spikes(dedup_path, m8_path, options, label='m8'):
     """Add the diffraction-spike flag columns to an m8_dedup file (#1035).
 
@@ -11474,9 +11485,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                       f"flags onto the _qualcuts subsets failed ({_pex})", flush=True)
             # Default CMD selection (#1283): oksep_pass / cmd_default on the
             # merged table and its subsets, after n_filt_independent exists.
-            _maybe_annotate_cmd_default(
-                [_xb] + sorted(glob.glob(f"{_xb[:-len('.fits')]}_qualcuts*.fits")),
-                last_phase)
+            _annotate_cmd_default_m7(_xb, last_phase)
             # Last step of the post-annotation block (after any column added
             # to the FITS): the ECSV twin carries the FITS table's columns.  It
             # is written even when annotation failed, without the flags.
