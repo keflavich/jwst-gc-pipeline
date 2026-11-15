@@ -112,7 +112,7 @@ def prefer_same_filesystem(dirs, dest, stat=os.stat):
     """``dirs`` reordered so donors on the destination's filesystem come first.
 
     Several grids exist in both roots -- the eight F212N SW grids are in brick
-    and cloudc (/blue) and in arches, quintuplet, sgra and sgrb2 (/orange).
+    (/blue) and in cloudc, arches, quintuplet, sgra and sgrb2 (/orange).
     Taking the /blue copy for a /blue-rooted field turns a symlink into a hard
     link: no extra bytes either way, but a hard link survives the donor tree
     being moved or repathed, which a symlink into another target's directory

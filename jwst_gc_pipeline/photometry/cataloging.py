@@ -308,6 +308,51 @@ def _handoff_env_flag(name, default):
         f"({'on' if default else 'off'})")
 
 
+def _bright_presub_peak_noise():
+    """``DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE``: seeds brighter than this many
+    times the frame's median local noise are fit and subtracted before the
+    m3..m7 detection (0 / unset = off, the historical behaviour).
+
+    The m3..m7 detection image is the frame itself, so a bright unsubtracted
+    star inflates the local noise map (``compute_local_noise_map`` smooths the
+    squared high-pass residual) out to ~14 px and the local-S/N cut drops the
+    faint neighbours there; inside ~8 px daofind finds almost nothing either.
+    Satstars never show this because their model is subtracted first (#991).
+
+    Raises ``ValueError`` on a non-numeric, negative or non-finite value.
+    """
+    raw = os.environ.get('DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE')
+    if raw is None or not raw.strip():
+        return 0.0
+    try:
+        val = float(raw)
+    except ValueError:
+        raise ValueError(
+            f"DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE={raw!r} is not a number") from None
+    if not (np.isfinite(val) and val >= 0):
+        raise ValueError(
+            f"DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE={raw!r} must be finite and >= 0")
+    return val
+
+
+def _bright_presub_select(seed, data, peak_noise):
+    """Boolean mask of ``seed`` rows whose 3x3 data peak exceeds
+    ``peak_noise`` times the median of the frame's local noise map.
+
+    Returns ``(bright, noise_ref)``; seeds off the frame are never bright.
+    """
+    from scipy import ndimage as _ndi
+    noise_ref = float(np.nanmedian(compute_local_noise_map(data, smooth_sigma_pix=3.0)))
+    peak = _ndi.maximum_filter(np.asarray(data, dtype=float), size=3)
+    ny, nx = peak.shape
+    ix = np.rint(np.asarray(seed['x_init'], dtype=float)).astype(int)
+    iy = np.rint(np.asarray(seed['y_init'], dtype=float)).astype(int)
+    on = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    bright = np.zeros(len(seed), dtype=bool)
+    bright[on] = peak[iy[on], ix[on]] > float(peak_noise) * noise_ref
+    return bright, noise_ref
+
+
 def _read_satstar_handoff_table(path, label, kind):
     """Read a satstar hand-off table that exists, or raise.
 
@@ -555,17 +600,31 @@ def _unaccepted_sat_component_xy(dqarr, satstar_table, fwhm_pix, *,
     frame preparation takes the floor from ``_daophot_handoff_data_floor``
     (default 0), not from the satstar finder's ``_SATSTAR_DATA_FLOOR``.
 
-    Validation scope: this hand-off (env ``DAOPHOT_HANDOFF_UNACCEPTED_SAT=1``)
-    with the default floor of 0 is validated only on gc-treasury F480M (o111
-    nrcblong exp1-6 per frame, and the 12-frame o111 m6 end-to-end run of
-    #972).  Enable it per field, not globally.  Two measured cases where it
-    has not been validated:
+    Validation scope (``DAOPHOT_HANDOFF_UNACCEPTED_SAT``, default floor 0).
+    It is on by default only for ``_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS``
+    (gc-treasury); elsewhere it is an export.  gc-treasury F480M: o111
+    nrcblong exp1-6 per frame and the 12-frame o111 m6 end-to-end run of
+    #972.  Per-frame re-runs of the production m7 pass, fixC alone against
+    the defaults (unmeasured SATURATED candidates; single-exposure transients
+    handed off and fitted), 3 frames each:
 
-    * W51 F480M (12 production frames, selection only, no fitting run): 134.7
-      components per frame lie more than 1.5 FWHM from an accepted satstar;
-      41.5 of them have no finite SCI pixel and are skipped here, leaving
-      93.2 per frame to hand off, 39.5 of them with a finite maximum below
-      300 MJy/sr.
+    * gc-treasury o043 F212N: 18 -> 0; 2 transients.
+    * gc-treasury o043 F480M: 923 -> 340; 4 transients.
+    * sgra F405N: 2871 -> 281; 0.  cefcf F360M: 3244 -> 242; 0.
+    * crowded_l3 F410M: 1581 -> 83; 0.  crowded_l20 F182M: 489 -> 24; 0.
+
+    The transients are compact cosmic-ray hits with no JUMP flag (9-12 px;
+    the other exposures show < 0.5% of their peak there).  With the hand-off
+    off they stay unsubtracted and uncatalogued; with it on they get a PSF
+    fit that leaves a ring.  No data floor removes them, since they are
+    bright; a transient guard would.  The earlier o111 nrcb3 exp1-6 F212N
+    measurement (6 of 8 single-exposure CR/snowball transients fitted) is
+    the same class.  Not validated: the extended-emission targets and MIRI
+    (the hand-off is NIRCam-only).  W51 F480M (12 production frames,
+    selection only, no fitting run): 134.7 components per frame lie more
+    than 1.5 FWHM from an accepted satstar; 41.5 of them have no finite SCI
+    pixel and are skipped here, leaving 93.2 per frame to hand off, 39.5 of
+    them with a finite maximum below 300 MJy/sr.
     * F212N (o111 nrcb3 exp1-6): single-exposure cosmic-ray and snowball
       SATURATED transients are handed off and fitted (6 of 8).  They are
       bright, so no data floor removes them; this needs a transient guard.
@@ -978,7 +1037,8 @@ def _severity_drop_handoff_xy(drops_path, satstar_table, fwhm_pix, *,
 
 
 def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
-                        data_floor=None, label='manual', filtername=None):
+                        data_floor=None, unaccepted_sat_default=False,
+                        label='manual', filtername=None):
     """Every position handed from the satstar channel to daophot on a frame.
 
     The gate-reject hand-off (``_gate_reject_handoff_xy``: implied-peak-gate
@@ -986,8 +1046,11 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     (``_severity_drop_handoff_xy``: the components the satstar finder's
     pre-fit severity gate dropped and nothing re-seeded; env
     ``DAOPHOT_HANDOFF_SEVERITY_DROPS``, default on) and, when env
-    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` is on (default off; parsed by
-    ``_handoff_env_flag``), every SATURATED component without an accepted
+    ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` is on (parsed by
+    ``_handoff_env_flag``; unset or blank gives ``unaccepted_sat_default``,
+    which the frame preparation takes from
+    ``_unaccepted_sat_handoff_default``: on for the targets in
+    ``_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS``, off elsewhere), every SATURATED component without an accepted
     satstar that has a finite ``sci`` pixel reaching ``data_floor``
     (``_unaccepted_sat_component_xy``).  That component hand-off includes the
     severity drops, so the drop file is not read when it is on.
@@ -997,8 +1060,8 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     ``DAOPHOT_HANDOFF_PEAK_MIN_AREA`` (``_daophot_handoff_peak_min_area``,
     read only when the component hand-off is on) switches large components
     to a hand-off at their local maxima.  The component hand-off is
-    validated only for gc-treasury F480M (see
-    ``_unaccepted_sat_component_xy``).  Env ``DAOPHOT_HANDOFF_FILTERS``
+    validated for gc-treasury F212N and F480M and the fields listed in
+    ``_unaccepted_sat_component_xy``.  Env ``DAOPHOT_HANDOFF_FILTERS``
     limits it to the listed bandpasses (``_daophot_handoff_in_filter_scope``,
     given ``filtername``); outside them it stays off whatever
     ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` says.
@@ -1015,7 +1078,7 @@ def _daophot_handoff_xy(dqarr, sci, satstar_table, rejected_path, fwhm_pix, *,
     # Both parsed on every frame, so a malformed value fails everywhere.
     in_scope = _daophot_handoff_in_filter_scope(filtername)
     component_handoff = _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT',
-                                          False)
+                                          unaccepted_sat_default)
     if component_handoff and not in_scope:
         print(f"[{label}] DAOPHOT_HANDOFF_FILTERS="
               f"{os.environ.get('DAOPHOT_HANDOFF_FILTERS', '')!r} does not "
@@ -3330,6 +3393,21 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 # run_manual_pipeline and do_photometry_step_manual.
 _EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2', 'ngc6334')
 
+# Targets whose NIRCam frames hand every SATURATED component without an
+# accepted satstar to daophot by default (DAOPHOT_HANDOFF_UNACCEPTED_SAT; an
+# explicit export of the variable, on or off, wins).  Per target, not global:
+# see _unaccepted_sat_component_xy for what has been validated where.
+_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS = ('gc-treasury',)
+
+
+def _unaccepted_sat_handoff_default(options):
+    """Default of ``DAOPHOT_HANDOFF_UNACCEPTED_SAT`` for this run: on for
+    the targets in ``_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS``, off
+    elsewhere.  The variable, when set, overrides it either way."""
+    return (str(getattr(options, 'target', '')).lower()
+            in _DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS)
+
+
 # The vetted catalog the previous-phase keep of each phase reads:
 # phase -> (merge label, resbgsub) of the phase before it.
 _PREV_VETTED_PHASE = {'m3': ('m2', False), 'm4': ('m3', False),
@@ -4292,19 +4370,29 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # those pixels back to the fit, only around handed-off stars.
     handoff_xy, handoff_radius = None, 0.0
     handoff_restore = None
+    # resolved DAOPHOT_HANDOFF_UNACCEPTED_SAT for this frame, recorded in the
+    # per-frame catalog header (HNDOFFSA); MIRI never hands off
+    handoff_unaccepted_sat = False
     if dqarr is not None and 'miri' not in inst_token:
-        # Opt-in (env DAOPHOT_HANDOFF_UNACCEPTED_SAT=1): also hand off EVERY
-        # SATURATED component without an accepted satstar, including the ones
-        # the pre-fit severity gate dropped before any rejected-table row was
-        # written (see _unaccepted_sat_component_xy).  Components with no
-        # finite raw-SCI pixel are left alone, and so are components below
-        # the hand-off's own data floor (env DAOPHOT_HANDOFF_DATA_FLOOR,
-        # default 0; the satstar finder's SATSTAR_DATA_FLOOR is not used).
-        # Validated only for gc-treasury F480M; enable it per field, and per
-        # bandpass with DAOPHOT_HANDOFF_FILTERS.
+        _unacc_default = _unaccepted_sat_handoff_default(options)
+        handoff_unaccepted_sat = (
+            _handoff_env_flag('DAOPHOT_HANDOFF_UNACCEPTED_SAT', _unacc_default)
+            and _daophot_handoff_in_filter_scope(filtername))
+        # DAOPHOT_HANDOFF_UNACCEPTED_SAT (default on for the targets in
+        # _DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS, off elsewhere; an export
+        # wins): also hand off EVERY SATURATED component without an accepted
+        # satstar, including the ones the pre-fit severity gate dropped
+        # before any rejected-table row was written (see
+        # _unaccepted_sat_component_xy).  Components with no finite raw-SCI
+        # pixel are left alone, and so are components below the hand-off's
+        # own data floor (env DAOPHOT_HANDOFF_DATA_FLOOR, default 0; the
+        # satstar finder's SATSTAR_DATA_FLOOR is not used).  Limited to the
+        # bandpasses in DAOPHOT_HANDOFF_FILTERS when that is set.
         handoff_xy, handoff_radius = _daophot_handoff_xy(
             dqarr, original_data, satstar_table, satstar_rejected_path,
-            fwhm_pix, label='manual', filtername=filtername)
+            fwhm_pix,
+            unaccepted_sat_default=_unacc_default,
+            label='manual', filtername=filtername)
         if handoff_xy is not None:
             # Opt-in (env DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM): restore
             # in components that also hold an accepted satstar, outside a
@@ -4364,6 +4452,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
         handoff_xy=handoff_xy, handoff_radius=handoff_radius,
+        handoff_unaccepted_sat=handoff_unaccepted_sat,
         original_data=original_data, background_map=background_map,
         bkg_basis=bkg_basis,
         out_basepath=out_basepath, filename=filename,
@@ -4431,6 +4520,114 @@ def _attach_residual_background(result, residual, ctx, options, label=''):
     return result
 
 
+def _satstar_footprint_nan_mask(dqarr, satstar_model, min_model=20.0):
+    """Pixels a per-frame satstar residual should report as NOT MEASURED.
+
+    DQ-SATURATED pixels under a subtracted accepted-satstar model.  85% of the
+    flagged pixels keep a ramp-fit rate from the early, unsaturated groups (62%
+    of those from group 0 alone) and ~15% are NaN, while the subtracted model
+    is calibrated on the multi-group wing rates, so ``rate - model`` is not a
+    measurement of the star residual there (o102 F480M, 12 frames: median
+    peak |residual| within 1" of the accepted satstars 144 / 318 / 679 MJy/sr
+    over the three flux terciles).  ``min_model`` (MJy/sr) keeps the flagged
+    pixels of unmodelled / gate-rejected saturated stars out of the mask.
+
+    Parameters
+    ----------
+    dqarr : ndarray of int, or None
+        The frame's DQ array.
+    satstar_model : ndarray, or None
+        The accepted-satstar model subtracted from the data (MJy/sr).
+    min_model : float
+        A flagged pixel is masked only where the model exceeds this.
+
+    Returns
+    -------
+    ndarray of bool, or None
+        True where the residual is not a measurement; None when either input
+        is None (no satstar model was subtracted, so there is nothing to mask).
+    """
+    if dqarr is None or satstar_model is None:
+        return None
+    flagged = (np.asarray(dqarr) & _L.dqflags.pixel['SATURATED']) != 0
+    return flagged & (np.asarray(satstar_model) > float(min_model))
+
+
+#: Passes ``_save_manual_pass`` writes a residual for (``m12`` is the driver
+#: phase that runs m1 and m2; it is not a pass label).
+_RESID_NAN_PASS_LABELS = ('m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7')
+
+
+def _resid_nan_satstar_passes():
+    """Manual passes whose written residual reports the satstar footprint as NaN.
+
+    Env ``GC_RESID_NAN_SATSTAR_PASSES`` lists iteration labels, comma- or
+    space-separated (``m7`` or ``m6,m7``); unset or blank gives ``('m7',)``.
+    The m3-m6 residuals seed the next pass's detection and its background
+    application, and only the m7 residual has been run with NaN in it (o102,
+    F480M and F212N), so the NaN is scoped to m7 until the earlier passes
+    are validated.
+
+    Returns
+    -------
+    tuple of str
+
+    Raises
+    ------
+    ValueError
+        A listed label is not a manual-pass label (``m1`` ... ``m7``).  A typo
+        would otherwise switch the NaN off for every pass without a word.
+    """
+    raw = os.environ.get('GC_RESID_NAN_SATSTAR_PASSES', '')
+    passes = tuple(tok.lower() for tok in raw.replace(',', ' ').split())
+    bad = [tok for tok in passes if tok not in _RESID_NAN_PASS_LABELS]
+    if bad:
+        raise ValueError(
+            f"GC_RESID_NAN_SATSTAR_PASSES={raw!r}: {bad} not manual-pass "
+            f"labels (any of {', '.join(_RESID_NAN_PASS_LABELS)}, e.g. 'm7' "
+            f"or 'm6,m7'; unset applies the NaN to m7 only)")
+    return passes or ('m7',)
+
+
+def _resid_nan_satstar_min_model():
+    """Model floor (MJy/sr) for ``_satstar_footprint_nan_mask`` in the writer.
+
+    Env ``GC_RESID_NAN_SATSTAR_MIN_MODEL``; unset or blank gives 20.
+
+    Raises
+    ------
+    ValueError
+        The value is not a finite number >= 0.
+    """
+    raw = os.environ.get('GC_RESID_NAN_SATSTAR_MIN_MODEL', '')
+    if not raw.strip():
+        return 20.0
+    try:
+        floor = float(raw)
+    except ValueError:
+        floor = np.nan
+    if not (np.isfinite(floor) and floor >= 0):
+        raise ValueError(
+            f"GC_RESID_NAN_SATSTAR_MIN_MODEL={raw!r} is not a finite number "
+            f">= 0 (MJy/sr; unset gives 20)")
+    return floor
+
+
+def _resid_nan_satstar_applies(iteration_label):
+    """Whether the residual written for ``iteration_label`` gets the NaN.
+
+    Needs env ``GC_RESID_NAN_SATSTAR_FOOTPRINT`` on (default OFF: unset, the
+    written residual is what it was before this switch existed) and the label
+    in ``_resid_nan_satstar_passes()``.  The pass list is read only when the
+    switch is on, so a stray ``GC_RESID_NAN_SATSTAR_PASSES`` cannot break a
+    default run.  The on/off value follows the hand-off convention
+    (``_handoff_env_flag``): any other value raises.
+    """
+    if not _handoff_env_flag('GC_RESID_NAN_SATSTAR_FOOTPRINT', False):
+        return False
+    return iteration_label in _resid_nan_satstar_passes()
+
+
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """Write the per-frame catalog (``save_photutils_results``) + residual +
     model for one manual pass, with the manual ``_m{N}`` iteration token.  The
@@ -4453,6 +4650,10 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
                     else ctx.original_data - ctx.satstar_model_subtracted)
     _residual_for_bkg = _resbkg_base - modsky
     _attach_residual_background(result, _residual_for_bkg, ctx, options, label=iteration_label)
+    # provenance: gc-treasury hands unaccepted SATURATED components to daophot
+    # by default, so its trees can hold catalogs from both regimes
+    result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
+                               'unaccepted SATURATED comps handed to daophot')
 
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
@@ -4464,6 +4665,21 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
         iteration_label=iteration_label)
 
     residual = _residual_for_bkg
+    # [default OFF] report the accepted-satstar saturated footprint as not
+    # measured, in the passes GC_RESID_NAN_SATSTAR_PASSES lists (default m7).
+    # Only the WRITTEN residual changes: the modelsub_bkg diagnostic above keeps
+    # the unmasked residual, the merged-catalog residual (base = raw residual +
+    # raw model) inherits the NaN, and detection already masks non-finite
+    # pixels of the residual i2d.
+    if _resid_nan_satstar_applies(iteration_label):
+        _nanm = _satstar_footprint_nan_mask(
+            ctx.dqarr, ctx.satstar_model_subtracted,
+            _resid_nan_satstar_min_model())
+        if _nanm is not None and _nanm.any():
+            residual = np.where(_nanm, np.nan, residual)
+            print(f"[{iteration_label}] residual: {int(_nanm.sum())} DQ-SATURATED px "
+                  f"under accepted satstar models set to NaN (not measured)",
+                  flush=True)
     stub = (f'{bp}/{ctx.filtername}/pipeline/{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
@@ -4693,8 +4909,16 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         base1 = (ctx.original_data if ctx.satstar_model_subtracted is None
                  else ctx.original_data - ctx.satstar_model_subtracted)
         residual1 = base1 - modsky1
+        # m1 and m3+ hand daofind the NaN-filled frame.  This residual is built
+        # from the pristine data, so it carries that frame's NaN pixels, and
+        # DAOStarFinder (photutils 3.0.1.dev27) returns no peak with a NaN
+        # pixel within ~4 px: a synthetic star is missed at 1-4 px from one NaN
+        # pixel and found at 5+ px.  Fill them the way `nan_replaced_data` was
+        # filled (same kernel).
+        detection2 = replace_nans(
+            residual1, Gaussian2DKernel(x_stddev=ctx.fwhm_pix / 2.355))
         seed2 = _build_manual_seed(
-            detection_image=residual1, nan_replaced_data=ctx.nan_replaced_data,
+            detection_image=detection2, nan_replaced_data=ctx.nan_replaced_data,
             mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
             satstar_table=ctx.satstar_table, prev_catalog=saved1,
             local_snr_threshold=iter2_snr,
@@ -4714,18 +4938,44 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # m3 / m4 / m5: single seeded pass
     prev = Table.read(prev_seed_catalog) if prev_seed_catalog else None
     snr = iter2_snr
-    seed = _build_manual_seed(
-        detection_image=ctx.nan_replaced_data, nan_replaced_data=ctx.nan_replaced_data,
-        mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
-        satstar_table=ctx.satstar_table, prev_catalog=prev,
-        local_snr_threshold=snr,
-        roundlo=resid_roundlo, roundhi=resid_roundhi,
-        sharplo=resid_sharplo, sharphi=resid_sharphi,
-        dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-        label=manual_phase, struct_x=struct_x, struct_y=struct_y,
-        coarse_bg_box=coarse_bg_box,
-        noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
-        threshold_scale=detect_scale)
+
+    def _seed_from(detection_image, nan_replaced):
+        return _build_manual_seed(
+            detection_image=detection_image, nan_replaced_data=nan_replaced,
+            mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
+            satstar_table=ctx.satstar_table, prev_catalog=prev,
+            local_snr_threshold=snr,
+            roundlo=resid_roundlo, roundhi=resid_roundhi,
+            sharplo=resid_sharplo, sharphi=resid_sharphi,
+            dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
+            label=manual_phase, struct_x=struct_x, struct_y=struct_y,
+            coarse_bg_box=coarse_bg_box,
+            noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
+            threshold_scale=detect_scale)
+
+    seed = _seed_from(ctx.nan_replaced_data, ctx.nan_replaced_data)
+    _presub = _bright_presub_peak_noise()
+    if _presub > 0 and len(seed):
+        _bright, _nref = _bright_presub_select(seed, ctx.nan_replaced_data, _presub)
+        if np.any(_bright):
+            seed_b = seed[_bright]
+            _, modsky_b, _ = _pass(seed_b, f'{manual_phase}b')
+            resid_b = np.asarray(ctx.nan_replaced_data, dtype=float) - modsky_b
+            seed_r = _seed_from(resid_b, resid_b)
+            both = table_vstack([seed_b, seed_r], metadata_conflicts='silent')
+            keep, _ = _dedup_close_sources(
+                xy=np.column_stack([np.asarray(both['x_init'], dtype=float),
+                                    np.asarray(both['y_init'], dtype=float)]),
+                flux=np.asarray(both['flux_init'], dtype=float),
+                min_sep_pix=0.5 * ctx.fwhm_pix, quality=None,
+                is_saturated=(np.asarray(both['is_saturated'], dtype=bool)
+                              if 'is_saturated' in both.colnames else None))
+            print(f"[{manual_phase}] bright pre-subtraction (peak > {_presub:g} x "
+                  f"{_nref:.3g}): {len(seed_b)} bright seeds fit + subtracted; seeds "
+                  f"{len(seed)} on the frame -> {int(np.sum(keep))} bright + detections "
+                  f"on the residual ({len(seed_r)}, deduped {len(both)} -> "
+                  f"{int(np.sum(keep))})", flush=True)
+            seed = both[keep]
     res, modsky, _ = _pass(seed, manual_phase,
                            _nprom_m3p if _is_ext_nircam else None)
     _save_manual_pass(ctx=ctx, result=res, modsky=modsky, options=options,
@@ -8342,6 +8592,56 @@ def _measure_stage_checkpoint(fns, merge_label, module, filt, cut_bp, basepath,
     return record
 
 
+def _record_unverified_empty_filter(merge_label, module, filt, cut_bp,
+                                    proposal_id, field, merged_path):
+    """Log and record a filter whose m2 astrometry checkpoint was skipped
+    because every per-frame catalog is empty.
+
+    The checkpoint measures each exposure against the visit consensus and the
+    reference catalog; with no sources there is nothing to measure, and
+    ``_run_astrometry_stage_checkpoint`` has no zero-source branch.  The filter
+    is therefore UNVERIFIED, not passed: the line below is loud, and the record
+    sits beside the checkpoint records (``unverified_empty_<stage>_<FILTER>_
+    o<field>.json``, a name no ``checkpoint_*`` reader globs) so a release audit
+    can list the unverified filters.  Only reached for a pair allowlisted in
+    ``alignment_config.FieldAlignment.empty_filters``.
+    """
+    import datetime
+    import json
+
+    from jwst_gc_pipeline.atomic_io import atomic_write
+    from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
+
+    record_dir = os.path.join(cut_bp, 'astrometry_checkpoints')
+    os.makedirs(record_dir, exist_ok=True)
+    path = os.path.join(
+        record_dir,
+        f"unverified_empty_{merge_label}_{filt.upper()}"
+        f"{consensus_obs_token(proposal_id, field)}.json")
+    record = {
+        'status': 'UNVERIFIED',
+        'reason': ('every per-frame catalog has 0 sources; the pair is '
+                   'allowlisted in alignment_config.FieldAlignment.empty_filters'),
+        'checkpoint': 'skipped',
+        'stage': merge_label,
+        'proposal_id': str(proposal_id),
+        'field': str(field),
+        'filter': filt.upper(),
+        'module': module,
+        'merged_catalog': merged_path,
+        'written_utc': datetime.datetime.now(datetime.timezone.utc).strftime(
+            '%Y-%m-%dT%H:%M:%SZ'),
+    }
+    with atomic_write(path) as tmp:
+        with open(tmp, 'w') as fh:
+            json.dump(record, fh, indent=2)
+    print(f"ASTROM CHECKPOINT [{merge_label}] UNVERIFIED: {proposal_id} "
+          f"{filt.upper()}/{module} o{field}: every per-frame catalog is empty "
+          f"(allowlisted), so no astrometry was measured for this filter; "
+          f"record {path}", flush=True)
+    return path
+
+
 def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
                                      proposal_id, options, refcat_cache,
                                      context=""):
@@ -8996,7 +9296,7 @@ def _stamp_wcs_source(path):
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
                                        refcat_cache, context="",
                                        record_dir=None, obs_token="",
-                                       proposal_id=None):
+                                       proposal_id=None, module=""):
     """Cross-filter astrometry agreement checkpoint before the m7 cross-band
     merge (see astrometry_checkpoint.run_crossfilter_checkpoint): anchor =
     filter nearest VIRAC2 Ks; <5 mas bulk agreement per filter; no significant
@@ -9026,7 +9326,7 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
         run_crossfilter_checkpoint(catalogs, refcat=refcat_cache['refcat'],
                                    basepath=cut_bp, context=context,
                                    record_dir=record_dir,
-                                   obs_token=obs_token)
+                                   obs_token=obs_token, module=module)
         print("crossfilter astrom checkpoint: PASS", flush=True)
     except CrossFilterAstrometryError:
         if os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1':
@@ -10546,10 +10846,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     filt, getattr(options, 'proposal_id', None),
                     getattr(options, 'field', None),
                     cutout=bool(getattr(options, 'cutout_region', '')))
-                merge_frames_for_observation(
+                # An (observation, filter) listed in FieldAlignment.empty_filters
+                # may have no source in any frame; the merge then writes a
+                # zero-row product instead of raising AllFramesEmptyError.
+                from jwst_gc_pipeline.reduction.alignment_config import (
+                    empty_filter_allowed as _empty_filter_allowed)
+                _empty_ok = _empty_filter_allowed(proposal_id, field, filt)
+                _merged_tab = merge_frames_for_observation(
                     proposal_id, field,
                     module=module, filtername=filt.lower(),
                     m2_registration=_m2_registration,
+                    allow_all_empty=_empty_ok,
                     method='dao', suffix='_basic', target=target, basepath=cut_bp,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,
@@ -10560,6 +10867,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # volume is large (>1M detections).
                     n_spatial_chunks=int(getattr(options, 'merge_spatial_chunks', 1) or 1),
                     merge_workers=max(1, int(getattr(options, 'parallel_workers', 1) or 1)))
+
+                if (_empty_ok and _merged_tab is not None
+                        and _merged_tab.meta.get('EMPTYALL')):
+                    # Nothing to register, vet, residual-subtract or smooth.
+                    # The checkpoint has no zero-source branch, so it is
+                    # skipped LOUDLY (UNVERIFIED line + record) rather than
+                    # passed.  The later phases of this filter get no vetted
+                    # catalog or smoothed background from here; they are
+                    # handled when a chain past m2 is run for the tile.
+                    _record_unverified_empty_filter(
+                        merge_label, module, filt, cut_bp, proposal_id, field,
+                        _merged_path(merge_label, module, filt, resbgsub))
+                    continue
 
                 # ---- ASTROMETRY CHECKPOINT (visit-consensus failsafe) ----
                 # m2: measure every exposure vs the visit consensus + the
@@ -10669,6 +10989,36 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                           f"off-field cross-band-seed artifact(s) -> n={len(merged)}",
                           flush=True)
                     merged.write(merged_path, overwrite=True)
+                # --- cross-exposure audit (m12 merge only) ---
+                # Every frame ran alone, so nothing so far compares what the
+                # exposures of one sky contain.  For each merged row: how many of
+                # the merge's frames cover the position (ncover), how many carry
+                # the source (nfound), and `single_exposure` for a bright or
+                # saturated row that two or more frames cover and exactly one
+                # carries.  Diagnostic: no row is added or removed, and the
+                # columns are written with the catalog just below.  Placed after
+                # the astrometry checkpoint, which can stop the run.  See
+                # xexp_reconcile.py and PHOTOMETRY_PIPELINE.md.
+                if (phase == 'm12' and not getattr(options, 'cutout_region', '')
+                        and mopt(opts_phase, 'manual_xexp_audit')):
+                    from jwst_gc_pipeline.photometry import xexp_reconcile as _xexp
+                    try:
+                        _xexp.audit_merged_catalog(
+                            merged, filt=filt,
+                            catalog_dirs=[os.path.join(cut_bp, filt),
+                                          os.path.join(basepath, filt)],
+                            satstar_suffix=_ss_suffix,
+                            params=_xexp.params_from_options(opts_phase),
+                            wcs_loader=frame_wcs,
+                            bad_dq_mask=_xexp.bad_dq_mask_for(filt),
+                            log=lambda _m: print(
+                                f"manual [{phase}] {filt}/{module}: {_m}",
+                                flush=True))
+                    except (OSError, ValueError, KeyError, RuntimeError) as _xex:
+                        print(f"manual [{phase}] {filt}/{module}: WARNING "
+                              f"cross-exposure audit failed, no audit columns "
+                              f"written ({type(_xex).__name__}: {_xex})",
+                              flush=True)
                 # --- iteration-found provenance: the first phase a source
                 # appears in (matched across phases by sky position) ---
                 _iter_num = {'m2': 2, 'm3': 3, 'm4': 4, 'm5': 5, 'm6': 6, 'm7': 7}[merge_label]
@@ -10966,7 +11316,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 obs_token=_xf_consensus_obs_token(
                     getattr(options, 'proposal_id', None),
                     getattr(options, 'field', None)),
-                proposal_id=getattr(options, 'proposal_id', None))
+                proposal_id=getattr(options, 'proposal_id', None),
+                module=module)
 
             print(f"manual [{last_phase}]: CROSS-BAND MERGE (module={module}, "
                   f"ref_filter={ref_filter}, filters={list(filternames)})", flush=True)

@@ -40,3 +40,6 @@ NOTES*.md
 # they go under docs/evidence/<topic>/ and are force-added (`git add -f`), e.g.
 # docs/evidence/satstar_*/.  Do not remove those tracked PNGs.
 *.png
+
+# compiled PCAT kernels (photometry/transdimensional/kernel.py)
+jwst_gc_pipeline/photometry/transdimensional/_lib/

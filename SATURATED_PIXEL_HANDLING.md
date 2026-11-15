@@ -204,6 +204,16 @@ Measured with the shipped defaults: brick F200W 157 → **350 seeds** (2.23×; m
 contain no DQ-saturated pixel at all), brick F182M 161 → **420** (2.61×; 62%).
 ⚠ F200W's severity floor (4000) is one of the unmeasured †channel-sibling
 estimates, so its 2.23× is contingent on a guessed floor; F182M's 4000 is measured.
+
+Those unflagged seeds are intended where the severity floor is the real onset of
+core suppression (brick F182M). Where the floor sits far below the flagging
+onset they instead pick up ordinary stars: gc-treasury o043 F212N (floor 4000,
+measured no-NaN SATURATED onset 38017) has 91.2% of its accepted satstars (915
+per frame) with no SATURATED pixel within 2 px (#991). Setting
+`SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS=F212N` drops the `peak` / `subfloor`
+seeds of that band whose component holds no DQ-SATURATED pixel; the test reads
+the DQ array, not `seed_kind`, because a flagged component the severity gate
+dropped is re-seeded as `subfloor`. Partner and sibling seeds are not affected.
 Reason about the seed list from these four blocks.
 
 **Empirical scale of the over-flagging** (MIRI sgrb2 F770W,
@@ -605,6 +615,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_SEVERITY_FLOOR` | per-filter `SAT_SEVERITY_FLOOR` | override the daophot-mask severity floor |
 | `SATSTAR_MIN_LOST_CORE` | 5 | min truly-lost core size (px) |
 | `SATSTAR_SUBFLOOR_SEED_FRAC` | 0.35 | sub-floor seeding fraction |
+| `SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS` | unset (off) | bandpasses (comma/space-separated, e.g. `F212N`) whose peak-based and sub-floor seeds must hold a DQ-SATURATED pixel; others are unaffected, a non-bandpass name raises, listed bands carry `sd` in the satstar cache key (#991) |
 | `SATSTAR_COMPONENT_OVERLAP_FRAC` / `…_MIN_PX` | (see code) / 250 | merge overlapping saturated components |
 | `SATSTAR_WINGCAL` | 1 | wing self-calibration (`apply_wing_selfcal`) |
 | `SATSTAR_WINGCAL_MAX_SE` | 0.05 | largest standard error (1.2533 madstd/√n) of a C(r) bucket that wing self-calibration applies, per-frame and pooled; ≤ 0 disables the gate. madstd is floored at the fractional scatter of the smallest r_mask bucket (≥ 5 stars) times the bucket ratio, and C(r) is anchored at C(0) = 1 (#1041) |
@@ -621,7 +632,11 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_ZF_RIM_BADPIX` | 1 (**on**) | leave DEAD, HOT and REFERENCE_PIXEL pixels out of the ZEROFRAME rim rewrite, and floor a rewritten pixel's fit error at the frame's median ERR; 0 restores the rewrite that weighted dead pixels at 400–5e8× a normal pixel (#1071) |
 | `SATSTAR_SEED_CORE_DQ` | 1 (**on**) | leave NaN-variance pixels carrying OUTLIER, DEAD, HOT, WARM, LOW_QE, RC, TELEGRAPH, NO_LIN_CORR, NO_SAT_CHECK, NO_GAIN_VALUE, NO_FLAT_FIELD, UNRELIABLE_BIAS, OTHER_BAD_PIXEL or REFERENCE_PIXEL out of the core that `_refine_coms_by_data` centres a seed on (`seed_saturation_core`), then the pieces of fewer than 3 px that remain (a HOT clump on a gc-treasury F480M star's peak otherwise left a 2-px edge pair to win, #1101); 0 restores the seed that an OUTLIER pair or a WARM/HOT clump on a star's edge moved 2.4–3.6 px off wd2 stars (#1098) |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
+| `SATSTAR_OPTIN_FILTERS` | (unset: every bandpass) | bandpasses (`F480M` or `F480M,F405N`) that keep the opt-in fit switches `SATSTAR_ZF_KEEP_FINITE`, `SATSTAR_OBS_PK_FROM_CRF`, `SATSTAR_QFIT_LOCAL_GATE` and `SATSTAR_QFIT_LOCAL_R`; for any other bandpass those four are unset for the whole per-frame fit (`satstar_optin_scoped` on `load_or_make_satstar_catalog`), so the frame fits and keys its cache (`SATFITSW`) as if they were never exported.  A chain takes one environment, so gc-treasury sets the switches once with `SATSTAR_OPTIN_FILTERS=F480M`; a malformed name raises |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
+| `DAOPHOT_HANDOFF_UNACCEPTED_SAT` / `DAOPHOT_HANDOFF_DATA_FLOOR` | on for the targets in `_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS` (gc-treasury), off elsewhere; an export wins / 0 | NIRCam only: hand every SATURATED component without an accepted satstar to daophot and return its valid-rate late-group pixels to the fit; limited to the bandpasses in `DAOPHOT_HANDOFF_FILTERS` when that is set; recorded per frame as catalog header `HNDOFFSA` |
+| `DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE` | 0 (off) | m3..m7 daophot pass: seeds whose 3x3 data peak exceeds this multiple of the frame's median local noise are fit first and their model is subtracted before the detection that builds the seed, so faint neighbours within ~14 px of a bright daophot-fit star are not lost to the bright star's inflated local-noise map (the satstar channel already subtracts its stars first); the bright seeds plus the residual detections then go to the one full fit; non-numeric, negative or non-finite raises (#991) |
+| `GC_RESID_NAN_SATSTAR_FOOTPRINT` / `GC_RESID_NAN_SATSTAR_PASSES` / `GC_RESID_NAN_SATSTAR_MIN_MODEL` | off / `m7` / 20 | report the DQ-SATURATED pixels under an accepted satstar's subtracted model (model > `…_MIN_MODEL` MJy/sr) as NaN in the per-frame `*_daophot_basic_residual.fits` written by the manual passes listed in `…_PASSES` (`m1` … `m7`, comma- or space-separated; the m3–m6 residuals seed the next pass and have not been run with NaN in them). The pass's catalog, `_model.fits` and `modelsub_bkg` columns are written from the unmasked arrays (`_save_manual_pass`, `_satstar_footprint_nan_mask`); the residual i2d, its smoothed background and the merged-catalog residual inherit the NaN.  The on/off switch follows the hand-off convention; an unknown pass label or a bad `…_MIN_MODEL` raises |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
 | `SATSTAR_FLUX_STAT` | median | consolidated `flux_fit`: `median` of the per-exposure fluxes, or `brightest` (the representative's own flux, the old behaviour; kept as `flux_brightest_fit` either way) |

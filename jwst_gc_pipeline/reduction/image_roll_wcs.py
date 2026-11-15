@@ -25,7 +25,9 @@ Products
   ``S_t o R_(P-t) = R_P o S_t``, so a regenerated frame reproduces the
   rotated aligned frame instead of losing the roll.
 * **i2d mosaics** (``jw<prog>-o<obs>_t*_nircam_*_i2d.fits``,
-  ``jw<prog>-o<obs>_t*_miri_<filter>_i2d.fits``): CRVAL and PC in
+  ``jw<prog>-o<obs>_t*_miri_<filter>_i2d.fits``, and the cataloging-written
+  MIRI mosaics ``jw<prog>-o<obs>_t*_miri_clear-<filter>-mirimage_<tag>_i2d.fits``:
+  ``_data`` is primary, model/residual/smoothed_bg are derived): CRVAL and PC in
   the SCI header, the ``FITSImagingWCSTransform`` in the ASDF GWCS and
   ``meta.wcsinfo`` are updated together.  A single-roll mosaic is corrected
   EXACTLY (a rotation of the sphere maps a TAN projection onto a TAN
@@ -146,6 +148,11 @@ def classify_image(basename):
         return 'i2d-derived'
     if re.fullmatch(r'jw\d{5}-o\d{3}_t\d+_miri_f\d+w_i2d\.fits', b):
         return 'i2d-primary'
+    # cataloging-written MIRI mosaics (..._miri_clear-f770w-mirimage_<tag>_i2d.fits)
+    if re.fullmatch(r'jw\d{5}-o\d{3}_t\d+_miri_.+_i2d\.fits', b):
+        if re.search(r'-mirimage_data_i2d\.fits$', b):
+            return 'i2d-primary'
+        return 'i2d-derived'
     return 'skip'
 
 
@@ -568,6 +575,15 @@ def rotate_i2d(fn, model, *, visit_keys=(), table_sha='', dry_run=False, tol_mas
         return dict(status='already', file=fn)
     if 'A_ORDER' in sci or sci.get('CTYPE1', '').endswith('-SIP'):
         raise ImageRollError(f"{fn}: i2d with SIP distortion; expected a plain TAN grid")
+    # The GWCS update below needs the ASDF extension.  Some cataloging-written
+    # mosaics (the MIRI *_smoothed_bg_i2d.fits) carry only a SCI header; refuse
+    # them here, so the dry run reports them too, rather than failing with an
+    # AttributeError on meta.wcs part-way through an --apply.
+    with fits.open(fn) as hdul:
+        has_asdf = 'ASDF' in hdul
+    if not has_asdf:
+        raise ImageRollError(f"{fn}: no ASDF extension (no GWCS to update); "
+                             f"header-only i2d products are not handled")
     shape = (int(sci['NAXIS2']), int(sci['NAXIS1']))
     t0 = time.time()
     single = len(model.visits) == 1

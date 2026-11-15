@@ -19,8 +19,8 @@ import jwst_gc_pipeline.photometry.cataloging as C
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as L
 import jwst_gc_pipeline.reduction.saturated_star_finding as ssf
 from jwst_gc_pipeline.photometry.tests.test_gate_reject_handoff import (
-    BIG, BIG_AMP, SHAPE, _ctx_pass, _gaussian_grid_psf_fwhm, _has_fit_near,
-    _prep_options, _write_crf)
+    BIG, BIG_AMP, NO_DEFAULT_TARGET, SHAPE, _ctx_pass,
+    _gaussian_grid_psf_fwhm, _has_fit_near, _prep_options, _write_crf)
 
 SAT = L.dqflags.pixel['SATURATED']
 FWHM = 2.574
@@ -317,7 +317,8 @@ def test_cr_block_scene_end_to_end_hands_off_only_the_star(
     np.testing.assert_allclose(xy, [[WEAK[0], WEAK[1]]])
 
 
-def _prepare_with_drop(tmp_path, monkeypatch, *, write_drop=True):
+def _prepare_with_drop(tmp_path, monkeypatch, *, write_drop=True,
+                       target='gc-treasury'):
     for k, v in (('NIRCAM_SATSTAR_TIGHT_BOUND', '0'),
                  ('SATSTAR_COMPONENT_OVERLAP_FRAC', '0'),
                  ('NIRCAM_SATSTAR_LOCK_POS', '0'),
@@ -338,7 +339,7 @@ def _prepare_with_drop(tmp_path, monkeypatch, *, write_drop=True):
     monkeypatch.setattr(L, 'load_or_make_satstar_catalog',
                         lambda *a, **k: None)
     ctx = C._prepare_frame_for_photometry(
-        _prep_options(), 'F480M', 'nrcalong', '132', str(tmp_path), fn,
+        _prep_options(target), 'F480M', 'nrcalong', '132', str(tmp_path), fn,
         '10678', exposurenumber=4, visit_id=1, vgroup_id='02101',
         bg_boxsizes=None, use_webbpsf=True, pupil='clear',
         resbg_path=None, satstar_label='m7')
@@ -375,7 +376,8 @@ def test_prepare_switch_off_leaves_the_star_unmodelled(tmp_path, monkeypatch):
     and model-filled, no daophot row."""
     monkeypatch.setenv('DAOPHOT_HANDOFF_SEVERITY_DROPS', '0')
     monkeypatch.delenv('DAOPHOT_HANDOFF_UNACCEPTED_SAT', raising=False)
-    ctx, _ = _prepare_with_drop(tmp_path, monkeypatch)
+    ctx, _ = _prepare_with_drop(tmp_path, monkeypatch,
+                                target=NO_DEFAULT_TARGET)
     assert ctx.handoff_xy is None
     assert ctx.mask[_core()].all()
     assert not _has_fit_near(_ctx_pass(ctx, handoff=False), BIG)
@@ -385,7 +387,8 @@ def test_prepare_without_drop_file_is_unchanged(tmp_path, monkeypatch):
     """A satstar catalog cached before the drop file existed hands off nothing."""
     for k in ('DAOPHOT_HANDOFF_SEVERITY_DROPS', 'DAOPHOT_HANDOFF_UNACCEPTED_SAT'):
         monkeypatch.delenv(k, raising=False)
-    ctx, _ = _prepare_with_drop(tmp_path, monkeypatch, write_drop=False)
+    ctx, _ = _prepare_with_drop(tmp_path, monkeypatch, write_drop=False,
+                                target=NO_DEFAULT_TARGET)
     assert ctx.handoff_xy is None
     assert ctx.mask[_core()].all()
 

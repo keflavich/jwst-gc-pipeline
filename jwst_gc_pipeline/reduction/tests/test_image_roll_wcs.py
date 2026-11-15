@@ -68,6 +68,18 @@ def test_classify_image_miri():
     assert c('jw10678113001_02201_00001_mirimage_i2d.fits') == 'skip'
     assert c('jw10678113001_02201_00001_mirimage_ramp.fits') == 'skip'
     assert c('jw10678-o113_t001_miri_f770w_i2d.fits') == 'i2d-primary'
+    # cataloging-written MIRI mosaics
+    pre = 'jw10678-o066_t001_miri_clear-f770w-mirimage_'
+    assert c(pre + 'data_i2d.fits') == 'i2d-primary'
+    assert c(pre + 'm2_daophot_basic_mergedcat_residual_i2d.fits') == 'i2d-derived'
+    assert c(pre + 'resbgsub_m6_daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits') \
+        == 'i2d-derived'
+    assert c(pre + 'resbgsub_m6_daophot_basic_mergedcat_model_i2d.fits') == 'i2d-derived'
+    assert c(pre + 'm2_residual_i2d_badastrom.fits') == 'skip'
+    assert c(pre + 'm2_residual_i2d.tmp.fits') == 'skip'
+    assert c(pre + 'm2_residual_i2d.fits.rolltmp.fits') == 'skip'
+    assert c(pre + 'm2_residual_i2d.fits') == 'i2d-derived'
+    assert irw._prog_obs_from_name(pre + 'data_i2d.fits') == ('10678', '066', None)
     # image3 per-member intermediates are not products
     assert c('jw10678-o113_t001_miri_f770w_0_o113_crf.fits') == 'skip'
     assert c('jw10678-o113_t001_miri_f770w_segm.fits') == 'skip'
@@ -270,6 +282,23 @@ def test_i2d_multi_visit_reports_residual_and_needs_opt_in(tmp_path):
     r2 = irw.rotate_i2d(fn, model, allow_approx=True)
     assert r2['status'] == 'rotated'
     assert fits.getheader(fn, ('SCI', 1))['ROLLIRES'] == pytest.approx(r['max_mas'], rel=1e-6)
+
+
+def test_i2d_without_asdf_is_refused_in_dry_run_and_apply(tmp_path):
+    # MIRI *_smoothed_bg_i2d.fits: SCI header only, no ASDF GWCS
+    src = _synthetic_i2d(tmp_path / 'src_i2d.fits')
+    fn = str(tmp_path / ('jw10678-o066_t001_miri_clear-f770w-mirimage_resbgsub_m6_'
+                         'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits'))
+    with fits.open(src) as hdul:
+        fits.HDUList([fits.PrimaryHDU(header=hdul[0].header),
+                      fits.ImageHDU(data=hdul['SCI'].data, header=hdul['SCI'].header,
+                                    name='SCI')]).writeto(fn)
+    assert irw.classify_image(os.path.basename(fn)) == 'i2d-derived'
+    model = _model([('001', 21.97, 266.39150399, -29.15138395, [])])
+    for dry in (True, False):
+        with pytest.raises(irw.ImageRollError, match='no ASDF'):
+            irw.rotate_i2d(fn, model, dry_run=dry)
+    assert 'ROLLCORR' not in fits.getheader(fn, ('SCI', 1))
 
 
 def test_fit_tan_similarity_recovers_pure_rotation():

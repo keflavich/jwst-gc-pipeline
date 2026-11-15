@@ -292,7 +292,8 @@ Spaces are fine; only commas break. `run_pipeline` exports everything and passes
 **`EACH_SUFFIX` names the stage-1 products to photometer.** A field that
 destreaks writes `*_destreak_o<obs>_crf.fits`, and one that does not writes
 `*_align_o<obs>_crf.fits`; sickle differs between its short- and long-wavelength
-filters. `reduction/destreak_policy.py` decides, and both stages read it.
+filters, and gc-treasury between F212N (destreaks) and F480M (does not).
+`reduction/destreak_policy.py` decides, and both stages read it.
 
 **Exit status through a pipe.** `python ... | tee log` reports `tee`'s status, so
 a failed run looks clean. `submit_cataloging_perframe_phase.sbatch` pipes to

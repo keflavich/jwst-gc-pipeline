@@ -412,3 +412,64 @@ def test_chain_faint_row_solved_on_cumulative_subtraction(monkeypatch, capsys):
     fx, fy, ff = CHAIN['faint']
     peak = float(_gauss(fx, fy, ff, fx, fy))
     assert abs(_at(resid, (fx, fy))) < 0.03 * peak
+
+
+# ---------------------------------------------------------------------------
+# _manual_phot_pass, ungrouped (--no-group-fit): a 1.3 FWHM pair
+# ---------------------------------------------------------------------------
+UP_SHAPE = (100, 100)
+# the close pair of test_group_fit_default.py
+UP_PAIR = {'bright': (30.0, 40.0, 2.0e4), 'faint': (30.0 + 1.3 * FWHM, 40.4, 1.0e4)}
+
+
+def _ungrouped_pair_pass(monkeypatch, nbrsub):
+    """Rows of the bright and faint member of a pair fit without grouping.
+    The overshoot test itself picks the faint member for the refit."""
+    _set_nbrsub(monkeypatch, nbrsub)
+    yy, xx = np.mgrid[:UP_SHAPE[0], :UP_SHAPE[1]].astype(float)
+    img = 10.0 + sum(_gauss(xx, yy, f, x, y) for x, y, f in UP_PAIR.values())
+    img = img + np.random.default_rng(7).normal(0, 1.0, UP_SHAPE)
+    xs, ys, fs = np.array(list(UP_PAIR.values())).T
+    # seeds 0.3 px off the truth, as a detection would be
+    seed = Table({'x_init': xs + 0.3, 'y_init': ys - 0.2, 'flux_init': fs})
+    opts = types.SimpleNamespace(group=False, manual_group_fit=False,
+                                 satstar_artifact_sigK=3.0,
+                                 satstar_artifact_ratio=1.0)
+    res, _, _ = C._manual_phot_pass(
+        data=img, mask=np.zeros(UP_SHAPE, bool), err=np.ones(UP_SHAPE),
+        bad=np.zeros(UP_SHAPE, bool), dao_psf_model=_gaussian_grid_psf(),
+        init_params=seed, aperture_radius_pix=2 * FWHM, localbkg_inner=6,
+        localbkg_outer=10, grouper=None, options=opts,
+        dq=np.zeros(UP_SHAPE, np.uint32),
+        satstar_model_subtracted=np.zeros(UP_SHAPE), label='t',
+        near_sat_dist_pix=1.0)
+    rows = {}
+    for name, (x, y, _) in UP_PAIR.items():
+        d = np.hypot(np.asarray(res['x_fit'], float) - x,
+                     np.asarray(res['y_fit'], float) - y)
+        k = int(np.argmin(d))
+        assert d[k] < 1.0, name
+        rows[name] = res[k]
+    return rows
+
+
+@pytest.mark.parametrize('nbrsub, faint_ratio', [(False, 1.063), (True, 0.954)])
+def test_ungrouped_pair_faint_member_refit_flux(monkeypatch, nbrsub,
+                                                faint_ratio):
+    # Pins a known side effect of the neighbour subtraction on ungrouped
+    # runs.  Each ungrouped member absorbs part of the other's wing: the
+    # bright member fits at 1.045x and is not refit, and the faint member
+    # fits at 1.126x, overshoots (model/data peak 1.21) and is refit.  The
+    # raw-frame refit gives 1.063x.  With the neighbour subtraction the
+    # refit solves on a frame with the bright member's 1.045x model removed,
+    # which also takes out part of the faint member's light, so it gives
+    # 0.954x (pair sum 1.015x).  Grouped fitting fits this pair at 1.000x
+    # each with no refit (test_group_fit_default.py).
+    rows = _ungrouped_pair_pass(monkeypatch, nbrsub)
+    bright, faint = rows['bright'], rows['faint']
+    assert not bool(bright['forced_refit'])
+    assert bool(faint['forced_refit'])
+    assert float(bright['flux_fit']) / UP_PAIR['bright'][2] == \
+        pytest.approx(1.045, abs=0.01)
+    assert float(faint['flux_fit']) / UP_PAIR['faint'][2] == \
+        pytest.approx(faint_ratio, abs=0.01)

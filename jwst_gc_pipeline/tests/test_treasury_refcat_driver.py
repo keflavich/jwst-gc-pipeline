@@ -434,3 +434,94 @@ def test_the_tile_bound_is_on_by_default_and_zero_opts_out(monkeypatch, tmp_path
     seen.clear()
     DRIVER.main(['--base', str(tmp_path), '--tile-timeout', '0', '--force'])
     assert seen == [None], "0 must mean unbounded, not a 0 s timeout"
+
+
+# --------------------------------------------------------------------------
+# --emit-registry: only verified lines
+# --------------------------------------------------------------------------
+
+def _emit_tiles():
+    return [
+        DRIVER.Tile(obsid='102', target='GC_102', ra=266.8, dec=-28.3,
+                    radius_deg=0.17, epoch=2026.70, instruments=('nircam',)),
+        DRIVER.Tile(obsid='103', target='GC_103', ra=266.9, dec=-28.3,
+                    radius_deg=0.17, epoch=2026.70, instruments=('nircam',)),
+    ]
+
+
+def _registry_lines(out):
+    lines = out.splitlines()
+    return ([x for x in lines if x.strip() and not x.lstrip().startswith('#')],
+            [x for x in lines if x.lstrip().startswith('#')])
+
+
+def test_emit_registry_omits_a_failed_tile(monkeypatch, tmp_path, capsys):
+    """The block is meant to be pasted into fields.yaml.  A tile whose build
+    failed has no file, and a registered path with no file is found only when
+    a reduction fails on it."""
+    import subprocess as sp
+
+    def fake_run(cmd, timeout=None, **kw):
+        token = cmd[-1]
+        if token == '102':
+            return sp.CompletedProcess(cmd, 1)
+        (tmp_path / 'catalogs').mkdir(exist_ok=True)
+        (tmp_path / 'catalogs' / refcat_filename('2026.70', token)).write_text('')
+        return sp.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(DRIVER.subprocess, 'run', fake_run)
+    monkeypatch.setattr(DRIVER, 'query_tiles', lambda **kw: _emit_tiles())
+    rc = DRIVER.main(['--base', str(tmp_path), '--emit-registry'])
+    code, comments = _registry_lines(capsys.readouterr().out)
+    assert rc == 1
+    assert not any("'102':" in x for x in code)
+    assert any("'103': catalogs/gaia_virac2_refcat_epoch2026.70_o103.fits" in x
+               for x in code)
+    assert any("NOT REGISTERED (build failed): '102'" in x for x in comments)
+
+
+def test_emit_registry_requires_the_file_on_disk(monkeypatch, tmp_path, capsys):
+    """A build that returns 0 and writes nothing is not registered."""
+    import subprocess as sp
+
+    monkeypatch.setattr(DRIVER.subprocess, 'run',
+                        lambda cmd, timeout=None, **kw: sp.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(DRIVER, 'query_tiles', lambda **kw: _emit_tiles()[:1])
+    DRIVER.main(['--base', str(tmp_path), '--emit-registry'])
+    code, comments = _registry_lines(capsys.readouterr().out)
+    assert not any("'102':" in x for x in code)
+    assert any("NOT REGISTERED (no file on disk): '102'" in x for x in comments)
+
+
+def test_emit_registry_names_the_file_on_disk_not_the_computed_epoch(
+        monkeypatch, tmp_path, capsys):
+    """A skipped tile may hold a file under another epoch tag; the registry
+    must name that file."""
+    (tmp_path / 'catalogs').mkdir()
+    (tmp_path / 'catalogs' / refcat_filename('2026.50', '102')).write_text('')
+    monkeypatch.setattr(DRIVER, 'query_tiles', lambda **kw: _emit_tiles()[:1])
+    rc = DRIVER.main(['--base', str(tmp_path), '--emit-registry'])
+    code, _ = _registry_lines(capsys.readouterr().out)
+    assert rc == 0
+    assert ("'102': catalogs/gaia_virac2_refcat_epoch2026.50_o102.fits"
+            in '\n'.join(code))
+    assert '2026.70' not in '\n'.join(code)
+
+
+def test_emit_registry_dry_run_is_labelled(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(DRIVER, 'query_tiles', lambda **kw: _emit_tiles())
+    rc = DRIVER.main(['--base', str(tmp_path), '--dry-run', '--emit-registry'])
+    out = capsys.readouterr().out
+    code, comments = _registry_lines(out)
+    assert rc == 0
+    assert any('DRY RUN: predicted names for unbuilt tiles' in x
+               for x in comments)
+    assert any("'102': catalogs/gaia_virac2_refcat_epoch2026.70_o102.fits" in x
+               for x in code)
+
+
+def test_registry_block_uses_supplied_paths():
+    tiles = _emit_tiles()[:1]
+    block = DRIVER.registry_block(tiles, {'102': 2026.70},
+                                  {'102': 'custom_o102.fits'})
+    assert "'102': catalogs/custom_o102.fits" in block

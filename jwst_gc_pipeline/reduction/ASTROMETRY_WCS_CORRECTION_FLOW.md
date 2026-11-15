@@ -544,7 +544,7 @@ mechanism as `fix_alignment`); idempotency via the `DVACORR` marker keyword
 
 ---
 
-## Per-(detector, filter) frame correction (`filter_frame_correction.py`, opt-in)
+## Per-(detector, filter) frame correction (`filter_frame_correction.py`, on for F162M/F164N)
 
 **What it corrects.** The true filter-dependent placement of a NIRCam detector
 varies detector to detector inside a module, and nothing in the chain is keyed
@@ -578,7 +578,20 @@ the anchor, coefficient source and frame. Re-applying onto a *different* anchor
 is refused rather than skipped.
 
 **Policy.**
-- Opt-in: `FILTER_FRAME_CORRECTION=1`. Default off, byte-identical behaviour.
+- `fix_alignment` calls `apply_configured_filter_frame_correction` on every
+  frame, before the reference tie. `FILTER_FRAME_CORRECTION` unset (the
+  default) corrects **F162M and F164N only**, from the shipped table, onto
+  F212N. Their term is ~10 mas per detector (#1133) and fails the m7
+  cross-filter gate (cloudef jw02092-o002, #1255). `=1` adds every other
+  filter the table covers (F182M, F187N); `=0` corrects nothing.
+- Frames reduced before this default carry the term. Regenerate F162M/F164N
+  from `_cal` (or rerun `fix_alignment`; the shift commutes with the tie and
+  `FFRAMCOR` keeps it idempotent), then re-catalog.
+- Per-detector rows in a field's offsets table may already absorb part of the
+  term: the m2 visit consensus sees it wherever dithers mix detectors (cloudef
+  F162M: about 2.5 mas in Dec). After the correction those rows read as a
+  per-detector residual of the same size, which m2 corrects only above the
+  field's correction floor.
 - The gauge is per-module-mean-zero, so the correction is orthogonal to
   everything the offsets table expresses: it moves no visit bulk, no module tie
   and no reference tie. **It does not invalidate an offsets table and does not

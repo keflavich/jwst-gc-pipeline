@@ -3,7 +3,10 @@ import os
 if not os.getenv('STPSF_PATH'):
     raise ValueError("STPSF_PATH must be specified")
 
+import contextlib
+import functools
 import glob
+import re
 from astropy.io import fits
 from scipy.ndimage import label, find_objects, center_of_mass, sum_labels, binary_dilation
 from astropy.modeling.fitting import LevMarLSQFitter
@@ -13,6 +16,7 @@ import matplotlib.pyplot as plt
 #os.environ['stpsf_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
 import stpsf
 from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
+from jwst_gc_pipeline.mast_names import filtername_from_header
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
@@ -615,7 +619,7 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                          sat_data_floor=0.0, severity_floor=0.0,
                          partner_xy=None, partner_frac=0.25,
                          sibling_xy=None, sibling_radius_px=None,
-                         severity_drops=None):
+                         severity_drops=None, seed_require_sat_dq=False):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -645,6 +649,17 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
         When given, one dict per component the pre-fit severity gate drops is
         appended to it (``severity_drop_records``): the components this
         channel disowns as weakly saturated, for the daophot hand-off.
+    seed_require_sat_dq : bool, optional
+        Drop the peak-based and sub-floor seeds whose component holds no
+        DQ-SATURATED pixel (#991).  Those seeds exist for stars whose core is
+        suppressed without being flagged; where the filter's severity floor
+        sits below the flux at which the detector really flags saturation
+        (F212N: floor 4000, flag onset 38017 MJy/sr) they instead pick up
+        ordinary unsaturated stars.  The test reads the DQ array (SATURATED
+        after the cosmic-ray cleanup, before the data-floor and severity
+        gates), not the seed kind: a flagged component the severity gate
+        dropped is re-seeded as ``subfloor`` and still carries the flag.
+        Partner and sibling seeds are not affected.  Default off.
 
     Returns
     -------
@@ -718,6 +733,8 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     else:
         remove_as_cr = cosmic_rays
     saturated = saturated & (~remove_as_cr)
+    # DQ-SATURATED pixels before any gate or seed; read by seed_require_sat_dq.
+    _sat_dq_pre = saturated.copy()
 
     sources, nsource = label(saturated)
     print('Saturated starfinding: nsources=', nsource, flush=True)
@@ -893,6 +910,29 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                       f"{len(keep_lab)} suppression-strip component(s) "
                       f"(data > {_subfloor_frac:g} x {severity_floor:g}) "
                       f"-> nsources={nsource}", flush=True)
+
+    # SEED-REQUIRES-SAT-DQ (#991): drop peak / sub-floor components with no
+    # DQ-SATURATED pixel.  Runs before the partner and sibling blocks so their
+    # seeds (kinds 4, 5) can still claim the pixels; _kind_img is cleared on
+    # the dropped pixels for that.  A component that merged with a flagged one
+    # reads kind 1 and is kept; so is a flagged component the severity gate
+    # dropped and the sub-floor block re-seeded (its _sat_dq_pre pixels).
+    if seed_require_sat_dq and severity_floor and severity_floor > 0 and nsource:
+        _idx = np.arange(1, nsource + 1)
+        _has_dq = np.asarray(ndimage.maximum(
+            _sat_dq_pre.astype(np.uint8), labels=sources, index=_idx)) > 0
+        _kmin_seed = np.asarray(ndimage.minimum(
+            np.where(_kind_img > 0, _kind_img, np.uint8(255)),
+            labels=sources, index=_idx))
+        _no_dq_lab = _idx[(~_has_dq) & np.isin(_kmin_seed, (2, 3))]
+        if len(_no_dq_lab):
+            _gone = np.isin(sources, _no_dq_lab)
+            saturated = saturated & (~_gone)
+            _kind_img[_gone] = 0
+            sources, nsource = label(saturated)
+            print(f"Saturated starfinding: seed-requires-SAT-DQ dropped "
+                  f"{len(_no_dq_lab)} peak/sub-floor seed(s) with no "
+                  f"DQ-SATURATED pixel -> nsources={nsource}", flush=True)
 
     # PARTNER-BAND SEEDING (Phase A1, pair-consistent substitution): positions
     # where the SAME star was accepted as a satstar in a near-degenerate
@@ -1230,6 +1270,100 @@ def satstar_fit_switches(env=None):
     }
 
 
+#: The satstar fit switches that ``SATSTAR_OPTIN_FILTERS`` scopes by bandpass.
+#: ``SATSTAR_QFIT_LOCAL_R`` goes with the gate: left set, an out-of-scope
+#: band would still compute the ``qfit_local`` column and carry a different
+#: cache key from a run that never exported the gate.
+SATSTAR_OPTIN_ENV = ('SATSTAR_ZF_KEEP_FINITE', 'SATSTAR_OBS_PK_FROM_CRF',
+                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R')
+_OPTIN_BANDPASS_RE = re.compile(r'^F\d{3,4}(W2|[WMN])$')
+
+
+def satstar_optin_in_scope(filtername, env=None):
+    """Whether the opt-in satstar fit switches (``SATSTAR_OPTIN_ENV``) apply to
+    ``filtername``.
+
+    Env ``SATSTAR_OPTIN_FILTERS`` lists bandpasses, comma- or space-separated
+    (``F480M`` or ``F480M,F405N``).  Unset or blank applies the switches to
+    every bandpass, as before.  The chain launcher takes one environment per
+    chain, so a field whose two bands need different switches (gc-treasury:
+    F480M opt-ins, F212N without) sets the switches once and lists the band
+    that gets them here.
+
+    Raises
+    ------
+    ValueError
+        A listed name is not a bandpass, or the variable is set and
+        ``filtername`` is empty.  A typo would otherwise switch the opt-ins
+        off for every bandpass without a word, and the satstar cache key
+        would record the off state.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_OPTIN_FILTERS', '')
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if not _OPTIN_BANDPASS_RE.match(tok)]
+    if bad:
+        raise ValueError(
+            f"SATSTAR_OPTIN_FILTERS={raw!r}: {bad} not bandpass names (e.g. "
+            f"'F480M' or 'F480M,F405N'; unset applies the opt-in satstar "
+            f"switches to every bandpass)")
+    if not scope:
+        return True
+    if not filtername:
+        raise ValueError(
+            f"SATSTAR_OPTIN_FILTERS={raw!r} is set but the frame has no FILTER "
+            f"keyword, so the opt-in scope cannot be decided")
+    return str(filtername).upper() in scope
+
+
+@contextlib.contextmanager
+def satstar_optin_scope(filtername):
+    """Run a satstar fit with the opt-in switches of ``SATSTAR_OPTIN_ENV``
+    removed from the environment when ``filtername`` is outside
+    ``SATSTAR_OPTIN_FILTERS``; restore them on exit.
+
+    The fit reads these switches from ``os.environ`` at many points (the
+    switch signature, the ZEROFRAME anchor, the fit-quality gate), so the
+    scope is applied around the whole fit.  Removed means unset: each switch
+    takes its default, exactly as in a run that never exported it.
+    """
+    if satstar_optin_in_scope(filtername):
+        yield
+        return
+    saved = {k: os.environ.pop(k) for k in SATSTAR_OPTIN_ENV
+             if k in os.environ}
+    if saved:
+        print(f"satstar: SATSTAR_OPTIN_FILTERS="
+              f"{os.environ.get('SATSTAR_OPTIN_FILTERS', '')!r} does not list "
+              f"{filtername}: {', '.join(sorted(saved))} unset for this frame",
+              flush=True)
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+def satstar_optin_scoped(func):
+    """Decorate a function whose first argument is a frame path (or keyword
+    ``filename``): run it under ``satstar_optin_scope`` for that frame's
+    science bandpass (``mast_names.filtername_from_header``).
+    The header is read only when ``SATSTAR_OPTIN_FILTERS`` is set."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if not os.environ.get('SATSTAR_OPTIN_FILTERS', '').strip():
+            return func(*args, **kwargs)
+        filename = args[0] if args else kwargs['filename']
+        # FILTER alone misreads NIRCam pupil-wheel bands: FILTER=F444W,
+        # PUPIL=F405N is an F405N exposure.
+        try:
+            filtername = filtername_from_header(fits.getheader(filename, 0))
+        except (OSError, ValueError):
+            filtername = ''
+        with satstar_optin_scope(filtername):
+            return func(*args, **kwargs)
+    return wrapper
+
+
 def _satstar_data_floor_signature(filename, env=None):
     """``'dfr<FRAC>'`` when ``get_saturated_stars`` will take this frame's data
     floor from the readout (it lowers the per-filter table entry and env
@@ -1267,11 +1401,31 @@ def satstar_uncapped_flux_filters(env=None):
     return frozenset(tok.upper() for tok in raw.replace(',', ' ').split())
 
 
+def satstar_seed_require_sat_dq_filters(env=None):
+    """Bandpasses whose peak-based and sub-floor satstar seeds must hold a
+    DQ-SATURATED pixel (``find_saturated_stars(seed_require_sat_dq=...)``),
+    from ``SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS`` (#991).
+
+    Comma- and/or space-separated bandpass names, case-insensitive (returned
+    upper-case); unset or blank -> empty, i.e. no behaviour change.  The
+    variable changes the fitted seed set and the satstar cache key, so a
+    name that is not a bandpass raises ``ValueError`` rather than switching
+    the filter off without a word."""
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS') or ''
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if not _OPTIN_BANDPASS_RE.match(tok)]
+    if bad:
+        raise ValueError(
+            f"SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS={raw!r}: {bad} not bandpass "
+            f"names (e.g. 'F212N' or 'F212N,F405N')")
+    return frozenset(scope)
+
+
 def _frame_bandpass(header):
     """The science bandpass of an exposure header (pupil-wheel narrow/medium
     bands win over the wide filter-wheel blocker, #950), upper-case; ``''``
     when the header names no bandpass."""
-    from ..mast_names import filtername_from_header
     try:
         return str(filtername_from_header(header)).upper()
     except (ValueError, KeyError):
@@ -1409,6 +1563,12 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
+    # Single-group (G1-only) pixels flagged from the ramp change the seeds and
+    # the fit on frames that have any; a catalog fitted without it is stale.
+    from jwst_gc_pipeline.reduction import g1only_dq
+    g1 = g1only_dq.signature(filename)
+    if g1:
+        parts.append(g1)
     if satstar_uncapped_flux_filters(env):
         # NIRCAM_SATSTAR_UNCAPPED_FLUX_FILTERS changes the per-frame catalog
         # flux_fit/flux_err (not the model) of the listed bandpasses (#1186),
@@ -1422,6 +1582,18 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             _bp = ''
         if _bp in satstar_uncapped_flux_filters(env):
             parts.append('uf')
+    if satstar_seed_require_sat_dq_filters(env):
+        # SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS changes the seed set (#991), so
+        # a catalog written without it is stale for the listed bandpasses.
+        # Same per-frame bandpass rule as 'uf'; the default (empty list) and
+        # every unlisted band keep their keys.
+        try:
+            with fits.open(filename) as fh:
+                _bp = _frame_bandpass(fh[0].header)
+        except OSError:
+            _bp = ''
+        if _bp in satstar_seed_require_sat_dq_filters(env):
+            parts.append('sd')
     return '_'.join(parts)
 
 
@@ -3591,7 +3763,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
         sat_data_floor=_sat_floor, severity_floor=_sev_floor,
         partner_xy=_partner_xy, sibling_xy=_sibling_xy,
-        severity_drops=_severity_drops)
+        severity_drops=_severity_drops,
+        seed_require_sat_dq=(_frame_bandpass(header)
+                             in satstar_seed_require_sat_dq_filters()))
     # Weakly saturated stars the pre-fit severity gate disowned and no later
     # seeding took back: remove_saturated_stars persists them for the
     # daophot hand-off (severity_drop_table).
@@ -6155,7 +6329,6 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
 def _find_ramp_for(filename):
     """Return the path to the sibling ``_ramp.fits`` for a cal/crf ``filename``,
     or None.  Shared by the ZEROFRAME loader and the first-group saturation map."""
-    import re
     base = os.path.basename(filename)
     m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', base)
     if not m:
@@ -6341,7 +6514,6 @@ def _find_cal_for(filename):
     """The Image2 ``_cal.fits`` of a crf / destreak / align product, from the
     same exposure stem in the same directory, or None (also None when
     ``filename`` is that cal)."""
-    import re
     m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', os.path.basename(filename))
     if not m:
         return None
@@ -6578,6 +6750,12 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     """
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
+    # Single-group (G1-only) NIRCam pixels carry a ~0.75x rate with clean DQ;
+    # flag them SATURATED|DO_NOT_USE (+ NaN) from the sibling _ramp.fits so
+    # the finder seeds them and the first-read recovery rebuilds them.
+    # In memory, idempotent; G1ONLY_SAT_DQ=0 disables.  See g1only_dq.py.
+    from jwst_gc_pipeline.reduction import g1only_dq
+    g1only_dq.apply_to_hdul(fh, filename, label='satstar')
     data = fh['SCI'].data
 
     # Correct the SATURATED DQ bit to FIRST-group saturation (env-gated, MIRI).
@@ -6682,8 +6860,13 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         _sev_fn = filename.replace(
             ".fits", f'{file_suffix}_satstar_severity_dropped.fits')
         _sev_dropped.meta.update(fh[0].header)
+        # Always replaced: a frame with no saturated stars has no satstar
+        # catalog to hit the cache above, so every rerun lands here with the
+        # previous run's (possibly empty) file in place.  gc3571 o001 m12
+        # re-run after a regeneration: 4 of 8 fan-out tasks died on
+        # "already exists" for this file.
         _publish_satstar_product(
-            _sev_fn, lambda p: _sev_dropped.write(p, overwrite=True), overwrite)
+            _sev_fn, lambda p: _sev_dropped.write(p, overwrite=True), True)
         print(f"Saved {len(_sev_dropped)} severity-gate drop(s) to {_sev_fn}",
               flush=True)
     if satstar_table is not None:

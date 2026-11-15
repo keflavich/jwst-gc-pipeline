@@ -389,6 +389,9 @@ still run after m6.
 | `--local-snr-threshold` | 5.0 | 5.0 | 5.0 | 5.0 | m1 per-source local S/N |
 | `--manual-keep-intermediate-model-i2d` | off | off | off | off | write a model i2d for every phase; off writes the last phase only |
 | `--manual-model-i2d-all-modules` | off | off | off | off | write the last phase's model i2d for nrca/nrcb too; off writes the merged module's only (every module's when the run has no merged module) |
+| `--manual-xexp-audit` / `--no-manual-xexp-audit` | on | on | on | on | cross-exposure audit at the m12 merge: adds `ncover`, `nfound`, `single_exposure` (see Key behaviours); full-frame only |
+| `--manual-xexp-single-snr` | 50.0 | 50 | 50 | 50 | S/N of the merged flux a row needs to count as bright for `single_exposure` (saturated rows always do) |
+| `--manual-xexp-single-top-pct` | 5.0 | 5 | 5 | 5 | and its merged flux must be in the brightest this-many percent of the rows two or more frames cover (100 = no rank cut) |
 | prominence gate (`miri_prominence_snr`) | 5.0 in `MANUAL_DEFAULTS`/`mopt`; no CLI flag (the `do_photometry_step_manual` signature default of 0.0 applies only to direct callers) | 0 (off — NIRCam leaves it 0) | 0 (off) | **8→3 progressive** (m12:8, m4:5.5, m6:3), scheduled by `miri_tuning` |
 | `--nircam-prom-m1` / `-m2` / `-m3plus` | 0.0 | 0 (off) | 0 (off; opt-in) | n/a |
 | `--group` | off | off (pass `--group`) | | |
@@ -450,6 +453,38 @@ Notes on the tri-state and env-driven values:
   holes out of the next fit.
 - **`iter_found` column.** Every merged catalog records the first iteration
   (2..7) each source appears in, matched across phases by sky position.
+- **Cross-exposure audit (m12 merge).** Every m12 frame runs alone, so nothing
+  compares what the exposures of one patch of sky contain. After the per-frame
+  merge and the astrometry checkpoint, each row of the m2 merged catalog gets
+  `ncover` (frames that cover the position: inside the array, at least 6 px from
+  the edge, not inside a masked region of more than 2000 px; a saturated or NaN
+  core is a hole in a frame that holds the star, so it still counts),
+  `nfound` (frames with a daophot row within 0.10″ whose flux is within ×3, or a
+  satstar row within 0.30″, read at its `xcentroid`/`ycentroid` because a satstar
+  catalog's `x_fit`/`y_fit` are stamp coordinates; a saturated merged row also
+  takes a daophot row out to 0.30″ with a lower flux bound only) and `single_exposure` (bright: saturated, or S/N ≥
+  `--manual-xexp-single-snr` (50) and merged flux in the brightest
+  `--manual-xexp-single-top-pct` (5) percent of the rows two or more frames cover;
+  covered by two or more frames; carried by exactly one). The rank cut is there
+  because the catalogs' flux errors do not carry the pixel noise equally in every
+  band: in o078 F480M, S/N ≥ 50 passes 70% of the multi-covered rows. Diagnostic only: no row is added, removed or refitted.
+  A star in the merged catalog is subtracted from every frame that covers it by
+  `build_mergedcat_residuals` (it rebuilds `raw residual + raw model` and renders
+  the vetted merged catalog), whether or not that frame fitted it. On o078 F212N
+  (nrcb1) the peak S/N left at the position of a bright row that one covering
+  exposure lacks has a median of 297 in the raw m2 residual and 13.7 after that
+  render, against 12.4 at positions every exposure carries. The columns are for
+  vetting and QA; `--no-manual-xexp-audit` skips the pass, and
+  `scripts/analysis/xexp_audit.py` reports it across fields without writing any
+  production file; it recomputes from the per-frame catalogs now on disk, and its
+  `frames newer` column counts frames rewritten after the merged catalog (above
+  zero, the counts compare two runs and `none` reads high). Matching is not
+  one-to-one: a frame's daophot row is the counterpart of every merged row within
+  the radius, so in a close pair `nfound` can exceed the number of distinct
+  detections, and a row the frame did not detect can be found through its
+  neighbour's row. The columns enter the m2 catalog's provenance hash, so a chain
+  that was finalized before this pass existed shows its m3 and later products as
+  stale once its m12 finalize is repeated.
 - **Cross-band (m7).** Multi-filter runs union the per-filter vetted m6 catalogs,
   dedup co-located positions (`--manual-crossband-seed-dedup-mas=30`), and can
   require independent ≥`--manual-crossband-seed-min-filters` confirmation.

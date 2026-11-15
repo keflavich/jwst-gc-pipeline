@@ -446,8 +446,8 @@ def test_max_group_size_reaches_the_manual_grouper(tmp_path, monkeypatch, argv, 
     from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
     cli = _parse(monkeypatch, argv)
     base = G._prep_options
-    monkeypatch.setattr(G, '_prep_options', lambda: types.SimpleNamespace(
-        **{**vars(base()), 'max_group_size': cli.max_group_size}))
+    monkeypatch.setattr(G, '_prep_options', lambda *a: types.SimpleNamespace(
+        **{**vars(base(*a)), 'max_group_size': cli.max_group_size}))
     ctx, _ = G._prepare(tmp_path, monkeypatch)
     assert isinstance(ctx.grouper, L.CappedSourceGrouper)
     assert ctx.grouper.max_size == cap

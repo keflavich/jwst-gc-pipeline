@@ -21,7 +21,7 @@ Two rules shape every glob here, both learned from bugs:
    naming.PER_OBS_MERGED_PROPOSALS) -- the ambiguity is REPORTED
    (``scope='ambiguous'``) rather than resolved by guessing.
 
-2. **Follow symlinks.**  ``brick``, ``cloudc`` and ``wd1`` under
+2. **Follow symlinks.**  ``brick`` and ``wd1`` under
    ``/orange/adamginsburg/jwst`` are symlinks into ``/blue`` and
    ``/orange/adamginsburg/westerlund``; a scan that does not resolve them
    silently reports the flagship fields as empty.

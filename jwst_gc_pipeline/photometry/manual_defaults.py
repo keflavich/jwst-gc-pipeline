@@ -231,6 +231,18 @@ MANUAL_DEFAULTS = {
     # maps, plus every phase's residual and model mosaics as diagnostics.
     # True restores every phase's map.
     'manual_keep_intermediate_smoothed_bg': False,
+    # -- cross-exposure consistency of the m2 per-frame products
+    # (photometry/xexp_reconcile.py).  After the per-frame merge, count for every
+    # merged row the exposures that cover it and the ones that carry it, and add
+    # `ncover`, `nfound` and `single_exposure` (a bright or saturated row that
+    # two or more frames cover and only one carries) to the m2 merged catalog.
+    # Adds columns only; nothing is removed or refitted.
+    'manual_xexp_audit': True,
+    # `single_exposure` needs a merged S/N of at least this AND a merged flux in
+    # the brightest `manual_xexp_single_top_pct` percent of the rows two or more
+    # frames cover (or is_saturated); 100 switches the rank cut off
+    'manual_xexp_single_snr': 50.0,
+    'manual_xexp_single_top_pct': 5.0,
 }
 
 

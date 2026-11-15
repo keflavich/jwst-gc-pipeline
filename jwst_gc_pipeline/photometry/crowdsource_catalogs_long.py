@@ -636,7 +636,7 @@ from crowdsource.crowdsource_base import fit_im
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
     remove_saturated_stars, correct_dq_first_group_saturation,
-    satstar_fit_switch_signature,
+    satstar_fit_switch_signature, satstar_optin_scoped,
     # `cataloging._prepare_frame_for_photometry` reaches BOTH DQ helpers through
     # this module -- `_L.correct_dq_first_group_saturation(...)` and then
     # `_L.truly_lost_saturated_mask(...)` on the very next line.  Only the first
@@ -1944,6 +1944,7 @@ def annotate_and_filter_by_local_snr(detection_table, noise_map, snr_threshold=5
     return filtered, stats
 
 
+@satstar_optin_scoped
 def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merged=False, overwrite=False,
                                  outside_star_pixels=None, outside_star_fit_box=512,
                                  forced_grid_search_radius=5,
@@ -2356,6 +2357,12 @@ def save_photutils_results(result, ww, filename,
 def load_data(filename):
     fh = fits.open(filename)
     im1 = fh
+    # Single-group (G1-only) NIRCam pixels -> SATURATED|DO_NOT_USE + NaN, from
+    # the sibling _ramp.fits, in memory (crf written before the reduction-side
+    # hook carry a ~0.75x rate there).  No-op for mosaics / non-NIRCam;
+    # G1ONLY_SAT_DQ=0 disables.  See reduction/g1only_dq.py.
+    from jwst_gc_pipeline.reduction import g1only_dq
+    g1only_dq.apply_to_hdul(im1, filename, label='load_data')
     data = im1['SCI'].data
     try:
         wht = im1['WHT'].data
@@ -5421,6 +5428,32 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'map, so a completed run keeps the last two.  Residual '
                             'and model mosaics are kept regardless.  Set this to '
                             'keep every phase\'s map.'))
+    parser.add_option('--manual-xexp-audit', dest='manual_xexp_audit',
+                      default=MANUAL_DEFAULTS['manual_xexp_audit'],
+                      action='store_true',
+                      help=('After the m2 per-frame merge, add ncover, nfound and '
+                            'single_exposure to the merged catalog: how many '
+                            'exposures cover each source, how many carry it, and '
+                            'whether a bright or saturated source is carried by '
+                            'one exposure of two or more that cover it.  Adds '
+                            'columns only.  ON by default.'))
+    parser.add_option('--no-manual-xexp-audit', dest='manual_xexp_audit',
+                      default=MANUAL_DEFAULTS['manual_xexp_audit'],
+                      action='store_false',
+                      help='Skip the cross-exposure audit columns.')
+    parser.add_option('--manual-xexp-single-snr', dest='manual_xexp_single_snr',
+                      type='float', default=MANUAL_DEFAULTS['manual_xexp_single_snr'],
+                      help=('single_exposure flags sources with a merged S/N of '
+                            'at least this (and in the brightest '
+                            '--manual-xexp-single-top-pct percent of the sources two '
+                            'or more exposures cover), or any saturated source.'))
+    parser.add_option('--manual-xexp-single-top-pct',
+                      dest='manual_xexp_single_top_pct', type='float',
+                      default=MANUAL_DEFAULTS['manual_xexp_single_top_pct'],
+                      help=('single_exposure flags only sources whose merged flux '
+                            'is in the brightest this-many percent of the sources '
+                            'two or more exposures cover (or any saturated '
+                            'source); 100 switches the rank cut off.'))
     parser.add_option('--bundle-size', dest='bundle_size',
                       default=1, type='int',
                       help='Number of consecutive per-exposure iterations each SLURM array task handles (default 1 = one exposure per task).')

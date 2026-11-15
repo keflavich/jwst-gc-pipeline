@@ -311,7 +311,7 @@ it, and for `MANIFEST.json`'s `joint_catalog.gate_override`, before trusting a
     at staging time rather than from the page.
   - `link mode symlink` in `MANIFEST.json` or at staging means the field's data
     are on a different filesystem from the release root, where a hardlink is
-    impossible (brick and cloudc: `/blue` vs `/orange`). Those frames are
+    impossible (brick: `/blue` vs `/orange`). Those frames are
     Globus-transfer-only — the HTTPS data plane will not serve a symlink
     pointing out of the release tree — and the page and README say so. Audit a
     staged field with `stage_release.py --check-exposures --field <field>`,
@@ -464,6 +464,14 @@ Each cost real time or coverage this week, and none of them raises anything.
          .auto.lock says: 549716 avm-astrometry-rebuild 2026-09-14T13:35:57
          WAITING ON THE LOCK: 3 item(s)
            o105 NIRCam -- no RGB yet
+
+   When `publish_hips_layers.py` meets a held lock it judges the holder in this
+   order (#953). A lock line may end in `job=<SLURM job id>`; a listed job
+   (`squeue`) keeps the lock up to 10 h, and a job that has left the queue
+   releases it after a 10 min grace. A line with no job id, or an `squeue` that
+   cannot answer, is judged by file age: `HIPS_LOCK_STALE_S`, default 10 h
+   (the builder job's wall is 8 h). While it holds the lock the publisher
+   touches the file every 5 min.
 
 2. **A missing input reported as a build failure** — the `MIRI_MATCH_JSON` case
    above.

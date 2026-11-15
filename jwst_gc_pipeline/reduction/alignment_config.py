@@ -237,6 +237,35 @@ class FieldAlignment:
     #: visit consensus that carries the same roll, plus one bulk shift per
     #: visit, so no row absorbed a module-centre displacement.
     roll_ready: bool = False
+    #: ``TABLE_CONSENSUS`` only: the consensus offsets table is this field's
+    #: ONLY per-frame correction, so the MIRI reducer skips TweakRegStep
+    #: (relative and absolute) for every association -- what it already does
+    #: when every frame inherits its bulk (``InheritedBulk``).  Needed where
+    #: Image3's absolute fit ties each frame to the same reference catalog
+    #: the m2 checkpoint checks against.  That fit starts from the
+    #: fix_alignment-shifted WCS and solves back to its own answer, so the
+    #: table's bulk row cancels and m2 reads the same residual after every
+    #: regeneration.  gc3571 o001 F560W, 2026-09-10 -> 09-13: applying the
+    #: table's (-16.7, -43.0) mas bulk changed the absolute tweakreg shift from
+    #: (20.4, -175.6) to (37.1, -132.6) mas, i.e. by exactly the bulk with
+    #: the sign flipped, and m2 read the visit consensus ~47 mas off VIRAC2
+    #: both times.  With the flag on, a frame whose visit has no row yet sits
+    #: at its raw pointing until m2 writes one.
+    table_only_tie: bool = False
+    #: ``'<field>:<FILTER>'`` entries (e.g. ``'003:F770W'``) naming the
+    #: (observation, filter) pairs whose every per-frame catalog is EMPTY
+    #: because the detector finds nothing there (MIRI long-wave bands over
+    #: faint, mostly extended emission).  For these the per-filter merge writes
+    #: a zero-row product instead of stopping, and the m2 checkpoint does not
+    #: run on it: there are no sources to register, so the filter is logged as
+    #: UNVERIFIED rather than passed, and a record named
+    #: ``unverified_empty_<stage>_<FILTER>_o<field>.json`` is written under
+    #: ``astrometry_checkpoints/``.  Every pair NOT listed here keeps the
+    #: strict behaviour -- an empty filter stops the merge with
+    #: ``AllFramesEmptyError`` -- because an all-empty filter elsewhere is
+    #: more likely a failed detection run than a faint field.  Add a pair only
+    #: after confirming the frames really contain no detections.
+    empty_filters: Tuple[str, ...] = ()
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -499,10 +528,15 @@ ALIGNMENT_CONFIG = (
         proposal='5365', fields=None,
         reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F212N',
+        roll_ready=True,
         notes=('sgrb2. Absent from the old dispatch -> unaligned, while its '
                'builder-written VIRAC2locked table holds 264 real rows across 11 '
                'filters (median |offset| ~126 mas) that nothing read. 14 filter '
-               'directories, so the reference band matters most here.'),
+               'directories, so the reference band matters most here. '
+               'roll_ready=True (2026-10-29, #790): frames regenerated from now on '
+               'carry the 9.57" data-qa#346 roll; the locked table is then rebuilt '
+               'from the rolled frames (build_virac2_offsets --region sgrb2 '
+               '--per-module) and the frames regenerated again before release.'),
     ),
     FieldAlignment(
         proposal='1939', fields=('001',),
@@ -896,11 +930,22 @@ ALIGNMENT_CONFIG = (
                "pipeline's business."),
     ),
     # gc3571 -- MIRI imaging of the CMZ from program 3571 (Yusef-Zadeh), five
-    # tiles around Sgr A*.  Identical reasoning to the gc1266 entry above.
+    # tiles around Sgr A*.  Identical reasoning to the gc1266 entry above,
+    # plus table_only_tie: Image3's absolute tweakreg cancelled o001's m2 bulk
+    # row on regeneration (see FieldAlignment.table_only_tie).
     FieldAlignment(
         proposal='3571', fields=('001', '003', '004', '005', '016'),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F560W',
+        table_only_tie=True,
+        # Every per-frame catalog of these pairs has 0 rows (daofind finds no
+        # detections in any of the 8 frames; o003 cycle 3 m12 finalize 49062228
+        # died on them, 2026-11-03; o016 cycle 4 m12 finalize 50628029 on
+        # 2026-11-10, where 81-83% of pixels carry the SATURATED DQ bit while
+        # F560W/F1000W keep ~700-1100 rows per frame).  Confirmed pair by pair
+        # from the m2 per-frame catalogs, not inferred from the filter.
+        empty_filters=('003:F770W', '003:F1280W', '003:F1500W', '004:F770W',
+                       '016:F770W', '016:F1280W', '016:F1500W'),
         notes=('gc3571 MIRI imaging (F560W/F770W/F1000W/F1280W/F1500W, obs '
                '001/003/004/005/016 = Tiles 1/2/3/4/6, five adjoining '
                'pointings spanning 3.22 arcmin about (266.41973, -29.00509), '
@@ -1093,6 +1138,30 @@ def inherited_bulk(proposal_id, field, module):
     if cfg is None or cfg.source != TABLE_CONSENSUS:
         return None
     return cfg.inherit_bulk.get(module)
+
+
+def table_only_tie(proposal_id, field):
+    """Whether this field's consensus offsets table is its only per-frame
+    correction (:attr:`FieldAlignment.table_only_tie`)."""
+    cfg = resolve(str(proposal_id), str(field) if field is not None else None)
+    return (cfg is not None and cfg.source == TABLE_CONSENSUS
+            and cfg.table_only_tie)
+
+
+def empty_filter_allowed(proposal_id, field, filt):
+    """Whether an all-empty ``filt`` catalog is expected for this observation
+    (:attr:`FieldAlignment.empty_filters`).
+
+    Matching is exact on the ``'<field>:<FILTER>'`` pair, case-insensitive on
+    the filter: no wildcard, and no inheritance from another observation or
+    filter of the same program.
+    """
+    if field is None or filt is None:
+        return False
+    cfg = resolve(str(proposal_id), str(field))
+    if cfg is None:
+        return False
+    return f'{field}:{str(filt).upper()}' in cfg.empty_filters
 
 
 def reference_catalog_required(proposal_id, field):

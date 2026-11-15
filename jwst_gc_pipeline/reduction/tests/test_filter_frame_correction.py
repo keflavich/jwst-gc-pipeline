@@ -94,13 +94,22 @@ def test_instrument_to_sky_round_trips():
     assert np.allclose(sky["NRCA1"], (0.0, -1.0), atol=1e-9)
 
 
-def test_correction_enabled_is_off_by_default(monkeypatch):
+def test_correction_mode_defaults_to_the_medium_narrow_filters(monkeypatch):
     monkeypatch.delenv("FILTER_FRAME_CORRECTION", raising=False)
-    assert not ffc.correction_enabled()
+    assert ffc.correction_mode() == "default"
+    monkeypatch.setenv("FILTER_FRAME_CORRECTION", "")
+    assert ffc.correction_mode() == "default"
     monkeypatch.setenv("FILTER_FRAME_CORRECTION", "1")
-    assert ffc.correction_enabled()
+    assert ffc.correction_mode() == "all"
     monkeypatch.setenv("FILTER_FRAME_CORRECTION", "0")
-    assert not ffc.correction_enabled()
+    assert ffc.correction_mode() == "off"
+    assert ffc.DEFAULT_ON_FILTERS == ("F162M", "F164N")
+
+
+def test_correction_mode_refuses_an_unrecognised_value(monkeypatch):
+    monkeypatch.setenv("FILTER_FRAME_CORRECTION", "F162M")
+    with pytest.raises(ffc.FilterFrameError, match="expected 1"):
+        ffc.correction_mode()
 
 
 def test_gdc_offsets_match_the_documented_amplitudes():
@@ -311,3 +320,118 @@ def test_miri_names_do_not_masquerade_as_two_micron():
     assert ffc.filter_wavelength_um("F212N") == pytest.approx(2.12)
     assert ffc.anchor_filter(["F1000W", "F1500W", "F2100W"]) == "F1000W"
     assert ffc.anchor_filter(["F1000W", "F212N"]) == "F212N"
+
+
+# ---------------------------------------------------------------------------
+# the fix_alignment entry point (#1255): which frames it corrects
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("filt, pupil, expected", [
+    ("F150W2", "F162M", "F162M"),
+    ("F150W2", "F164N", "F164N"),
+    ("F444W", "F405N", "F405N"),
+    ("F210M", "CLEAR", "F210M"),
+    ("F200W", "MASKBAR", "F200W"),
+    ("F182M", None, "F182M"),
+])
+def test_frame_filter_name_prefers_a_pupil_wheel_filter(filt, pupil, expected):
+    assert ffc.frame_filter_name(filt, pupil) == expected
+
+
+@pytest.mark.parametrize("inst, det, filt, mode, expected", [
+    ("NIRCAM", "NRCB1", "F162M", "default", "F162M"),
+    ("NIRCAM", "NRCA4", "F164N", "default", "F164N"),
+    ("NIRCAM", "NRCB1", "F210M", "default", None),
+    ("NIRCAM", "NRCB1", "F182M", "default", None),
+    ("NIRCAM", "NRCB1", "F182M", "all", "F182M"),
+    ("NIRCAM", "NRCB1", "F162M", "off", None),
+    # a LW module has one detector: the gauge is zero, nothing to apply
+    ("NIRCAM", "NRCBLONG", "F405N", "all", None),
+    ("MIRI", "MIRIMAGE", "F770W", "all", None),
+])
+def test_configured_filter_selection(inst, det, filt, mode, expected):
+    assert ffc.configured_filter(inst, det, filt, mode) == expected
+
+
+def test_configured_filter_refuses_an_unknown_mode():
+    with pytest.raises(ffc.FilterFrameError, match="unknown"):
+        ffc.configured_filter("NIRCAM", "NRCB1", "F162M", "sometimes")
+
+
+def test_shipped_table_covers_every_default_on_filter():
+    """The default promises F162M/F164N are corrected; a full SW set each."""
+    for filt in ffc.DEFAULT_ON_FILTERS:
+        frame, off = ffc.table_filter_offsets(_shipped(), filt, ffc.SHIPPED_ANCHOR)
+        assert frame == "instrument"
+        assert sorted(off) == sorted(ffc.SW_DETECTORS)
+
+
+def _ffc_frame(path, filt, pupil):
+    from astropy.io import fits
+    from jwst_gc_pipeline.reduction.tests.test_distortion_rotation_correction import (
+        _synthetic_frame)
+    fn = _synthetic_frame(path, filt=filt, pupil=pupil)
+    with fits.open(fn, mode="update") as h:
+        h["SCI"].header["CRVAL1"] = 266.85
+        h["SCI"].header["CRVAL2"] = -28.34
+    return fn
+
+
+def _shift_mas(before, after):
+    dra = (after[0] - before[0]) * np.cos(np.radians(before[1])) * 3.6e6
+    ddec = (after[1] - before[1]) * 3.6e6
+    return float(np.median(dra)), float(np.median(ddec))
+
+
+def test_configured_apply_corrects_f162m_by_the_shipped_row(tmp_path):
+    from astropy.io import fits
+    from jwst_gc_pipeline.reduction.tests.test_distortion_rotation_correction import _sky
+    fn = _ffc_frame(tmp_path / "syn_crf.fits", "F150W2", "F162M")
+    s0 = _sky(fn)
+    assert ffc.apply_configured_filter_frame_correction(
+        fn, mode="default", verbose=False) is not None
+    s1 = _sky(fn)
+    frame, off = ffc.table_filter_offsets(_shipped(), "F162M", "F212N")
+    want = ffc.instrument_to_sky(off, fits.getheader(fn, ("SCI", 1))["ROLL_REF"])["NRCA3"]
+    got = _shift_mas(s0, s1)
+    assert np.hypot(*want) > 5.0
+    assert np.allclose(got, want, atol=0.05), (got, want)
+    h = fits.getheader(fn, ("SCI", 1))
+    assert h[ffc.MARKER] is True and h[ffc.PENDING] is False
+    assert h["FFRAMANC"] == "F212N"
+    assert h["FFRAMSRC"] == "filter_frame_offsets.ecsv"
+    # idempotent: a second fix_alignment pass leaves the frame alone
+    assert ffc.apply_configured_filter_frame_correction(
+        fn, mode="default", verbose=False) is None
+    s2 = _sky(fn)
+    assert np.array_equal(s2[0], s1[0]) and np.array_equal(s2[1], s1[1])
+
+
+@pytest.mark.parametrize("filt, pupil, mode", [
+    ("F150W", "CLEAR", "default"),   # not a default-on filter
+    ("F150W", "CLEAR", "all"),       # no rows for it in the shipped table
+    ("F150W2", "F162M", "off"),
+])
+def test_configured_apply_leaves_other_frames_untouched(tmp_path, filt, pupil, mode):
+    from astropy.io import fits
+    from jwst_gc_pipeline.reduction.tests.test_distortion_rotation_correction import _sky
+    fn = _ffc_frame(tmp_path / "syn_crf.fits", filt, pupil)
+    s0 = _sky(fn)
+    assert ffc.apply_configured_filter_frame_correction(
+        fn, mode=mode, verbose=False) is None
+    s1 = _sky(fn)
+    assert np.array_equal(s0[0], s1[0]) and np.array_equal(s0[1], s1[1])
+    h = fits.getheader(fn, ("SCI", 1))
+    assert ffc.MARKER not in h and ffc.PENDING not in h
+
+
+def test_configured_apply_refuses_a_default_on_filter_missing_from_the_table(tmp_path):
+    fn = _ffc_frame(tmp_path / "syn_crf.fits", "F150W2", "F162M")
+    path = tmp_path / "no_f162m.ecsv"
+    _table([("NRCA1", "F187N", 1.0, 0.0), ("NRCA2", "F187N", -1.0, 0.0),
+            ("NRCA3", "F187N", 1.0, 0.0), ("NRCA4", "F187N", -1.0, 0.0)]
+           ).write(str(path), format="ascii.ecsv")
+    with pytest.raises(ffc.FilterFrameError, match="no rows for filter F162M"):
+        ffc.apply_configured_filter_frame_correction(
+            fn, mode="default", table_path=str(path), verbose=False)
+
