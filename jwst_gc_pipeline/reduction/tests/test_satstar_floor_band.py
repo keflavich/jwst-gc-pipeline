@@ -10,6 +10,7 @@ import re
 import numpy as np
 import pytest
 from astropy.io import fits
+from jwst.datamodels import dqflags
 
 from jwst_gc_pipeline.reduction import saturated_star_finding as SSF
 
@@ -114,7 +115,8 @@ _SEVERITY_OFF = {'f150w', 'f150w2'}
 
 def test_every_nircam_band_in_fields_yaml_is_listed_or_allowed():
     path = os.path.join(os.path.dirname(SSF.__file__), '..', 'fields.yaml')
-    text = open(path).read()
+    with open(path) as fh:
+        text = fh.read()
     bands = {'f' + b.lower() for b in re.findall(r'\bF(\d{3}[WMN]2?)\b', text)}
     nircam = {b for b in bands if int(b[1:4]) <= 500}
     missing_data = sorted(b for b in nircam
@@ -125,3 +127,83 @@ def test_every_nircam_band_in_fields_yaml_is_listed_or_allowed():
                          and b not in _SEVERITY_OFF)
     assert not missing_data, f'NIRCam bands with no data floor row: {missing_data}'
     assert not missing_sev, f'NIRCam bands with no severity floor row: {missing_sev}'
+
+
+# --------------------------------------------------------------------------
+# get_saturated_stars: the three production reads of the floor band
+# --------------------------------------------------------------------------
+
+class _FinderReached(Exception):
+    pass
+
+
+def _frame(primary, n=64):
+    """A small NIRCam frame with one saturated block; the finder is stubbed,
+    so only the header and extension shapes matter."""
+    dq = np.zeros((n, n), dtype=np.uint32)
+    dq[30:35, 30:35] = dqflags.pixel['SATURATED']
+    sci = np.where(dq != 0, np.nan, 1.0)
+    wcs_hdr = fits.Header({'CTYPE1': 'RA---TAN', 'CTYPE2': 'DEC--TAN',
+                           'CRPIX1': 32, 'CRPIX2': 32, 'CRVAL1': 150.0,
+                           'CRVAL2': 2.0, 'CDELT1': -1.7e-5, 'CDELT2': 1.7e-5,
+                           'BUNIT': 'MJy/sr', 'PHOTMJSR': 0.5})
+    return fits.HDUList([
+        fits.PrimaryHDU(header=fits.Header(dict(
+            primary, TELESCOP='JWST', INSTRUME='NIRCAM', DETECTOR='NRCB5',
+            MODULE='B', CHANNEL='LONG'))),
+        fits.ImageHDU(sci, header=wcs_hdr, name='SCI'),
+        fits.ImageHDU(np.where(dq != 0, np.nan, 0.1), name='ERR'),
+        fits.ImageHDU(dq, name='DQ'),
+        fits.ImageHDU(np.where(dq != 0, np.nan, 0.01), name='VAR_POISSON')])
+
+
+def _run_to_the_finder(monkeypatch, primary):
+    """Run ``get_saturated_stars`` up to ``find_saturated_stars`` and return
+    the (data floor, severity floor) handed to it."""
+    seen = {}
+
+    def _finder(fitsdata, **kw):
+        seen.update(kw)
+        raise _FinderReached
+
+    monkeypatch.setattr(SSF, 'find_saturated_stars', _finder)
+    monkeypatch.setattr(SSF.stpsf, 'NIRCam', lambda *a, **kw: object())
+    monkeypatch.setattr(SSF, '_SATSTAR_FLOOR_UNLISTED_WARNED', set())
+    with pytest.raises(_FinderReached):
+        SSF.get_saturated_stars(_frame(primary), plot=False)
+    return seen['sat_data_floor'], seen['severity_floor']
+
+
+# NGROUPS=2, TFRAME=10.7 and PHOTMJSR=0.5 give a readout floor of 584 MJy/sr,
+# below every table data floor, so the data floor handed to the finder is 584
+# whenever the table row is positive and 0 whenever it is not.
+_TWO_GROUP = dict(NGROUPS=2, NFRAMES=1, GROUPGAP=0, TFRAME=10.7)
+
+
+@pytest.mark.parametrize('filt, pupil, sev, data_on', [
+    ('F444W', 'F405N', 5000., True),
+    ('F444W', 'F466N', 5000., False),
+    ('F322W2', 'F323N', 5000., True),
+    ('F150W2', 'F164N', 8000., True),
+    ('F444W', 'CLEAR', 2500., False),
+])
+def test_get_saturated_stars_reads_the_floors_by_bandpass(
+        monkeypatch, capsys, filt, pupil, sev, data_on):
+    """Severity floor, data floor and the "from the readout" log line all
+    read the pupil band; the FILTER keyword would give F444W's (0, 2500),
+    F322W2's and F150W2's (0, 0)."""
+    data_floor, sev_floor = _run_to_the_finder(
+        monkeypatch, dict(_TWO_GROUP, FILTER=filt, PUPIL=pupil))
+    assert sev_floor == sev
+    assert (data_floor > 0) == data_on
+    out = capsys.readouterr().out
+    assert ('from the readout (table 1000)' in out) == data_on
+
+
+def test_get_saturated_stars_warns_for_an_unlisted_narrow_band(monkeypatch,
+                                                                capsys):
+    # F250M is a NIRCam medium band in neither floor table
+    data_floor, sev_floor = _run_to_the_finder(
+        monkeypatch, dict(_TWO_GROUP, FILTER='F250M', PUPIL='CLEAR'))
+    assert (data_floor, sev_floor) == (0., 0.)
+    assert capsys.readouterr().out.count('F250M has no entry') == 1
