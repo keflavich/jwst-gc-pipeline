@@ -2388,6 +2388,28 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
     return data, None, rim, None
 
 
+def zeroframe_reconcile_provenance(prov, zf_deep_core, rim):
+    """Make ``prov`` agree with the fit mask actually used (#681), in place.
+
+    The fit mask is ``zf_deep_core`` when it is not None and the whole SATURATED
+    blob otherwise, so that is the single source of truth for ``zf_fit`` and
+    ``SATZFFIT``.  ``zeroframe_fit_anchor`` fills ``prov`` from the same
+    branches, but it is a second channel: an anchor that returns a deep core and
+    leaves ``prov`` at its blob default would otherwise stamp "blob" on stars
+    fitted on the deep core.  Where the two disagree the mask wins; ``n_rim`` and
+    ``n_deep`` are then counted from the arrays.
+    """
+    if zf_deep_core is None:
+        if prov['mode'] != ZF_MODE_BLOB:
+            prov.update(zeroframe_default_provenance(), R=prov['R'])
+        return prov
+    if prov['mode'] == ZF_MODE_BLOB:
+        n_rim = 0 if rim is None else int(np.asarray(rim).sum())
+        prov.update(mode=ZF_MODE_RIM if n_rim else ZF_MODE_KEEPFINITE,
+                    n_rim=n_rim, n_deep=int(np.asarray(zf_deep_core).sum()))
+    return prov
+
+
 def stamp_zeroframe_provenance(target, prov):
     """Write the ZEROFRAME fit-treatment keywords onto a header or table meta.
 
@@ -4160,6 +4182,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             R_header=zeroframe_header_R(
                 header, fitsdata['SCI'].header.get(
                     'PHOTMJSR', header.get('PHOTMJSR'))))
+    # The mask (zf_deep_core is not None) decides zf_fit, not the anchor's report.
+    zeroframe_reconcile_provenance(_zf_prov, zf_deep_core, _rim)
     builtins.satstar_zf_provenance = _zf_prov
 
     # Fit-quality switches (issue #972), read once per frame.
