@@ -349,26 +349,27 @@ finalizes, and every later phase, on `DependencyNeverSatisfied` while the other
 shards are done (issue #1172). Rerun only the dead shards:
 
 ```
-sacct -j <fan-out array id> -X -o JobID%20,State | grep TIMEOUT   # the shard ids
+sacct -j <fan-out array id> -X -o JobID%20,State | grep TIMEOUT   # prints <array>_<task>: keep the task, 50450810_1 -> 1
 scancel <the dead finalize(s) and every later phase's jobs>        # each per-filter finalize too
 
-ONLY_SHARDS=1,5,9 SKIP_IF_DONE=1 FANOUT_TIME_M6=<longer> \
-  PIPE_ROOT=$PWD PHASES="m6 m7" NSHARDS=<the original array's> \
+ONLY_SHARDS=1,3,5 SKIP_IF_DONE=1 FANOUT_TIME_M7=<longer> \
+  PIPE_ROOT=$PWD PHASES="m7" NSHARDS=<the original array's> \
   TARGET=... PROPOSAL=... FIELD=... MODULES=... EACH_SUFFIX=... FILTERS="..." \
       scripts/reduction/submit_cataloging_perframe.sh
 ```
 
-- `ONLY_SHARDS` takes comma-separated ids and ranges (`1,5,9`, `2-4,9`) and
-  applies to the **first** phase in `PHASES`; later phases get their full array.
+- `ONLY_SHARDS` takes comma-separated ids and ranges (`1,3,5`, `2-4,9`; at most
+  six digits each) and applies to the **first** phase in `PHASES`; later phases get their full array.
 - It is refused without `SKIP_IF_DONE=1`, because each listed shard would
   otherwise refit the frames the killed task had already finished.
 - `NSHARDS` has to equal the original array's: a frame belongs to shard
   `task/NSHARDS`, so another value moves frames between shards and leaves some
   without an owner. The banner prints it, and an id at or above `NSHARDS` is
-  refused.
-- The rerun submits a **new** finalize (one per filter with
-  `PER_FILTER_FINALIZE=1`, up to eight). Cancel the dead ones first, as above,
-  or set `GC_ALLOW_DUPLICATE_CHAIN=1` if the duplicate-chain guard still sees
+  refused. `NSHARDS` itself must be a positive integer without leading zeros
+  (`08` and `abc` are refused before anything is submitted).
+- The rerun submits a **new** finalize (one per filter in `FILTERS` with
+  `PER_FILTER_FINALIZE=1`; the driver sets no cap). Cancel the dead ones
+  first, as above, or set `GC_ALLOW_DUPLICATE_CHAIN=1` if the duplicate-chain guard still sees
   them queued. Queued jobs from the old chain that you keep need their
   dependency moved to every new finalize:
   `scontrol update jobid=<job> dependency=afterok:<new finalize>[:<next>...]`.

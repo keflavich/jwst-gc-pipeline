@@ -125,7 +125,12 @@ if [ -n "$ONLY_SHARDS" ]; then
              "including those the killed task had already finished." >&2
         exit 2
     fi
-    if ! [[ "$ONLY_SHARDS" =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]]; then
+    if ! [[ "$NSHARDS" =~ ^[1-9][0-9]{0,5}$ ]]; then
+        echo "REFUSING: NSHARDS='$NSHARDS' is not a positive integer without" \
+             "leading zeros, so the shard ids cannot be checked against it." >&2
+        exit 2
+    fi
+    if ! [[ "$ONLY_SHARDS" =~ ^[0-9]{1,6}(-[0-9]{1,6})?(,[0-9]{1,6}(-[0-9]{1,6})?)*$ ]]; then
         echo "REFUSING: ONLY_SHARDS='$ONLY_SHARDS' is not a comma-separated" \
              "list of shard ids or ranges (e.g. 1,5,9 or 2-4,9)." >&2
         exit 2
@@ -258,19 +263,26 @@ FINALIZE_MEM=${FINALIZE_MEM:-64gb}
 #
 #     sgra1939-o001        m3 10.3   m4 10.6   m5  9.6   m6 12.0 (3 TIMEOUT)  m7  9.6
 #     gc2211-o028          m3 12.0   m4 13.4   m5 12.2   m6 14.2  (TIMEOUTs at 12 h)
-#     gc2211-o046          m3 15.9   m4 12.6   m5 10.3   m6 17.4
+#     gc2211-o046          m3 15.9   m4 12.6   m5 13.2   m6 17.4   m7 14.8
 #     crowded_l209438-o007                     m5 13.8   m6 13.3   m7 14.9
-#     sgrc4147-o012        m3-m6 8.5-9.5                          m7 >= 34.0 *
+#     sgrc4147-o012        m3-m6 5.6-9.5                          m7 >= 36.0 *
 #
-# * sgrc4147-o012 m7 (array 50450810): the longest COMPLETED shard is 31.8 h and
-#   four siblings were still RUNNING at 34 h of a 36 h limit, so 34 h is a lower
-#   bound on the true maximum.
+# and large-tier fields (sgrb2-5365-o001 and ngc6334-6778-o001, whose crf count
+# falls back to ngc6334/ and is 1750):
+#
+#     ngc6334-6778-o001    m3 19.8   m4 21.0   (both under a 24 h limit)
+#     sgrb2-5365-o001      m3 17.9   m4 13.7   m5 17.3   m6 19.5   m7 22.7
+#
+# * sgrc4147-o012 m7 (array 50450810, ended): tasks 1, 3 and 5 hit the 36 h
+#   limit (TIMEOUT), task 0 COMPLETED at 34.97 h and the next longest COMPLETED
+#   shard is 31.8 h.  The true maximum is therefore at least 36 h.
 #
 # Crf count under-predicts these: sgra (216 crf) and gc2211-o046 (240 crf) run
 # longer per shard than brick (2016 crf), because the fit time follows source
 # crowding.  So the mid tier gets 36 h for m3-m6 (1.5x of 17.4 h is 26 h) and
-# 60 h for m7 (1.5x of 34 h is 51 h); the large tier takes the same values, since
-# a bigger field never gets a shorter wall.  Fields past these limits were
+# 60 h for m7 (1.5x of 36 h is 54 h); the large tier takes the same values, since
+# a bigger field never gets a shorter wall (its own m3-m6 maxima, 17.3-21.0 h,
+# were 1.7x-2.1x under 36 h; the old 24 h wall was 1.14x of 21.0 h).  Fields past these limits were
 # saved by per-runner FANOUT_TIME overrides, which still win over the table.
 #
 # The SMALL tier is left at exactly the 12:00:00 it has today.  Not one of the
