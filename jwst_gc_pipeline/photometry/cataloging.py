@@ -1977,10 +1977,13 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
             min_ratio=float(mopt(options, 'manual_ext_group_qfit_min_ratio')),
             excluded=(np.asarray(mask, dtype=bool) | np.asarray(bad, dtype=bool)))
         _res['qfit_group'] = _qg
-        _ng = int(np.sum(np.isfinite(_qg) & np.isfinite(
-            np.asarray(_res['qfit'], dtype=float)) & (_qg < np.asarray(_res['qfit'], dtype=float))))
-        print(f"[{label}] group-aware qfit: {_ng} of {len(_res)} rows below "
-              f"their own qfit", flush=True)
+        _qo = np.asarray(_res['qfit'], dtype=float)
+        # count only material reductions (a partner just outside the 5x5 box
+        # lowers qfit by ~1e-8)
+        _ng = int(np.sum(np.isfinite(_qg) & np.isfinite(_qo)
+                         & (_qg < _qo * (1.0 - 1e-3))))
+        print(f"[{label}] group-aware qfit: {_ng} of {len(_res)} rows more than "
+              f"0.1% below their own qfit", flush=True)
 
     return phot.results, modsky, phot
 
@@ -2611,6 +2614,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         qf = np.where(_ok, np.minimum(_qg, qf_own), qf_own)
         print(f"[{label}] group-aware qfit: {int(np.sum(qf < qf_own))} of {n} "
               f"rows judged on qfit_group", flush=True)
+    elif group_qfit:
+        # per-frame catalogs written before the switch carry no column; say so
+        # rather than letting the run look like a normal opted-in one
+        print(f"[{label}] group-aware qfit requested but the catalog has no "
+              f"qfit_group column: every row is judged on its own qfit "
+              f"(regenerate the per-frame catalogs with "
+              f"--manual-ext-group-qfit)", flush=True)
     flg = (np.asarray(t['flags'], dtype=float)
            if 'flags' in t.colnames else np.full(n, np.nan))
     lbk = (np.asarray(t['local_bkg'], dtype=float)
@@ -3005,6 +3015,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # S/N (inflated to ~0 by group-fit covariance degeneracy for close pairs
         # -- see _emission_keep_nircam): a well-fit star must never be dropped
         # from the vetted catalog/residual on a broken uncertainty.
+        # With group_qfit this bypass reads the group-aware qf, so a grouped
+        # faint member whose qfit_group <= qfit_max skips the local_snr_min
+        # floor (see the limits in group_qfit.py).
         keep = _emission_keep_nircam(star_like, snr_floor, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
 

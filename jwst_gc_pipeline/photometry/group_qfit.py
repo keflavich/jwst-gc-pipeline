@@ -14,6 +14,25 @@ the light of partner ``j`` (fitted PSF model, clipped at zero) summed over the
 fit box of member ``i``.  A singleton has no partners, so
 ``qfit_group == qfit`` and every threshold keeps its meaning for it.
 
+Limits (opt-in switch, unvalidated on data):
+
+* The discount for the faint member is ``F / (F + S)``.  With a Gaussian PSF of
+  FWHM 2.5 px, a partner at or inside 1 FWHM and a flux ratio of 0.10 / 0.15 /
+  0.30 / 0.55 / 1.0, the factor is 0.13 / 0.18 / 0.31 / 0.45 / 0.60 (0.59 /
+  0.68 / 0.81 / 0.89 / 0.94 at 1.5 FWHM).  Against the flat ``qfit_max`` 0.2 a
+  member then passes with an own qfit up to about 1.5 at ratio 0.10 and about
+  0.65 at ratio 0.30, so at the default ``min_ratio`` 0.1 a spurious faint
+  member next to a bright star (a PSF-ring fit) can be admitted.  Raise
+  ``min_ratio`` (0.3 is the first value to try) before trusting a run.
+* The extended-emission vetting also feeds ``qfit_group`` to the
+  ``qfit_confident`` bypass of ``_emission_keep_nircam``, which keeps a row
+  REGARDLESS of its S/N, so a grouped member admitted that way never meets the
+  ``local_snr_min`` floor.
+* The MIRI hard cap rescales ``flux_fit`` without rescaling ``qfit``, so for a
+  capped row ``qfit * flux`` is no longer the residual sum and the row is
+  treated as an ordinary member.  The switch is NIRCam-oriented and off by
+  default.
+
 The estimator is a heuristic: it assumes the residual sum is unchanged by the
 re-normalisation.  ``flux`` is the member's total fitted flux while ``S_ij`` is
 the in-box light of the partner, so ``F_eff`` is conservative (low) and
@@ -36,7 +55,8 @@ def _column(table, name, default=np.nan):
     of ``default`` when the column is absent."""
     if name not in table.colnames:
         return np.full(len(table), default, dtype=float)
-    return np.ma.filled(np.ma.asarray(table[name], dtype=float), np.nan)
+    return np.asarray(np.ma.filled(np.ma.asarray(table[name], dtype=float),
+                                   np.nan), dtype=float)
 
 
 def compute_group_qfit(results, psf_model, shape, *, min_ratio=0.1,
@@ -76,7 +96,10 @@ def compute_group_qfit(results, psf_model, shape, *, min_ratio=0.1,
         the flux-ratio guard, for a row with flag bit 8 or a non-finite
         ``flux_err``, for an overshoot-refit row (its ``qfit`` belongs to the
         free fit, not to the refit flux) and wherever the inputs are not
-        finite.  It never exceeds ``qfit``.
+        finite.  For a non-negative ``qfit`` (always the case for a positive
+        flux, since qfit is a sum of absolute residuals over the flux) it never
+        exceeds ``qfit``; a negative ``qfit`` would move toward zero, and the
+        vetting takes the minimum with ``qfit`` to guard against it.
     """
     n = len(results)
     qfit = _column(results, 'qfit')

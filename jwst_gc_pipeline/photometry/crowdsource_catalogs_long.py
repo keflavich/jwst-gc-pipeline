@@ -4714,7 +4714,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "low_fit_quality column stays on the member's own "
                          "qfit.  Needs per-frame catalogs written with this "
                          "option; without the column the vetting uses qfit.  "
-                         "Default off.")
+                         "The qfit-confident bypass (kept regardless of S/N) "
+                         "also reads it, so an admitted grouped member skips "
+                         "the local S/N floor.  Default off.")
     parser.add_option("--no-manual-ext-group-qfit", dest="manual_ext_group_qfit",
                     action='store_false',
                     default=MANUAL_DEFAULTS['manual_ext_group_qfit'],
@@ -4725,7 +4727,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     default=MANUAL_DEFAULTS['manual_ext_group_qfit_min_ratio'],
                     help="A grouped member fainter than this fraction of the "
                          "brightest member of its group keeps its own qfit in "
-                         "qfit_group (default 0.1; 0 = no guard).")
+                         "qfit_group (default 0.1; 0 = no guard).  At 0.1 a "
+                         "spurious faint member within ~1 FWHM of a bright "
+                         "star can pass the flat qfit gate (qfit_group is "
+                         "0.13x its qfit); try 0.3 first.")
     parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
                     help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "

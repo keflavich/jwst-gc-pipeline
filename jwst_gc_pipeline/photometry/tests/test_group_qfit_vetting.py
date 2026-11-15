@@ -14,6 +14,10 @@ flux by the light in its fit box, partners included.  These tests pin:
 * ``_filter_extended_emission`` reads it only with ``group_qfit=True``, keeps
   ``low_fit_quality`` on the member's own qfit, and leaves the overshoot and
   previous-phase gates in force;
+* the documented limits: the ``qfit_confident`` bypass reads the group value
+  and so skips the local S/N floor, and the discount factors that admit a
+  spurious faint member at ``min_ratio`` 0.1;
+* the log lines for a missing or partial column;
 * the option plumbing and the defaults.
 """
 import optparse
@@ -163,6 +167,60 @@ def test_missing_columns_and_nonfinite_values_are_safe():
     np.testing.assert_array_equal(_qg(t), t['qfit'])
 
 
+def test_returns_a_plain_float_array():
+    out = _qg(_results([30.0, 33.0], [1.0e4, 4.0e3], [0.30, 0.60], [1, 1]))
+    assert type(out) is np.ndarray and out.dtype == np.float64
+
+
+def test_flux_ratio_boundary_is_reduced():
+    # flux exactly min_ratio x the brightest: only strictly below is guarded
+    t = _results([30.0, 33.0], [8.0e3, 4.0e3], [0.30, 0.60], [1, 1])
+    assert _qg(t, min_ratio=0.5)[1] < 0.60
+    assert _qg(t, min_ratio=0.51)[1] == 0.60
+
+
+def test_only_flag_bit_8_keeps_qfit():
+    base = dict(xs=[30.0, 33.0], fluxes=[1.0e4, 4.0e3], qfits=[0.30, 0.60],
+                gids=[1, 1])
+    for flag, kept in ((8, True), (16, False), (1 | 2 | 4 | 32 | 64, False),
+                       (8 | 1, True)):
+        t = _results(**base)
+        t['flags'][1] = flag
+        assert bool(_qg(t)[1] == 0.60) is kept, flag
+
+
+def _box_partner_light(psf, xc, yc, xp, yp, fp):
+    dy, dx = np.mgrid[-2:3, -2:3].astype(float)
+    return float(np.clip(psf.evaluate(round(xc) + dx, round(yc) + dy, fp, xp, yp),
+                         0.0, None).sum())
+
+
+def test_box_is_centred_on_the_seed_position_not_the_fit():
+    """photutils fits in the 5x5 box around the rounded seed (x_init, y_init)."""
+    psf = _gaussian_grid_psf()
+    t = _results([30.0, 33.0], [1.0e4, 4.0e3], [0.30, 0.60], [1, 1],
+                 x_init=[30.0, 34.2], y_init=[40.0, 41.2])
+    seeded = _box_partner_light(psf, 34.2, 41.2, 30.0, 40.0, 1.0e4)
+    fitted = _box_partner_light(psf, 33.0, 40.0, 30.0, 40.0, 1.0e4)
+    assert seeded != pytest.approx(fitted, rel=1e-2)
+    assert _qg(t)[1] == pytest.approx(0.60 * 4.0e3 / (4.0e3 + seeded), rel=1e-6)
+
+
+def test_negative_psf_lobes_are_clipped_to_zero():
+    class _Lobed:
+        def evaluate(self, x, y, flux, x0, y0):
+            r2 = (x - x0) ** 2 + (y - y0) ** 2
+            return flux * (np.exp(-r2 / (2 * SIG ** 2)) / 10.0 - 0.01)
+
+    t = _results([30.0, 33.0], [1.0e4, 4.0e3], [0.30, 0.60], [1, 1])
+    dy, dx = np.mgrid[-2:3, -2:3].astype(float)
+    raw = _Lobed().evaluate(33 + dx, 40 + dy, 1.0e4, 30.0, 40.0)
+    assert raw.min() < 0
+    clipped = float(raw[raw > 0].sum())
+    out = compute_group_qfit(t, _Lobed(), SHAPE)
+    assert out[1] == pytest.approx(0.60 * 4.0e3 / (4.0e3 + clipped), rel=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # the per-frame pass
 # ---------------------------------------------------------------------------
@@ -200,10 +258,13 @@ def _options(**kw):
     return types.SimpleNamespace(**o)
 
 
-def _run(options):
+def _run(options, mask=None, bad=None):
     res, _, _ = C._manual_phot_pass(
-        data=_scene(), mask=np.zeros(SHAPE, bool), err=np.ones(SHAPE),
-        bad=np.zeros(SHAPE, bool), dao_psf_model=_gaussian_grid_psf(),
+        data=_scene(),
+        mask=np.zeros(SHAPE, bool) if mask is None else mask,
+        err=np.ones(SHAPE),
+        bad=np.zeros(SHAPE, bool) if bad is None else bad,
+        dao_psf_model=_gaussian_grid_psf(),
         init_params=_seed(), aperture_radius_pix=2 * FWHM,
         localbkg_inner=6, localbkg_outer=10,
         grouper=L.CappedSourceGrouper(2.0 * FWHM, max_size=10),
@@ -241,6 +302,67 @@ def test_pass_writes_the_column_when_enabled():
     # the partner; both are judged on a lower value than their own qfit
     assert float(faint['qfit_group']) < 0.95 * float(faint['qfit'])
     assert float(bright['qfit_group']) < float(bright['qfit'])
+
+
+def test_pass_log_counts_only_material_reductions(capsys):
+    _run(_options(manual_ext_group_qfit=True))
+    out = capsys.readouterr().out
+    # the two pair members, not the isolated star
+    assert "group-aware qfit: 2 of 3 rows more than 0.1% below" in out
+
+
+def test_pass_log_ignores_wing_sized_reductions(monkeypatch, capsys):
+    """A partner outside the 5x5 box lowers qfit by ~1e-8: not counted."""
+    def tiny(results, *a, **kw):
+        return np.asarray(results['qfit'], dtype=float) * (1.0 - 1e-6)
+
+    monkeypatch.setattr(C, 'compute_group_qfit', tiny)
+    _run(_options(manual_ext_group_qfit=True))
+    assert "group-aware qfit: 0 of 3 rows more than 0.1% below" in \
+        capsys.readouterr().out
+
+
+def test_estimator_default_ratio_matches_the_pipeline_default():
+    import inspect
+    default = inspect.signature(compute_group_qfit).parameters['min_ratio'].default
+    assert default == MANUAL_DEFAULTS['manual_ext_group_qfit_min_ratio']
+
+
+def test_pass_hands_the_final_exclusion_mask_to_the_estimator(monkeypatch):
+    """Pixels the fit did not use (mask | bad) must carry no partner light."""
+    seen = {}
+    real = C.compute_group_qfit
+
+    def spy(*a, **kw):
+        seen['excluded'] = kw.get('excluded')
+        return real(*a, **kw)
+
+    monkeypatch.setattr(C, 'compute_group_qfit', spy)
+    mask = np.zeros(SHAPE, bool)
+    bad = np.zeros(SHAPE, bool)
+    mask[5, 5] = True
+    bad[90, 10] = True
+    _run(_options(manual_ext_group_qfit=True), mask=mask, bad=bad)
+    ex = seen['excluded']
+    assert ex is not None and ex.shape == SHAPE
+    assert ex[5, 5] and ex[90, 10] and int(ex.sum()) == 2
+
+
+def test_option_off_never_calls_the_estimator(monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError('compute_group_qfit called with the option off')
+
+    monkeypatch.setattr(C, 'compute_group_qfit', boom)
+    _run(_options())
+
+
+def test_run_manual_pipeline_forwards_the_switch_to_the_vetting():
+    """Every ``_filter_extended_emission`` call of the phase loop passes the
+    option (a source check: a run needs SLURM-sized inputs)."""
+    import inspect
+    src = inspect.getsource(C.run_manual_pipeline)
+    assert ("group_qfit=bool(mopt(opts_phase, 'manual_ext_group_qfit'))"
+            in src)
 
 
 def test_empty_seed_carries_the_column_when_enabled():
@@ -282,6 +404,39 @@ def test_merge_without_the_column_is_unchanged(tmp_path):
     out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy,
                                  verbose=False)
     assert 'qfit_group_avg' not in out.colnames
+
+
+def test_merge_warns_when_the_first_frame_lacks_the_column(tmp_path, capsys):
+    tbls = [_frame(tmp_path, f, [(0.0, 0.0)], [1000.0], dao=True)
+            for f in range(3)]
+    for tbl in tbls[1:]:
+        tbl['qfit_group'] = np.full(len(tbl), 0.2, dtype='float32')
+    out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy,
+                                 verbose=False)
+    assert 'qfit_group_avg' not in out.colnames
+    log = capsys.readouterr().out
+    assert 'WARNING: qfit_group is dropped because tbls[0] lacks it' in log
+    assert '2 of 3 frames carry it' in log
+
+
+def test_merge_warns_when_only_some_frames_carry_the_column(tmp_path, capsys):
+    tbls = [_frame(tmp_path, f, [(0.0, 0.0)], [1000.0], dao=True)
+            for f in range(3)]
+    tbls[0]['qfit_group'] = np.full(len(tbls[0]), 0.2, dtype='float32')
+    out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy,
+                                 verbose=False)
+    assert _near_origin(out)[0]['qfit_group_avg'] == pytest.approx(0.2, rel=1e-5)
+    assert ('WARNING: qfit_group_avg averages only the 1 of 3 frames'
+            in capsys.readouterr().out)
+
+
+def test_merge_is_quiet_when_every_frame_carries_the_column(tmp_path, capsys):
+    tbls = [_frame(tmp_path, f, [(0.0, 0.0)], [1000.0], dao=True)
+            for f in range(3)]
+    for tbl in tbls:
+        tbl['qfit_group'] = np.full(len(tbl), 0.2, dtype='float32')
+    MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy, verbose=False)
+    assert 'WARNING: qfit_group' not in capsys.readouterr().out
 
 
 def test_qfit_group_is_downcast_like_qfit():
@@ -361,8 +516,93 @@ def test_option_without_the_column_matches_the_old_path():
 
 
 def test_qfit_group_never_raises_qfit():
-    # an averaged qfit_group above qfit (frames without the column) is ignored
+    # an averaged qfit_group above qfit (frames without the column) must not
+    # demote a row the own qfit keeps: qfit 0.15 passes the flat 0.2 gate, and
+    # without the min() the 0.90 would drop it
+    assert len(_vet(0.15, 0.90, group_qfit=False)) == 1
+    assert len(_vet(0.15, 0.90, group_qfit=True)) == 1
+    # and it does not rescue a row the own qfit drops
     assert len(_vet(0.60, 0.90, group_qfit=True)) == 0
+
+
+def test_nan_flux_err_cannot_reach_the_qfit_confident_bypass():
+    # the qfit-confident bypass keeps a row whatever its S/N, so a row whose
+    # discounted value would clear qfit_max must still be refused when its
+    # flux_err is not finite (no covariance behind the fit)
+    assert len(_vet(0.60, 0.15, flux_err=np.nan, group_qfit=True)) == 0
+    assert len(_vet(0.60, 0.15, group_qfit=True)) == 1
+
+
+def test_qfit_confident_bypass_reads_the_group_value_and_skips_the_snr_floor():
+    """The documented limit: with the option on, a grouped member whose
+    qfit_group <= qfit_max is kept REGARDLESS of S/N (here 1.5 against
+    local_snr_min 5), where its own qfit 1.2 would drop it."""
+    assert len(_vet(1.2, 0.18, snr=1.5, group_qfit=True)) == 1
+    assert len(_vet(1.2, 0.18, snr=1.5, group_qfit=False)) == 0
+    # a member whose discounted value stays above qfit_max is still dropped
+    assert len(_vet(1.2, 0.50, snr=1.5, group_qfit=True)) == 0
+
+
+def test_discount_factor_at_min_ratio_admits_a_spurious_faint_member():
+    """Numbers quoted in the docs: within 1 FWHM the faint member's qfit is
+    scaled by ~0.13 / 0.31 at flux ratio 0.1 / 0.3."""
+    f = {}
+    for ratio in (0.1, 0.3):
+        t = _results([30.0, 30.0 + FWHM], [5.0e4, 5.0e4 * ratio], [0.30, 1.0],
+                     [1, 1])
+        f[ratio] = _qg(t, min_ratio=0.0)[1]
+    assert f[0.1] == pytest.approx(0.129, abs=0.005)
+    assert f[0.3] == pytest.approx(0.307, abs=0.005)
+    # own qfit 1.2 -> 0.155 (< 0.2, passes the flat gate at the default ratio
+    # 0.1) but 0.37 at ratio 0.3
+    assert 1.2 * f[0.1] < 0.2 < 1.2 * f[0.3]
+
+
+def test_missing_column_is_logged_when_the_option_is_on(capsys):
+    _vet(0.30, None, group_qfit=True)
+    assert 'has no qfit_group column' in capsys.readouterr().out
+    _vet(0.30, None, group_qfit=False)
+    assert 'has no qfit_group column' not in capsys.readouterr().out
+    _vet(0.30, 0.2, group_qfit=True)
+    out = capsys.readouterr().out
+    assert 'has no qfit_group column' not in out
+    assert 'rows judged on qfit_group' in out
+
+
+def _vet_prominence_exempt(qfit, qfit_group, group_qfit):
+    """One source of prominence 2-3 on a nebular-style annulus, merged S/N 75
+    (the scene of test_ext_prom_floor_exempt), so only the exemption of the
+    prominence floor can keep it."""
+    ny = nx = 200
+    w = _wcs()
+    rng = np.random.default_rng(2)
+    data = rng.normal(0.0, 0.2, (ny, nx))
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    x, y = 80, 40
+    data += 8.0 * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / 2.0)
+    r = np.hypot(xx - x, yy - y)
+    ring = (r >= 4) & (r <= 10)
+    data[ring] += 3.0 * np.sin(3 * np.arctan2(yy - y, xx - x))[ring]
+    t = Table({'id': [0], 'skycoord': w.pixel_to_world([x], [y]),
+               'qfit': [qfit], 'qfit_group': [qfit_group],
+               'flux': [300.0], 'flux_err': [30.0], 'flux_err_prop': [4.0],
+               'flags': [0], 'local_bkg': [0.0], 'group_size': [2]})
+    out = _filter_extended_emission(
+        t, data_i2d_image=data, ww_i2d=w, ext_prom_min=3.0,
+        ext_prom_exempt_qfit=0.2, ext_prom_exempt_snr=40.0,
+        ext_prom_exempt_prom_min=2.0, snr_floor_propagated=True,
+        sky_clean_keep=False, group_qfit=group_qfit, label='exempt')
+    return len(out) == 1, float(t['prominence'][0])
+
+
+def test_prominence_exempt_stays_on_the_own_qfit():
+    kept, prom = _vet_prominence_exempt(0.15, 0.15, True)
+    assert 2.0 <= prom < 3.0
+    assert kept
+    # own qfit 0.3 is not a tight fit: the exemption must not read the
+    # group value 0.15, so the prominence floor still drops it
+    assert not _vet_prominence_exempt(0.30, 0.15, True)[0]
+    assert not _vet_prominence_exempt(0.30, 0.15, False)[0]
 
 
 def test_overshoot_gate_still_applies():
