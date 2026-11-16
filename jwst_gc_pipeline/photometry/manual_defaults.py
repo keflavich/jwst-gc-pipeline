@@ -256,6 +256,15 @@ MANUAL_DEFAULTS = {
     # frames cover (or is_saturated); 100 switches the rank cut off
     'manual_xexp_single_snr': 50.0,
     'manual_xexp_single_top_pct': 5.0,
+    # -- cross-epoch seed (cataloging.xepoch_seed_catalog_path), off by default.
+    # With all three set, m7 adds the other epoch's m7 vetted merged catalog
+    # (same band, 'merged' module) to the seed with keep_in_fit=True: those rows
+    # stay in the fit so their neighbours are fitted jointly, and the catalog
+    # lists them by the production rules (_build_manual_seed /
+    # _manual_phot_pass).
+    'xepoch_field': None,
+    'xepoch_proposal_id': None,
+    'xepoch_target': None,
 }
 
 
