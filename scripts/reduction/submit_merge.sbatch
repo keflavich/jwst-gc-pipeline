@@ -24,6 +24,11 @@
 # An array task that merged one filter stops before part 2, so submitting only
 # the array leaves the all-filter catalogs unwritten.
 #
+# Targets that merge one observation at a time (gc-treasury, gc1266, gc3571:
+# PER_OBS_MERGED_PROPOSALS) need the observation, or the all-filter merge
+# raises rather than pool every pointing's mosaic.  Add FIELD to the export,
+# e.g. --export=ALL,TARGET=gc3571,FIELD=003 (an unpadded 3 is padded).
+#
 # On one node instead: drop --array and set MERGE_SINGLEFIELDS=1.  That runs
 # every per-filter job serially and then the all-filter merges, in one task.
 # ---------------------------------------------------------------------------
@@ -80,6 +85,8 @@ MERGE_SINGLEFIELDS=${MERGE_SINGLEFIELDS:-0}
 # --merge-workers must not exceed --cpus-per-task above.
 MERGE_WORKERS=${MERGE_WORKERS:-4}
 MERGE_EXTRA=${MERGE_EXTRA:-}
+# The observation to merge (merge_catalogs --field).  Empty adds no flag.
+FIELD=${FIELD:-}
 
 PIPE_ROOT=${PIPE_ROOT:-}
 # Locate the helper.  sbatch COPIES the batch script to a spool dir, so
@@ -100,6 +107,8 @@ PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/pytho
 
 SINGLE_ARG=""
 [ "$MERGE_SINGLEFIELDS" = "1" ] && SINGLE_ARG="--merge-singlefields"
+FIELD_ARG=""
+[ -n "$FIELD" ] && FIELD_ARG="--field=$FIELD"
 
 # Only rename when the job was submitted under the placeholder name: a name
 # passed at submit time identifies target + program + obsid, which this cannot
@@ -111,7 +120,7 @@ fi
 
 echo "MERGE start $(date -u +%FT%TZ) NODE=$(hostname) target=$TARGET task=${SLURM_ARRAY_TASK_ID:-none}"
 "$PY" -m jwst_gc_pipeline.photometry.merge_catalogs \
-      --target="$TARGET" $SINGLE_ARG --merge-workers="$MERGE_WORKERS" $MERGE_EXTRA
+      --target="$TARGET" $SINGLE_ARG $FIELD_ARG --merge-workers="$MERGE_WORKERS" $MERGE_EXTRA
 rc=$?
 echo "MERGE_DONE rc=$rc $(date -u +%FT%TZ)"
 exit $rc
