@@ -226,11 +226,15 @@ def test_apply_script_refuses_to_union_two_observations(tmp_path):
         corrections
 
 
-def test_apply_script_refuses_legacy_BESIDE_tokened(tmp_path):
-    """The state this change creates on every field at its FIRST tokened run,
-    and it was not refused: the token census counted tokened names only, so
-    legacy + one tokened gave len(tokens) == 1.  On a real cloudef F360M pair
-    that summed two corrections onto each of 3 of 3 targeted rows."""
+def test_apply_script_ignores_legacy_BESIDE_tokened(tmp_path):
+    """The state this change creates on every field at its FIRST tokened run.
+
+    Before #827 the apply script refused it, because the legacy and the tokened
+    record both matched the glob and summed two corrections onto each targeted
+    row (a real cloudef F360M pair).  The legacy record is now superseded by the
+    tokened one and is not read at all, so there is nothing to refuse and
+    nothing to sum.  Two LIVE observations are still refused.
+    """
     import importlib.util
     import pathlib
     spec = importlib.util.spec_from_file_location(
@@ -240,12 +244,19 @@ def test_apply_script_refuses_legacy_BESIDE_tokened(tmp_path):
     spec.loader.exec_module(mod)
     _write(tmp_path, "checkpoint_m2_F360M", 1.0)            # legacy
     _write(tmp_path, "checkpoint_m2_F360M_o002", 9.0)       # this run's
+    records, corrections = mod.load_corrections(str(tmp_path))
+    assert [os.path.basename(r) for r in records] == [
+        "checkpoint_m2_F360M_o002_latest.json"], records
+    assert len(corrections) == len(
+        mod.load_corrections(str(tmp_path), obs_token="_o002")[1])
+    mod.load_exposure_universe(str(tmp_path))
+    records, _ = mod.load_corrections(str(tmp_path), obs_token="_o002")
+    assert len(records) == 1, records
+    _write(tmp_path, "checkpoint_m2_F360M_o005", 2.0)
     with pytest.raises(SystemExit, match="more than one observation"):
         mod.load_corrections(str(tmp_path))
     with pytest.raises(SystemExit, match="more than one observation"):
         mod.load_exposure_universe(str(tmp_path))
-    records, _ = mod.load_corrections(str(tmp_path), obs_token="_o002")
-    assert len(records) == 1, records
 
 
 @pytest.mark.parametrize("path,filt,ambiguous", [
@@ -460,11 +471,16 @@ def test_a_tokened_record_is_attributable_even_on_a_shared_filter(tmp_path):
     ck = tmp_path / "astrometry_checkpoints"
     ck.mkdir()
     _record(ck / "checkpoint_m2_F360M_o002_latest.json", "F360M")
+    # An untokened record with no tokened sibling cannot be attributed.  One
+    # WITH a tokened sibling is superseded and no longer listed (#827).
     _record(ck / "checkpoint_m2_F360M_latest.json", "F360M")
-    got = scan.astrometry_checkpoints(str(tmp_path), filters=("F360M",),
-                                      ambiguous_filters=("F360M",))
+    _record(ck / "checkpoint_m2_F200W_latest.json", "F200W")
+    got = scan.astrometry_checkpoints(str(tmp_path),
+                                      filters=("F360M", "F200W"),
+                                      ambiguous_filters=("F360M", "F200W"))
     assert got["F360M_o002"]["attributable"] is True
-    assert got["F360M"]["attributable"] is False
+    assert "F360M" not in got
+    assert got["F200W"]["attributable"] is False
 
 
 def test_the_supersede_suppression_survives_the_new_key():
