@@ -445,7 +445,7 @@ def test_the_fan_out_calls_the_guard_on_the_tokened_prediction():
     assert phase_loop.split('\n')[3].strip() == '_phase_output_owner = {}'
     # and the per-frame args carry the label to the writer
     assert "'merge_label': module," in src
-    assert "merge_label=args.get('merge_label'))" in src
+    assert "merge_label=args.get('merge_label')" in src
 
 
 # ---------------------------------------------------------------------------

@@ -1546,6 +1546,19 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     implied-peak-gate rejects from the near-saturation filter ONLY (see
     ``_gate_reject_handoff_xy``); ``None`` leaves the chain unchanged.
 
+    ``init_params`` rows with ``keep_in_fit`` True (cross-epoch seeds, see
+    ``_build_manual_seed``) stay in the fit through the post-fit dedup, the
+    final overshoot drop and the non-positive-flux cut, so their neighbours
+    are fitted jointly with them; each of those rules is still evaluated on
+    them.  The near-saturation, satstar-wing and MIRI filters apply to them
+    unchanged.  At the end, the keep_in_fit rows that a rule would have
+    removed, or that ``keep_in_fit_listed`` marks as not listed by the seed
+    dedup, are removed from the catalog and from the returned model, so the
+    catalog follows the production rules with the jointly fitted values.  The
+    result keeps a ``keep_in_fit`` column; ``result.meta`` records KIFFIT
+    (keep_in_fit rows fitted) and KIFLIST (listed).  Without keep_in_fit rows
+    the chain is unchanged.
+
     Returns ``(result_table, modsky, phot_obj)``.  Does no file I/O.
     """
     extra = {}
@@ -1596,6 +1609,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     result = phot(data, mask=mask, init_params=init_params,
                   error=np.where(bad, 1e10, err))
     _record_group_fit_meta(result, use_grouper, fit_maxiters)
+    kif = _attach_keep_in_fit(result, init_params)
 
     # --- post-fit dedup (1.0 px, qfit tiebreak) ---
     xfit = np.asarray(result['x_fit'], dtype=float)
@@ -1606,7 +1620,15 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     keep, n_disagree, owner = _dedup_close_sources(
         xy=np.column_stack([xfit, yfit]), flux=flux,
         min_sep_pix=1.0, quality=qfit, return_owner=True)
-    if int(len(keep) - np.sum(keep)) > 0:
+    keep_fit = keep
+    if kif:
+        prot = np.asarray(result['keep_in_fit'], dtype=bool)
+        result['keep_in_fit_listed'] &= keep
+        keep_fit = keep | prot
+        if np.any(prot & ~keep):
+            print(f"[{label}] post-fit dedup: {int(np.sum(prot & ~keep))} "
+                  f"keep_in_fit row(s) stay in the fit, not listed", flush=True)
+    if int(len(keep_fit) - np.sum(keep_fit)) > 0:
         # The survivor's seed is where the overshoot refit below pins it, so
         # give it the cluster seed nearest its fit (#1239).
         res = phot.results
@@ -1621,16 +1643,16 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                 print(f"[{label}] post-fit dedup seed hand-over: "
                       f"{moved.size} survivor(s) took an absorbed row's seed "
                       f"(nearer their fit)", flush=True)
-        phot.results = phot.results[keep]
+        phot.results = phot.results[keep_fit]
         # phot.init_params keeps each survivor's ORIGINAL seed, so after a
         # hand-over it no longer matches phot.results' x_init/y_init.  Nothing
         # downstream reads phot.init_params' positions; the refit reads
         # phot.results.
         if (phot.init_params is not None
-                and len(phot.init_params) == len(keep)):
-            phot.init_params = phot.init_params[keep]
+                and len(phot.init_params) == len(keep_fit)):
+            phot.init_params = phot.init_params[keep_fit]
         phot.__dict__.pop('_model_image_params', None)
-        print(f"[{label}] post-fit dedup: {len(keep)} -> {int(np.sum(keep))} "
+        print(f"[{label}] post-fit dedup: {len(keep_fit)} -> {int(np.sum(keep_fit))} "
               f"({n_disagree} flux-disagree clusters)", flush=True)
 
     # --- near-saturation + satstar-wing rejection ---
@@ -1922,9 +1944,21 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         # mask (which is aligned to the pre-drop table -- robust if the helper's
         # contract changes).
         _n_before = len(phot.results)
-        _filter_or_flag_model_overshoot(
-            phot, modsky, data, ratio=overshoot_drop_ratio, action='drop',
-            label=f'{label}:drop', flag_nonpositive_data=True)
+        if kif:
+            # the same test (annotation identical to action='drop'); remove
+            # the rows that are not keep_in_fit, delist the ones that are
+            _over = _filter_or_flag_model_overshoot(
+                phot, modsky, data, ratio=overshoot_drop_ratio, action='flag',
+                label=f'{label}:drop', flag_nonpositive_data=True)
+            _res = phot.results
+            _prot = np.asarray(_res['keep_in_fit'], dtype=bool)
+            _res['keep_in_fit_listed'] &= ~_over
+            if np.any(_over & ~_prot):
+                phot.results = _res[~(_over & ~_prot)]
+        else:
+            _filter_or_flag_model_overshoot(
+                phot, modsky, data, ratio=overshoot_drop_ratio, action='drop',
+                label=f'{label}:drop', flag_nonpositive_data=True)
         _n_dropped = _n_before - len(phot.results)
         if _n_dropped > 0:
             phot.__dict__.pop('_model_image_params', None)
@@ -1952,6 +1986,11 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     res = phot.results
     _flux = np.asarray(res['flux_fit'], dtype=float)
     fpos = _flux > 0
+    if kif:
+        # keep_in_fit rows with a finite flux stay (in the model), not listed
+        _kp = np.asarray(res['keep_in_fit'], dtype=bool) & np.isfinite(_flux)
+        res['keep_in_fit_listed'] &= fpos
+        fpos = fpos | _kp
     n_neg = int(len(fpos) - np.sum(fpos))
     if n_neg > 0:
         n_nan = int(np.sum(~np.isfinite(_flux)))
@@ -1966,7 +2005,58 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
               f"{n_neg - n_nan} with flux <= 0 (negative-peak), {n_nan} with "
               f"non-finite flux (fit had no usable pixels)", flush=True)
 
+    if kif:
+        modsky = _list_keep_in_fit(phot, modsky, data.shape, label)
+
     return phot.results, modsky, phot
+
+
+def _attach_keep_in_fit(result, init_params):
+    """Copy ``keep_in_fit`` / ``keep_in_fit_listed`` from ``init_params`` to
+    the fit ``result`` (photutils drops extra init columns; rows are matched by
+    ``id``, which is the init row + 1 without an ``id`` column).
+
+    Returns True when at least one fitted row is keep_in_fit, else False and
+    ``result`` is left unchanged.
+    """
+    prot = _seed_bool_column(init_params, 'keep_in_fit')
+    if not np.any(prot):
+        return False
+    listed = (_seed_bool_column(init_params, 'keep_in_fit_listed')
+              if 'keep_in_fit_listed' in init_params.colnames
+              else np.ones(len(init_params), dtype=bool))
+    init_id = (np.asarray(init_params['id'], dtype=np.int64)
+               if 'id' in init_params.colnames
+               else np.arange(1, len(init_params) + 1))
+    row = {int(i): j for j, i in enumerate(init_id)}
+    j = np.array([row[int(i)] for i in np.asarray(result['id'])], dtype=np.int64)
+    result['keep_in_fit'] = prot[j]
+    result['keep_in_fit_listed'] = listed[j] | ~prot[j]
+    return bool(np.any(prot[j]))
+
+
+def _list_keep_in_fit(phot, modsky, shape, label):
+    """Remove the keep_in_fit rows that are not listed (``_manual_phot_pass``)
+    and re-render the model of the rows that remain."""
+    res = phot.results
+    prot = np.asarray(res['keep_in_fit'], dtype=bool)
+    listed = np.asarray(res['keep_in_fit_listed'], dtype=bool)
+    res.meta['KIFFIT'] = (int(prot.sum()), 'keep_in_fit rows fitted')
+    res.meta['KIFLIST'] = (int(np.sum(prot & listed)), 'keep_in_fit rows listed')
+    print(f"[{label}] keep_in_fit listing: {int(prot.sum())} rows fitted, "
+          f"{int(np.sum(prot & listed))} listed", flush=True)
+    del res['keep_in_fit_listed']
+    if np.all(listed):
+        return modsky
+    phot.results = res[listed]
+    if (phot.init_params is not None
+            and len(phot.init_params) == len(listed)):
+        phot.init_params = phot.init_params[listed]
+    phot.__dict__.pop('_model_image_params', None)
+    if len(phot.results) == 0:
+        return np.zeros(shape, dtype=float)
+    return _make_model_image(phot, shape, psf_shape=(21, 21),
+                             include_local_bkg=False)
 
 
 # ---------------------------------------------------------------------------
@@ -2083,18 +2173,152 @@ def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
     return det
 
 
+def _seed_bool_column(table, name):
+    """``table[name]`` as a plain bool array, masked/absent rows False.
+
+    Seed tables are vstacked from catalogs with different columns, so a marker
+    column such as ``keep_in_fit`` is masked on the rows of the tables that
+    lacked it.
+    """
+    if table is None or name not in table.colnames:
+        return np.zeros(0 if table is None else len(table), dtype=bool)
+    col = table[name]
+    if hasattr(col, 'filled'):
+        col = col.filled(False)
+    return np.asarray(col, dtype=bool)
+
+
+def _xepoch_seed_rows(catalog):
+    """Seed rows from another epoch's vetted merged catalog.
+
+    Every row with a finite position and flux, as ``skycoord`` + ``flux``, with
+    ``seed_origin='xepoch'`` and ``keep_in_fit=True``.  ``is_saturated`` is
+    False: the satstar channel of THIS epoch owns its saturated stars, and the
+    near-saturation filter still removes fits on their cores.
+    """
+    cat = _L._resolve_seed_skycoords(Table(catalog, copy=False))
+    if len(cat) == 0:
+        out = Table()
+        out['skycoord'] = SkyCoord([] * u.deg, [] * u.deg)
+        out['flux'] = np.zeros(0)
+        out['is_saturated'] = np.zeros(0, dtype=bool)
+        out['seed_origin'] = np.zeros(0, dtype='U9')
+        out['keep_in_fit'] = np.zeros(0, dtype=bool)
+        return out
+    sc = cat['skycoord']
+    ra = np.asarray(sc.ra.deg, dtype=float)
+    dec = np.asarray(sc.dec.deg, dtype=float)
+    flux = (cat['flux'].filled(np.nan) if hasattr(cat['flux'], 'filled')
+            else cat['flux'])
+    flux = np.asarray(flux, dtype=float)
+    ok = np.isfinite(ra) & np.isfinite(dec) & np.isfinite(flux)
+    out = Table()
+    out['skycoord'] = SkyCoord(ra[ok] * u.deg, dec[ok] * u.deg, frame='icrs')
+    out['flux'] = flux[ok]
+    out['is_saturated'] = np.zeros(int(ok.sum()), dtype=bool)
+    out['seed_origin'] = np.full(int(ok.sum()), 'xepoch', dtype='U9')
+    out['keep_in_fit'] = np.ones(int(ok.sum()), dtype=bool)
+    return out
+
+
+def _union_xepoch_seed(prev_catalog, xepoch_rows):
+    """``prev_catalog`` + the cross-epoch rows, with ``is_saturated`` and
+    ``keep_in_fit`` filled on every row (False where a table lacked them)."""
+    if prev_catalog is None or len(prev_catalog) == 0:
+        return xepoch_rows
+    prev = Table(prev_catalog, copy=True)
+    prev['is_saturated'] = _seed_bool_column(prev, 'is_saturated')
+    prev['keep_in_fit'] = _seed_bool_column(prev, 'keep_in_fit')
+    if 'seed_origin' in prev.colnames:
+        prev['seed_origin'] = np.asarray(prev['seed_origin']).astype(str)
+    out = table_vstack([prev, xepoch_rows], metadata_conflicts='silent')
+    out['is_saturated'] = _seed_bool_column(out, 'is_saturated')
+    out['keep_in_fit'] = _seed_bool_column(out, 'keep_in_fit')
+    return out
+
+
+def _seed_dedup_keep_in_fit(xy, flux, min_sep_pix, is_saturated, keep_in_fit):
+    """Seed dedup that keeps every ``keep_in_fit`` row in the fit, and records
+    which of them the production dedup would list.
+
+    The production dedup (``_dedup_close_sources``, brightest / saturated wins)
+    is run on all rows to find what production would fit.  The fit set is then:
+
+    * every ``keep_in_fit`` row;
+    * the production dedup of the other rows, after removing the non-saturated
+      ones within ``min_sep_pix`` of a ``keep_in_fit`` row (that row covers
+      the position).
+
+    ``listed`` marks the rows the catalog lists (the later per-pass rules still
+    apply to them).  Rows that are not ``keep_in_fit`` are listed whenever
+    fitted.  A ``keep_in_fit`` row is listed when the production dedup keeps
+    it, or when it stands in for the production winner of its cluster: the
+    winner is a seed this dedup left out of the fit, so production would fit
+    it and this run has no fit of it.  When several ``keep_in_fit`` rows share
+    one such winner, the one nearest the winner stands in.
+
+    Returns ``(fit, listed, n_disagree, n_holes)``; ``n_holes`` counts
+    production winners that are not fitted and have no stand-in.
+    """
+    from scipy.spatial import cKDTree
+    xy = np.asarray(xy, dtype=float)
+    flux = np.asarray(flux, dtype=float)
+    n = len(xy)
+    prot = np.asarray(keep_in_fit, dtype=bool)
+    sat = (np.zeros(n, dtype=bool) if is_saturated is None
+           else np.asarray(is_saturated, dtype=bool))
+    prod_keep, _, owner = _dedup_close_sources(
+        xy=xy, flux=flux, min_sep_pix=min_sep_pix, quality=None,
+        is_saturated=is_saturated, return_owner=True)
+    ok = np.all(np.isfinite(xy), axis=1)
+    near = np.zeros(n, dtype=bool)
+    if np.any(prot & ok):
+        d = np.full(n, np.inf)
+        d[ok], _ = cKDTree(xy[prot & ok]).query(xy[ok], k=1)
+        near = ~prot & ~sat & (d <= min_sep_pix)
+    sub = np.flatnonzero(~near)
+    keep_sub, n_disagree = _dedup_close_sources(
+        xy=xy[sub], flux=flux[sub], min_sep_pix=min_sep_pix, quality=None,
+        is_saturated=None if is_saturated is None else sat[sub])
+    fit = np.zeros(n, dtype=bool)
+    fit[sub] = keep_sub
+    fit |= prot
+    listed = fit & (~prot | prod_keep)
+    stand_in = {}
+    for i in np.flatnonzero(prot & ~prod_keep):
+        w = int(owner[i])
+        if fit[w]:
+            continue
+        di = float(np.hypot(*(xy[i] - xy[w])))
+        if w not in stand_in or di < stand_in[w][1]:
+            stand_in[w] = (int(i), di)
+    for i, _ in stand_in.values():
+        listed[i] = True
+    n_holes = int(np.sum(prod_keep & ~fit)) - len(stand_in)
+    return fit, listed, int(n_disagree), n_holes
+
+
 def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix,
                        satstar_table, prev_catalog,
                        local_snr_threshold, roundlo, roundhi, sharplo, sharphi,
                        preferred_seed_skycoord_col=None,
                        dedup_min_sep_pix=None, label='', apply_snr_filter=True,
                        struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
-                       noise_floor_box=0, noise_floor_k=5.0, threshold_scale=1.0):
+                       noise_floor_box=0, noise_floor_k=5.0, threshold_scale=1.0,
+                       xepoch_catalog=None):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
     combine (prev_catalog + satstars) -> augment with the fresh detections (sky
     matched) -> SeededFinder -> dedup.  ``prev_catalog=None`` for the first pass.
+
+    ``xepoch_catalog`` (another epoch's vetted merged catalog; m7 with
+    ``--xepoch-field``) adds its rows to ``prev_catalog`` with
+    ``seed_origin='xepoch'`` and ``keep_in_fit=True``.  Seed rows with
+    ``keep_in_fit`` True, from any source, survive the seed dedup
+    (``_seed_dedup_keep_in_fit``); the output then carries ``keep_in_fit`` and
+    ``keep_in_fit_listed`` for ``_manual_phot_pass``.  Without such rows the
+    output is unchanged.
 
     Mirrors the legacy seed logic but omits the iter3 union-snap / per-filter
     inject blocks (those caused the spurious-seed provenance documented in the
@@ -2110,6 +2334,13 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
         prev_catalog = _subset_seed_to_frame(
             prev_catalog, ww, np.asarray(nan_replaced_data).shape, fwhm_pix,
             preferred_skycoord_col=preferred_seed_skycoord_col, label=label)
+    if xepoch_catalog is not None:
+        xep = _subset_seed_to_frame(
+            _xepoch_seed_rows(xepoch_catalog), ww,
+            np.asarray(nan_replaced_data).shape, fwhm_pix, label=f'{label}:xepoch')
+        print(f"[{label}] cross-epoch seed: {len(xep)} rows on the frame "
+              f"(keep_in_fit)", flush=True)
+        prev_catalog = _union_xepoch_seed(prev_catalog, xep)
 
     # MIRI early-phase coarse background subtraction (AG 2026-06-13): the F770W
     # pedestal is huge (image min ~200 MJy/sr) but the bright stars are HIGH
@@ -2189,6 +2420,28 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     seeded['flux_init'] = np.asarray(finstars['flux_init'], dtype=float)
     if 'is_saturated' in finstars.colnames:
         seeded['is_saturated'] = np.asarray(finstars['is_saturated'], dtype=bool)
+    keep_in_fit = _seed_bool_column(finstars, 'keep_in_fit')
+
+    if np.any(keep_in_fit):
+        # keep_in_fit rows stay in the fit; the listing follows production
+        sat = (np.asarray(seeded['is_saturated'], dtype=bool)
+               if 'is_saturated' in seeded.colnames else None)
+        fit, listed, _, n_holes = _seed_dedup_keep_in_fit(
+            np.column_stack([seeded['x_init'], seeded['y_init']]),
+            np.asarray(seeded['flux_init'], dtype=float),
+            dedup_min_sep_pix, sat, keep_in_fit)
+        seeded['keep_in_fit'] = keep_in_fit
+        seeded['keep_in_fit_listed'] = listed
+        n0 = len(seeded)
+        seeded = seeded[fit]
+        kf = np.asarray(seeded['keep_in_fit'], dtype=bool)
+        print(f"[{label}] seed dedup (keep_in_fit): {n0} -> {len(seeded)} "
+              f"within {dedup_min_sep_pix:.2f} px; {int(kf.sum())} keep_in_fit "
+              f"rows fitted, {int(np.sum(kf & ~np.asarray(seeded['keep_in_fit_listed'])))} "
+              f"of them not listed (production dedup drops them); "
+              f"{n_holes} production seed(s) with no fit and no stand-in",
+              flush=True)
+        return seeded
 
     # dedup seeds (brightest / saturated wins within dedup_min_sep_pix)
     if len(seeded) > 1:
@@ -4712,12 +4965,17 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                               bg_boxsizes=None, use_webbpsf=False, pupil='clear',
                               prev_seed_catalog=None, resbg_path=None,
                               satstar_flux_overrides=None,
-                              satstar_flux_drops=None, merge_label=None):
+                              satstar_flux_drops=None, merge_label=None,
+                              xepoch_seed_catalog=None):
     """Clean per-frame driver for the manual-iteration path.
 
     ``merge_label``: the merge label (``--modules`` entry) whose pass this fit
     belongs to.  It names the m3..m7 per-frame products and is recorded in the
     catalog header (``_save_manual_pass``).  ``None`` writes legacy names.
+
+    ``xepoch_seed_catalog`` (m7 only; path from
+    :func:`xepoch_seed_catalog_path`) adds another epoch's vetted merged
+    catalog to the seed as keep_in_fit rows (``_build_manual_seed``).
 
     ``manual_phase`` in {'m12','m3','m4','m5','m6','m7'}:
       * 'm12' runs iter1 (unseeded daofind) then iter2 (daofind(residual1) +
@@ -4963,6 +5221,17 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # m3 / m4 / m5: single seeded pass
     prev = Table.read(prev_seed_catalog) if prev_seed_catalog else None
     snr = iter2_snr
+    xepoch = None
+    if xepoch_seed_catalog:
+        if manual_phase != 'm7':
+            raise ValueError(f"xepoch_seed_catalog is an m7 seed; got phase "
+                             f"{manual_phase!r}")
+        if _bright_presub_peak_noise() > 0:
+            # the pre-subtraction builds two seeds and dedups their union with
+            # the production rule, which would duplicate or drop keep_in_fit rows
+            raise ValueError("xepoch_seed_catalog cannot be combined with "
+                             "DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE")
+        xepoch = Table.read(xepoch_seed_catalog)
 
     def _seed_from(detection_image, nan_replaced):
         return _build_manual_seed(
@@ -4976,7 +5245,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             label=manual_phase, struct_x=struct_x, struct_y=struct_y,
             coarse_bg_box=coarse_bg_box,
             noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
-            threshold_scale=detect_scale)
+            threshold_scale=detect_scale, xepoch_catalog=xepoch)
 
     seed = _seed_from(ctx.nan_replaced_data, ctx.nan_replaced_data)
     _presub = _bright_presub_peak_noise()
@@ -5276,6 +5545,52 @@ def crossband_seed_inputs(cut_bp, modules, filternames, options):
             if os.path.exists(p):
                 out.append((module, filt, p))
     return out
+
+
+def xepoch_seed_catalog_path(options, filtername):
+    """The other epoch's m7 vetted merged catalog of ``filtername``, or None.
+
+    Off (None) unless ``xepoch_field`` is set; ``xepoch_proposal_id`` and
+    ``xepoch_target`` must be set with it.  The name is the one that epoch's
+    own m7 finalize writes: ``merged_catalog_path`` for the ``merged`` module
+    under that target's basepath (and the same ``--cutout-region`` label as
+    this run), plus the vetted end token from ``vetted_obs_tokens`` for that
+    epoch's proposal and observation.  The target's basepath comes from the
+    fields registry; ``GC_BASEPATH_OVERRIDE`` applies to this run only.
+
+    Raises ValueError when only some of the three are set, and
+    FileNotFoundError when the catalog does not exist (the other epoch has not
+    finished m7, or the options name a different observation).
+    """
+    vals = {k: mopt(options, k) for k in
+            ('xepoch_field', 'xepoch_proposal_id', 'xepoch_target')}
+    given = {k: v not in (None, '') for k, v in vals.items()}
+    if not any(given.values()):
+        return None
+    if not all(given.values()):
+        raise ValueError(
+            f"the cross-epoch seed needs xepoch_field, xepoch_proposal_id and "
+            f"xepoch_target together; missing "
+            f"{sorted(k for k, g in given.items() if not g)}")
+    from jwst_gc_pipeline import fields as field_registry
+    prop = str(vals['xepoch_proposal_id'])
+    field = str(vals['xepoch_field'])
+    other_bp = _L._cutout_out_basepath(
+        field_registry.basepath(str(vals['xepoch_target'])), options)
+    merged = merged_catalog_path(other_bp, 'm7', 'merged', filtername, prop,
+                                 field, desat=options.desaturated,
+                                 bgsub=options.bgsub, resbgsub=True,
+                                 blur=options.blur)
+    vtok, _ = vetted_obs_tokens(prop, field, filtername=filtername,
+                                module='merged')
+    path = merged.replace('.fits', f'{vtok}_vetted.fits')
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"cross-epoch seed catalog not found: {path} (target "
+            f"{vals['xepoch_target']}, proposal {prop}, observation {field}, "
+            f"{filtername}); that epoch's m7 vetted merged catalog must exist "
+            f"before this run's m7")
+    return path
 
 
 def _catalog_dva_state(meta):
@@ -6305,7 +6620,8 @@ def _run_one_frame_manual(args):
                 resbg_path=args['resbg_path'],
                 satstar_flux_overrides=args.get('satstar_flux_overrides'),
                 satstar_flux_drops=args.get('satstar_flux_drops'),
-                merge_label=args.get('merge_label'))
+                merge_label=args.get('merge_label'),
+                xepoch_seed_catalog=args.get('xepoch_seed_catalog'))
             return (filename, True, None)
         except _L.CutoutNoOverlap as ex:
             return (filename, False, f'no-overlap: {ex}')
@@ -10552,9 +10868,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # path on every run, so their mtime is always "now".
                 _seed_inputs = [q for q in (vetted_prev, det_i2d, bg_sub,
                                             resbg_path) if q]
+                # cross-epoch seed (off unless --xepoch-field): the other
+                # epoch's m7 vetted merged catalog, a seed input like the rest
+                xepoch_seed = (xepoch_seed_catalog_path(opts_phase, filt)
+                               if phase == 'm7' else None)
                 if phase == 'm7':
                     _seed_inputs += [q for _m, _f, q in crossband_seed_inputs(
                         cut_bp, modules, filternames, options)]
+                    if xepoch_seed:
+                        _seed_inputs.append(xepoch_seed)
+                        print(f"manual [m7] {filt}/{module}: cross-epoch seed "
+                              f"{xepoch_seed} (keep_in_fit)", flush=True)
 
                 # candidate frames (scan on first phase, cache thereafter)
                 if phase == phases[0]:
@@ -10649,6 +10973,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # the pass's label: names the m3..m7 per-frame
                         # products (naming.perframe_label_token)
                         'merge_label': module,
+                        'xepoch_seed_catalog': xepoch_seed,
                     })
 
                 # Collision guard: every frame's per-frame output identity

@@ -5289,6 +5289,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help='The companion cut leaves out an own-band source only when '
                            'its flux is below this fraction of the neighbour\'s.  1.0 '
                            'cuts every fainter source within the radius.  Default 0.1.')
+    parser.add_option('--xepoch-field', dest='xepoch_field',
+                      default=MANUAL_DEFAULTS['xepoch_field'],
+                      help='Cross-epoch m7 seed (off by default): the observation '
+                           'of the OTHER epoch whose m7 vetted merged catalog of '
+                           'the same band seeds this run\'s m7.  Those rows stay '
+                           'in the per-exposure fit (keep_in_fit) so neighbours '
+                           'are fitted jointly; the catalog lists them by the '
+                           'production dedup / overshoot / flux rules.  Needs '
+                           '--xepoch-proposal-id and --xepoch-target.')
+    parser.add_option('--xepoch-proposal-id', dest='xepoch_proposal_id',
+                      default=MANUAL_DEFAULTS['xepoch_proposal_id'],
+                      help='Proposal of the --xepoch-field observation.')
+    parser.add_option('--xepoch-target', dest='xepoch_target',
+                      default=MANUAL_DEFAULTS['xepoch_target'],
+                      help='Target (fields registry name) of the --xepoch-field '
+                           'observation; its basepath holds the catalog.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
