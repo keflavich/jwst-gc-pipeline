@@ -18,6 +18,7 @@ import stpsf
 from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
 from jwst_gc_pipeline.mast_names import filtername_from_header
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
+from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
 from jwst_gc_pipeline.photometry.wingcal import (
@@ -6288,6 +6289,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         base_tab = apply_uncapped_flux(base_tab, get_filtername(header))
         # Opt-in F150W wing multiplier (#1036): catalog only, model unchanged.
         base_tab = apply_wing_multiplier(base_tab, get_filtername(header))
+        # The per-source loop above works in stamp coordinates; from here on
+        # the table is a catalog, so x_fit/y_fit/x_init/y_init become detector
+        # pixels, the stamp values keep their own *_cutout columns, and id is
+        # a running index (#949).
+        base_tab = finalize_satstar_columns(base_tab)
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image

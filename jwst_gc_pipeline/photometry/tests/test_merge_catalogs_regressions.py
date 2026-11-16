@@ -296,6 +296,92 @@ class TestSatstarStaleFileExclusion:
         out = M.load_satstar_catalog('f770w', target='w51', basepath=str(tmp_path) + '/')
         assert out is None  # do not pollute from stale-only dirs
 
+    @pytest.mark.parametrize('new_files', [(), (0,), (1,), (0, 1)])
+    def test_consolidated_catalog_has_unique_ids_and_detector_xy(
+            self, tmp_path, new_files):
+        """Per-exposure ids restart at 1 and x_fit is stamp-local in catalogs
+        written before #949; the consolidated table has a running id and
+        detector-pixel x_fit and x_init (#949).  ``new_files`` lists the
+        per-exposure files already written in the detector vintage, so the
+        mixes old+old, new+old, old+new and new+new all give the same result."""
+        import numpy as np
+        from astropy.table import Table
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        pdir = tmp_path / 'F770W' / 'pipeline'
+        pdir.mkdir(parents=True)
+        for i, ra in enumerate([266.5, 266.6]):
+            n = 3
+            t = Table()
+            t['id'] = np.ones(n, dtype=int)
+            t['x_fit'] = np.array([81.0, 82.0, 83.0])
+            t['y_fit'] = np.array([81.0, 82.0, 83.0])
+            t['x_init'] = t['x_fit'] + 0.3
+            t['y_init'] = t['y_fit'] - 0.2
+            t['xcentroid'] = np.array([500.0, 900.0, 1500.0]) + 10 * i
+            t['ycentroid'] = np.array([600.0, 1000.0, 1600.0])
+            t['flux_fit'] = np.full(n, 1000.0)
+            t['skycoord_fit'] = SkyCoord(
+                (ra + np.arange(n) * 0.01) * u.deg, np.full(n, -28.6) * u.deg)
+            if i in new_files:
+                from jwst_gc_pipeline.photometry.satstar_columns import (
+                    finalize_satstar_columns)
+                finalize_satstar_columns(t)
+            t.write(pdir / f'jw06151002001_02103_0000{i + 1}_mirimage_o002_crf_resbgsub_m6_satstar_catalog.fits')
+        (tmp_path / 'catalogs').mkdir()
+        out = M.load_satstar_catalog('f770w', target='w51', basepath=str(tmp_path) + '/')
+        assert len(out) == 6
+        assert sorted(out['id']) == list(range(1, 7))
+        assert out.meta['XYFRAME'] == 'detector'
+        assert out['x_fit'].min() > 100
+        np.testing.assert_array_equal(out['x_fit'], out['xcentroid'])
+        np.testing.assert_allclose(out['x_init'] - out['x_fit'], 0.3, atol=1e-6)
+        np.testing.assert_allclose(out['y_init'] - out['y_fit'], -0.2, atol=1e-6)
+        assert set(out['cutout_id']) == {1}
+
+    def test_fp6_cache_in_the_stamp_vintage_is_rebuilt(self, tmp_path):
+        """A consolidated cache stamped with the previous algorithm token (fp6)
+        holds stamp-local x_fit; it must be rebuilt, not served (#949).  Pins
+        the token bump: with it unchanged the fp6 cache would be served."""
+        import os
+        import numpy as np
+        from astropy.table import Table
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        assert M._SATSTAR_DEDUP_ALG == 'fp7'
+        pdir = tmp_path / 'F770W' / 'pipeline'
+        pdir.mkdir(parents=True)
+        for i in range(2):
+            t = Table()
+            t['id'] = np.ones(3, dtype=int)
+            t['x_fit'] = np.array([81.0, 82.0, 83.0])
+            t['y_fit'] = np.array([81.0, 82.0, 83.0])
+            t['xcentroid'] = np.array([500.0, 900.0, 1500.0])
+            t['ycentroid'] = np.array([600.0, 1000.0, 1600.0])
+            t['flux_fit'] = np.full(3, 1000.0)
+            t['skycoord_fit'] = SkyCoord(
+                (266.5 + np.arange(3) * 0.01) * u.deg, np.full(3, -28.6) * u.deg)
+            t.write(pdir / f'jw06151002001_02103_0000{i + 1}_mirimage_o002_crf_resbgsub_m6_satstar_catalog.fits')
+        (tmp_path / 'catalogs').mkdir()
+        base = str(tmp_path) + '/'
+        M.load_satstar_catalog('f770w', target='w51', basepath=base)
+        cache = M.consolidated_satstar_cache_path(base, 'f770w', '')
+        assert os.path.exists(cache)
+        # rewrite the cache as the fp6 build left it: stamp x_fit, no XYFRAME
+        old = Table.read(cache)
+        old['x_fit'] = old['x_fit_cutout']
+        old['y_fit'] = old['y_fit_cutout']
+        old.meta.pop('XYFRAME')
+        old.meta['SATDDALG'] = 'fp6'
+        old.write(cache, overwrite=True)
+        out = M.load_satstar_catalog('f770w', target='w51', basepath=base)
+        assert out.meta['SATDDALG'] == M._satstar_dedup_alg_tag()
+        assert out.meta['XYFRAME'] == 'detector'
+        assert out['x_fit'].min() > 100
+        assert Table.read(cache).meta['SATDDALG'] == M._satstar_dedup_alg_tag()
+
 
 class TestDedupOffsetResolver:
     """merge dedup radius must scale to the broad MIRI PSF FWHM (env-gated),
@@ -355,12 +441,14 @@ def test_alignment_star_mask_excludes_position_unsafe_rows():
     assert m3.all()
 
 
-def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
-    """x_fit/y_fit in satstar catalogs are CUTOUT coordinates (pad-centered,
-    ~(81,81)); detector coordinates live in xcentroid/ycentroid.  Replaced
-    rows and appended satstar-only rows must get the DETECTOR coordinates in
-    their pixel columns (regression: cutout coords silently corrupted x/y of
-    every replaced row)."""
+@pytest.mark.parametrize('vintage', ['stamp_local', 'detector'])
+def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path, vintage):
+    """x_fit/y_fit in satstar catalogs written before #949 are CUTOUT
+    coordinates (pad-centered, ~(81,81)); detector coordinates live in
+    xcentroid/ycentroid.  Replaced rows and appended satstar-only rows must get
+    the DETECTOR coordinates in their pixel columns (regression: cutout coords
+    silently corrupted x/y of every replaced row).  A current catalog repeats
+    the detector pixels in x_fit/y_fit and must give the same rows."""
     import numpy as np
     from astropy.table import Table
     from astropy.coordinates import SkyCoord
@@ -379,6 +467,11 @@ def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
         'xcentroid': [512.3, 1400.7],   # detector frame
         'ycentroid': [300.1, 1650.2],
     })
+    if vintage == 'detector':
+        from jwst_gc_pipeline.photometry.satstar_columns import (
+            finalize_satstar_columns)
+        finalize_satstar_columns(satstar)
+        assert satstar['x_fit'].min() > 100
     monkeypatch.setattr(M, 'load_satstar_catalog', lambda *a, **k: satstar)
 
     class _FakeSvo:
@@ -416,6 +509,99 @@ def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
     assert abs(cat['y'][1] - 1650.2) < 1e-6
     # match separation recorded for the replaced row
     assert np.isfinite(cat['satstar_match_sep'][0])
+
+
+def _replace_saturated_daophot(monkeypatch, tmp_path, satstar, cat):
+    """Run replace_saturated on a DAOPHOT-style catalog with a stubbed loader."""
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry import merge_catalogs as M
+    monkeypatch.setattr(M, 'load_satstar_catalog', lambda *a, **k: satstar)
+
+    class _FakeSvo:
+        @staticmethod
+        def get_filter_list(_):
+            t = Table({'filterID': ['JWST/NIRCam.F182M'], 'ZeroPoint': [850.0]})
+            t.add_index('filterID')
+            return t
+    monkeypatch.setattr(M, 'SvoFps', _FakeSvo)
+    (tmp_path / 'reduction').mkdir()
+    Table({'Filter': ['F182M'], 'PSF FWHM (arcsec)': [0.06]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv', format='ascii.ecsv')
+    M.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/',
+                        fwhm_basepath=str(tmp_path))
+
+
+def _daophot_host_and_satstar(vintage='detector'):
+    import numpy as np
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry.satstar_columns import (
+        finalize_satstar_columns)
+    ra0, dec0 = 266.5, -28.7
+    satstar = Table({
+        'id': [1, 1],
+        'skycoord_fit': SkyCoord([ra0, ra0 + 0.01] * u.deg, [dec0, dec0] * u.deg),
+        'flux_fit': [5000.0, 7000.0],
+        'flux_err': [10.0, 10.0],
+        'x_init': [81.0, 81.0], 'y_init': [81.0, 81.5],
+        'x_fit': [81.2, 80.9], 'y_fit': [81.0, 81.4],
+        'x_err': [0.01, 0.01], 'y_err': [0.01, 0.01],
+        'xcentroid': [512.3, 1400.7], 'ycentroid': [300.1, 1650.2],
+    })
+    if vintage == 'detector':
+        finalize_satstar_columns(satstar)
+    # four host rows with ids 1..4; row 0 sits on satstar 0, satstar 1 is new
+    n = 4
+    cat = Table({
+        'id': np.arange(1, n + 1),
+        'skycoord': SkyCoord([ra0, ra0 + 0.1, ra0 + 0.2, ra0 + 0.3] * u.deg,
+                             np.full(n, dec0) * u.deg),
+        'flux_fit': np.full(n, 1000.0), 'flux_err': np.full(n, 5.0),
+        'x_fit': np.full(n, 10.0), 'y_fit': np.full(n, 10.0),
+        'x_err': np.full(n, 0.01), 'y_err': np.full(n, 0.01),
+        'x_init': np.full(n, 10.0), 'y_init': np.full(n, 10.0),
+    })
+    return satstar, cat
+
+
+def test_replace_saturated_appended_rows_continue_the_host_ids(monkeypatch,
+                                                                tmp_path):
+    """A satstar table's id is a running index of its own table; a row
+    replace_saturated appends must not repeat an id of the host catalog."""
+    import numpy as np
+    satstar, cat = _daophot_host_and_satstar()
+    assert list(satstar['id']) == [1, 2]       # would collide with host 1, 2
+    _replace_saturated_daophot(monkeypatch, tmp_path, satstar, cat)
+    assert len(cat) == 5
+    assert list(cat['id']) == [1, 2, 3, 4, 5]
+    assert len(set(cat['id'])) == len(cat)
+    # the appended row carries detector pixels in x_fit and x_init
+    assert abs(cat['x_fit'][4] - 1400.7) < 1e-6
+    assert abs(cat['x_init'][4] - 1400.8) < 1e-6
+
+
+def test_replace_saturated_warns_on_a_table_without_a_frame_marker(
+        monkeypatch, tmp_path, capsys):
+    """Neither xcentroid nor XYFRAME: x_fit is read as detector pixels but may
+    be stamp-local, and the run says so.  A table with xcentroid, or with the
+    XYFRAME stamp, stays quiet."""
+    satstar, cat = _daophot_host_and_satstar(vintage='stamp')
+    satstar.remove_columns(['xcentroid', 'ycentroid'])
+    _replace_saturated_daophot(monkeypatch, tmp_path, satstar, cat)
+    assert 'replace_saturated: satstar catalog has neither xcentroid nor an XYFRAME' \
+        in capsys.readouterr().out
+
+    # quiet cases: xcentroid present (either vintage), or XYFRAME without it
+    for name, vintage, drop in (('stamp', 'stamp', False),
+                                ('detector', 'detector', False),
+                                ('noxc', 'detector', True)):
+        satstar, cat = _daophot_host_and_satstar(vintage=vintage)
+        if drop:
+            satstar.remove_columns(['xcentroid', 'ycentroid'])
+        (tmp_path / name).mkdir()
+        _replace_saturated_daophot(monkeypatch, tmp_path / name, satstar, cat)
+        assert 'neither xcentroid' not in capsys.readouterr().out, name
 
 
 def test_color_reliable_mask_one_band_repaired():
