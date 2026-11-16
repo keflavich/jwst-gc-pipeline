@@ -77,12 +77,21 @@ code), so `git grep -n '<symbol>'` resolves any reference here, and
   | F140M F162M F405N F480M | 1000 | 5000 |
   | F182M F210M | 1000 | 4000 |
   | F335M F360M F410M | 800 | 2500 |
+  | F164N | 1000 † | 8000 † |
+  | F323N F470N | 1000 † | 5000 † |
   | F466N | 0 (off) | 5000 † |
   | F115W F200W F212N | 0 (off) | 4000 † |
   | F356W F444W | 0 (off) | 2500 † |
   | anything else | 0 (off) | 0 (gate off) |
 
   † channel-sibling estimate, awaiting measurement from per-field crf data.
+
+  Both tables are keyed by the science bandpass, which is the PUPIL value for
+  pupil-wheel exposures (`FILTER=F444W, PUPIL=F405N` is F405N; `F322W2/F323N` is
+  F323N; `F150W2/F164N` and `F150W2/F162M` are F164N and F162M), resolved by
+  `_satstar_floor_band` through `mast_names.filtername_from_header`. The FILTER
+  keyword alone gave those frames the blocker's row. A NIRCam narrow or medium
+  band in neither table logs one warning per run and runs ungated.
 
   Both tables live in `reduction/saturated_star_finding.py`; the severity floor is
   resolved by `_resolve_satstar_severity_floor` (explicit arg > env
