@@ -442,3 +442,49 @@ def test_get_saturated_stars_hands_the_cap_this_seeds_cell(monkeypatch,
     assert cell[int(oy), int(ox)] and not cell[int(sy), int(sx)]
     comp = seen['component']
     assert (comp & cell).any() and (comp & ~cell).any()
+
+
+@pytest.mark.parametrize('switch, sibling_dx',
+                         [(None, 14.0), ('1', -14.0)])
+def test_get_saturated_stars_fits_the_larger_core_first_with_the_order_switch(
+        monkeypatch, switch, sibling_dx):
+    """``SATSTAR_DEBLEND_ORDER`` reaches the sort in ``get_saturated_stars``
+    (#1094): the two seeds of one component carry the same ``sat_area``, and
+    the first seed fitted is the one with the larger ``order_key`` only with
+    the switch on (the seed at x=107; the one at x=93 comes first otherwise)."""
+    monkeypatch.setenv('NIRCAM_SATSTAR_RECOVERED_CAP', '1')
+    if switch is None:
+        monkeypatch.delenv('SATSTAR_DEBLEND_ORDER', raising=False)
+    else:
+        monkeypatch.setenv('SATSTAR_DEBLEND_ORDER', switch)
+    fh, sat = _two_star_frame()
+    n = sat.shape[0]
+
+    def _records(saturated, sources, coms, sizes, zeroframe, data, fwhm,
+                 **kw):
+        return [{'com': c, 'label': 1, 'forced': False,
+                 'sat_area': int(sat.sum()), 'order_key': k}
+                for c, k in (((100.0, 93.0), 3.0), ((100.0, 107.0), 8.0))]
+
+    def _anchor(data, dq, zeroframe, **kw):
+        return data, sat.copy(), np.zeros_like(sat), None
+
+    seen = {}
+
+    def _nearest(shape, own_yx, sibling_yx):
+        seen.update(own=own_yx, sibs=list(sibling_yx))
+        raise _CapRegionReached
+    monkeypatch.setattr(SD, 'build_deblended_source_records', _records)
+    monkeypatch.setattr(SSF, 'zeroframe_fit_anchor', _anchor)
+    monkeypatch.setattr(SSF, 'get_psf',
+                        lambda header, **kw: CircularGaussianPRF(fwhm=1.6))
+    monkeypatch.setattr(SSF.stpsf, 'NIRCam', lambda *a, **kw: object())
+    monkeypatch.setattr(SSF, 'nearest_seed_cell', _nearest)
+    with pytest.raises(_CapRegionReached):
+        SSF.get_saturated_stars(fh, zeroframe=np.ones((n, n)),
+                                zeroframe_deblend=True, plot=False)
+    # the cutout is centred on the seed fitted first; its sibling sits
+    # 14 px to the right (the smaller core, first by raster order) or to the
+    # left (the larger core, first with the switch on)
+    (_, ox), [(_, sx)] = seen['own'], seen['sibs']
+    assert sx - ox == sibling_dx
