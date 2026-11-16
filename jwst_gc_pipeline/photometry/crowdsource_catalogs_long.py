@@ -4557,6 +4557,35 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            "hand-off stars dm -0.03 vs control -0.035, was "
                            "+0.05..+0.13 too faint); >~5 breaks the "
                            "interpolation (12 px hole: -0.12..-0.16)")
+    parser.add_option("--residual-bg-mask-fwhm", dest="manual_residual_bg_mask_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_mask_fwhm'],
+                      type=float,
+                      help="radius (FWHM) of the disks masked at each catalogued "
+                           "source in the residual background (default 2; the "
+                           "disk is never smaller than 2 px, so values below "
+                           "~2/FWHM_px FWHM have no effect)")
+    parser.add_option("--residual-bg-fill-sigma-fwhm",
+                      dest="manual_residual_bg_fill_sigma_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_fill_sigma_fwhm'],
+                      type=float,
+                      help="sigma (FWHM) of the Gaussian kernel that refills the "
+                           "masked disks of the residual background (default 1; "
+                           "narrower than the 2 FWHM disk, so the fill reads the "
+                           "star's own wing, #694)")
+    parser.add_option("--residual-bg-fill-mode",
+                      dest="manual_residual_bg_fill_mode",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_fill_mode'],
+                      type='choice', choices=('gauss', 'annulus'),
+                      help="'gauss' (default) refills the masked disks by "
+                           "Gaussian interpolation; 'annulus' fills each disk "
+                           "with the median of an annulus outside the star's "
+                           "wing (#694)")
+    parser.add_option("--residual-bg-fill-annulus-fwhm",
+                      dest="manual_residual_bg_fill_annulus_fwhm",
+                      default=MANUAL_DEFAULTS['manual_residual_bg_fill_annulus_fwhm'],
+                      type=float,
+                      help="inner radius (FWHM) of the fill annulus for "
+                           "--residual-bg-fill-mode=annulus (default 3)")
     parser.add_option("--manual-iterations", dest="manual_iterations",
                     default=True, action='store_true',
                     help=("Use the default PSF photometry pipeline "
@@ -5216,6 +5245,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help='The companion cut leaves out an own-band source only when '
                            'its flux is below this fraction of the neighbour\'s.  1.0 '
                            'cuts every fainter source within the radius.  Default 0.1.')
+    parser.add_option('--xepoch-field', dest='xepoch_field',
+                      default=MANUAL_DEFAULTS['xepoch_field'],
+                      help='Cross-epoch m7 seed (off by default): the observation '
+                           'of the OTHER epoch whose m7 vetted merged catalog of '
+                           'the same band seeds this run\'s m7.  Those rows stay '
+                           'in the per-exposure fit (keep_in_fit) so neighbours '
+                           'are fitted jointly; the catalog lists them by the '
+                           'production dedup / overshoot / flux rules.  Needs '
+                           '--xepoch-proposal-id and --xepoch-target.')
+    parser.add_option('--xepoch-proposal-id', dest='xepoch_proposal_id',
+                      default=MANUAL_DEFAULTS['xepoch_proposal_id'],
+                      help='Proposal of the --xepoch-field observation.')
+    parser.add_option('--xepoch-target', dest='xepoch_target',
+                      default=MANUAL_DEFAULTS['xepoch_target'],
+                      help='Target (fields registry name) of the --xepoch-field '
+                           'observation; its basepath holds the catalog.')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
