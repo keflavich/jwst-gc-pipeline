@@ -461,7 +461,9 @@ Notes on the tri-state and env-driven values:
   core is a hole in a frame that holds the star, so it still counts),
   `nfound` (frames with a daophot row within 0.10″ whose flux is within ×3, or a
   satstar row within 0.30″, read at its `xcentroid`/`ycentroid` because a satstar
-  catalog's `x_fit`/`y_fit` are stamp coordinates; a saturated merged row also
+  catalog written before #949 has stamp coordinates in `x_fit`/`y_fit` (current ones,
+  marked `XYFRAME = 'detector'`, hold the detector pixels there and keep the stamp values in
+  `x_fit_cutout`/`y_fit_cutout`); a saturated merged row also
   takes a daophot row out to 0.30″ with a lower flux bound only) and `single_exposure` (bright: saturated, or S/N ≥
   `--manual-xexp-single-snr` (50) and merged flux in the brightest
   `--manual-xexp-single-top-pct` (5) percent of the rows two or more frames cover;
@@ -508,6 +510,10 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   module only (for every module when the run has no merged module) unless
   `--manual-crossband-ecsv-all-modules` is passed; a skipped module's `.ecsv`
   from an earlier run is removed (`crossband_ecsv_modules`, `_write_ecsv_twin`).
+  The ECSV is written from the annotated FITS after
+  `annotate_independent_detection` and `propagate_independent_detection`
+  (`write_crossband_ecsv`), so it carries `independently_detected_<filt>` and
+  `n_filt_independent` like the FITS (#1228).
 - `..._resbgsub_m8<obs>.fits` + `..._resbgsub_m8_dedup.fits` — the **forced-fill**
   sibling of the m7 table; every band's flux is force-fit at the merged position.
   Full-frame only; m7 stays as written.

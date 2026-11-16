@@ -58,9 +58,11 @@ DEFAULT_MERGE_MODULES = 'merged'
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.dedup_catalog import flag_complementary_splits
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
+from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
     format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
@@ -76,6 +78,7 @@ from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     PER_OBS_MERGED_PROPOSALS, merged_catalog_obs_token,
+    ObservationFieldError, observation_field_token,
     perframe_obs_token, merged_catalog_module_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
@@ -130,7 +133,7 @@ def _run_merge(merge_func, label, on_error, **kwargs):
         print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
 
 
-def _obsid_for_glob(target, proposal, filtername):
+def _obsid_for_glob(target, proposal, filtername, field=None):
     """The observation number to build an i2d filename from, for this filter.
 
     Instrument-aware: proposal 2221 numbers its NIRCam and MIRI pointings of
@@ -141,8 +144,83 @@ def _obsid_for_glob(target, proposal, filtername):
 
     ``None`` when that instrument did not observe the field under that
     proposal, which callers skip rather than interpolate.
+
+    The registry answers ``'*'`` for a proposal that lists several
+    observations.  A proposal in ``PER_OBS_MERGED_PROPOSALS`` merges one
+    observation at a time, so there ``field`` names the observation and
+    replaces the wildcard with its three-digit token; a glob built from ``'*'``
+    pools every pointing's mosaic, and the merge then takes the first match as
+    the WCS and pixel-area source for all of them (#817).  A per-observation
+    proposal that reaches the wildcard without a ``field``, or with one the
+    registry does not list for this instrument, raises.  Registrations that
+    claim a whole proposal (10678, ``fields.WILDCARD_OBSID``) have no list to
+    check against, so the token is accepted on its shape, as
+    ``cataloging._resolved_obsid`` does.  Every other proposal keeps the
+    registry answer.
     """
-    return field_registry.glob_obsid(target, proposal, _inst_token(filtername))
+    inst = _inst_token(filtername)
+    registry = field_registry.glob_obsid(target, proposal, inst)
+    if registry != field_registry.WILDCARD_OBSID or str(proposal) not in PER_OBS_MERGED_PROPOSALS:
+        return registry
+    if field in (None, ''):
+        raise ObservationFieldError(
+            f'proposal {proposal} merges per observation and {target} lists '
+            f'several {inst} observations, so an i2d glob without --field would '
+            f"use obsid '*' and pool every pointing's mosaic.  Pass --field <NNN>.")
+    token = observation_field_token(field)
+    if '-' in token:
+        raise ObservationFieldError(
+            f'field={field!r} is a joint token, but proposal {proposal} merges '
+            f'one observation at a time.')
+    obs = field_registry.BY_NAME[target].observation(proposal)
+    listed = tuple(obs.obsids.get(inst, ())) if obs is not None else ()
+    if listed and field_registry.WILDCARD_OBSID not in listed:
+        if token not in listed:
+            raise ObservationFieldError(
+                f'field={field!r} (observation {token}) is not one of the {inst} '
+                f'observations {list(listed)} that {target}/{proposal} registers, '
+                f'so its i2d glob would match nothing.')
+    elif not field_registry.is_obsid(token):
+        raise ObservationFieldError(
+            f'field={field!r} is not shaped like an observation number for '
+            f'{target}/{proposal} {inst}.')
+    return token
+
+
+_I2D_OBSERVATION_RE = re.compile(r'-o(\d{3})_')
+
+
+def _check_single_observation(i2d_matches, target, proposal, filtername):
+    """Refuse (or flag) an i2d glob that matched mosaics of several observations.
+
+    A merge reads one mosaic per filter as its WCS and pixel-area source, and
+    takes the first match.  Where the matches span several observations the
+    first is an arbitrary pointing.  Observations that the registry declares
+    joint (sgrb2 MIRI 002 and 998, which tile one field between them) are one
+    mosaic set and pass.
+
+    A proposal that merges per observation raises: ``_obsid_for_glob`` already
+    scopes its glob, so several observations here mean the scoping was
+    bypassed.  Other proposals print a warning and keep the first match, so a
+    field that already runs (cloudef MIRI lists three observations under
+    ``'*'``) does not start failing until it has been audited.
+    """
+    seen = sorted({m.group(1) for x in i2d_matches
+                   for m in [_I2D_OBSERVATION_RE.search(os.path.basename(x))] if m})
+    if len(seen) < 2:
+        return
+    obs = (field_registry.BY_NAME[target].observation(proposal)
+           if target in field_registry.BY_NAME else None)
+    joint = obs.joint_obsids.get(_inst_token(filtername), ()) if obs is not None else ()
+    if any(set(seen) <= set(token.split('-')) for token in joint):
+        return
+    message = (f'the {filtername} i2d glob for {target}/{proposal} matched mosaics '
+               f'of observations {seen}, which the registry does not declare '
+               f'joint; the merge would take {sorted(i2d_matches)[0]} as the WCS '
+               f'and pixel-area source for all of them.')
+    if str(proposal) in PER_OBS_MERGED_PROPOSALS:
+        raise ValueError(message)
+    print(f'WARNING: {message}', flush=True)
 
 
 def _read_offsets_table(path_or_none):
@@ -1514,6 +1592,22 @@ def _qualcuts_oksep_suffix(target):
     return f'_qualcuts_oksep{token}'
 
 
+def _sanitise_meta_for_yaml(table):
+    """Stringify the ``table.meta`` values that the YAML (ECSV) dumper rejects."""
+    for k, v in table.meta.items():
+        # Check for astropy.io.fits.card.Undefined objects explicitly: the
+        # plain yaml.dump below accepts them, astropy's ECSV dumper does not
+        if isinstance(v, fits.card.Undefined):
+            table.meta[k] = str(v)
+            print("BAD META (Undefined):", k, type(v), v)
+            continue
+        try:
+            yaml.dump({k: v}, )
+        except (yaml.YAMLError, TypeError, ValueError, AttributeError) as ex:
+            table.meta[k] = str(v)
+            print("BAD META:", k, type(v), v, ex)
+
+
 def _write_ecsv_twin(basetable, tablename, write_ecsv=True):
     """Write ``{tablename}.ecsv`` beside the FITS table, or remove a stale one.
 
@@ -1716,6 +1810,11 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182']) + ABMAG_OFFSET, name='mag_ab_187m182')
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182'] / zeropoint187), name='mag_vega_187m182')
 
+        # Mark close row pairs whose bands are complementary, so m7 users can
+        # see rows that carry a mix of two stars' bands (#1124).  Additive:
+        # flux and magnitude columns are not touched.
+        flag_complementary_splits(basetable)
+
         basetable.meta = meta
         if '212PXDG' not in meta:
             print("WARNING: 212PXDG not present in metadata for this target")
@@ -1743,28 +1842,17 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                     else:
                         fixed = arr.astype(bool)
                 basetable.replace_column(colname, Column(fixed, name=colname))
-        # NOTE: prefer the .ecsv written below for downstream use -- ECSV
-        # preserves mixin-column and meta fidelity better than FITS.  FITS is
-        # known to mishandle masked columns (a masked bool can round-trip as
-        # plain True/False; see the saturated-flag coercion above); a
-        # historical concern about further dropped metadata was never pinned
-        # down, specifics unrecorded.
+        # NOTE: the .ecsv twin is a convenience copy of this FITS table.  The
+        # cross-band run (run_manual_pipeline) skips it here and writes it with
+        # cataloging.write_crossband_ecsv once the independent-detection
+        # columns have been added to the FITS (#1228).  FITS is known to
+        # mishandle masked columns (a masked bool can round-trip as plain
+        # True/False; see the saturated-flag coercion above), which is why
+        # that coercion happens before this write.
         basetable.write(f"{tablename}.fits", overwrite=True)
         print(f"Done writing table {tablename}.fits in {time.time()-t0:0.1f} seconds", flush=True)
 
-        # strip out bad metadata that the yaml serializer can't handle
-        for k, v in basetable.meta.items():
-            # Check for astropy.io.fits.card.Undefined objects explicitly
-            try:
-                yaml.dump({k: v}, )
-            except Exception as ex:
-                if isinstance(v, fits.card.Undefined):
-                    basetable.meta[k] = str(v)
-                    print("BAD META (Undefined):", k, type(v), v)
-                    continue
-                else:
-                    basetable.meta[k] = str(v)
-                    print("BAD META:", k, type(v), v, ex)
+        _sanitise_meta_for_yaml(basetable)
 
         _write_ecsv_twin(basetable, tablename, write_ecsv)
 
@@ -2305,6 +2393,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                       indivexp=False,
                       iteration_label=None,
                       resbgsub=False,
+                      field=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     if epsf:
         raise NotImplementedError
@@ -2313,14 +2402,22 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     # `_obs_filters_for` is keyed by PROPOSAL (the observation number comes from
     # `_obsid_for_glob`); the loop variable used to be spelled `obsid`, which
     # read as if the prefix were built out of an observation number.
-    imgfns = [x
-              for proposal in _obs_filters_for(target)
-              for filn in _obs_filters_for(target)[proposal]
-              if _obsid_for_glob(target, proposal, filn) is not None
-              for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
-                                 f"{jw_prefix(proposal)}-o{_obsid_for_glob(target, proposal, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-              if f'{module}_' in x or f'{module}1_' in x
-             ]
+    imgfns = []
+    _imgs_by_filter = {}
+    for proposal in _obs_filters_for(target):
+        for filn in _obs_filters_for(target)[proposal]:
+            _obsid = _obsid_for_glob(target, proposal, filn, field=field)
+            if _obsid is None:
+                continue
+            # sorted: glob order is the filesystem's, and the first match is
+            # what the guard message names
+            _matches = sorted(x for x in glob.glob(
+                f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(proposal)}-o{_obsid}"
+                f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+                if f'{module}_' in x or f'{module}1_' in x)
+            _check_single_observation(_matches, target, proposal, filn)
+            imgfns.extend(_matches)
+            _imgs_by_filter.setdefault(filn, []).extend(_matches)
 
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
@@ -2358,6 +2455,21 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                   for filn in filternames
                   for x in glob.glob(f"{basepath}/{filn.upper()}/{filn.lower()}*{module}{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")
                   ]
+        # The catalogues are paired with the i2d list by position below, and
+        # zip() stops at the shorter list.  A filter whose catalogue exists but
+        # whose (observation-scoped) i2d glob came back empty would hand the
+        # next filter's WCS to this one's table, so name it instead.
+        _no_i2d = [filn for filn in dict.fromkeys(filternames)
+                   if not _imgs_by_filter.get(filn)
+                   and glob.glob(f"{basepath}/{filn.upper()}/{filn.lower()}*{module}{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")]
+        if _no_i2d:
+            raise ValueError(
+                f"No {module} i2d matched for filter(s) {_no_i2d} (target={target}, "
+                f"field={field!r}) although their crowdsource catalogues exist; "
+                f"without a mosaic per catalogue the WCS would be paired with "
+                f"the wrong filter's table.  Looked in "
+                f"{basepath}/<FILTER>/pipeline/ for the observation's "
+                f"*{module}_i2d.fits.")
         # Historical per-target catalog counts (brick=10, cloudc=6) predate
         # later filter additions; warn loudly rather than hard-fail on this
         # legacy (non-indivexp) path.
@@ -2599,11 +2711,14 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                       flush=True)
                 continue
         _proj = _project_for_target_filter(target, filn)
-        _obsid = _obsid_for_glob(target, _proj, filn)
-        _img_matches = [] if _obsid is None else [x for x in glob.glob(
+        _obsid = _obsid_for_glob(target, _proj, filn, field=field)
+        # sorted: the first match is the WCS and pixel-area source, so it must
+        # not depend on the filesystem's glob order
+        _img_matches = [] if _obsid is None else sorted(x for x in glob.glob(
             f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(_proj)}-o{_obsid}"
             f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-            if f'{module}_' in x or f'{module}1_' in x]
+            if f'{module}_' in x or f'{module}1_' in x)
+        _check_single_observation(_img_matches, target, _proj, filn)
         if not _img_matches:
             print(f"WARNING: no {module} i2d for filter {filn}; will fall back to "
                   f"the catalog's own skycoord/pixelscale for WCS", flush=True)
@@ -2902,6 +3017,10 @@ def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
     the frame WCS is read once per frame, not once per catalog.
     """
     tbl = Table.read(filename)
+    # Per-exposure catalogs written before #949 carry stamp-local x_fit/y_fit
+    # and an id of 1 on every row; bring them to the detector-frame vintage
+    # here (idempotent), so the consolidated table is uniform.
+    tbl = finalize_satstar_columns(tbl)
     # Provenance for the ensemble statistics: which IMAGE this row was measured
     # in, and which pipeline iteration produced it.  Stamped here (the only
     # place that still knows the filename) and consumed by
@@ -3240,8 +3359,11 @@ def load_satstar_catalog(filtername, target='brick',
                                              proposal_id, field)
     if _primary is not None:
         print(f"Using saturated star catalog {_primary}")
-        _cat = apply_pooled_wingcal(Table.read(_primary), filtername,
-                                    basepath=basepath, phase=phase)
+        # In memory only (idempotent): a primary product written before #949
+        # is served in the same detector-frame vintage as the other paths.
+        _cat = apply_pooled_wingcal(
+            finalize_satstar_columns(Table.read(_primary)), filtername,
+            basepath=basepath, phase=phase)
         # cache_path=None: NEVER rewrite the raw pipeline satstar product on
         # a read path.  Persisting the wingcal-divided flux_fit would make the
         # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
@@ -3434,6 +3556,11 @@ def load_satstar_catalog(filtername, target='brick',
     # the aperture columns; cache_path=None here (the cache is written below).
     deduped = _ensure_satstar_aperture_photometry(
         deduped, filtername, target, basepath, cache_path=None)
+    # The per-exposure ids restart at 1 in every catalog and collide after the
+    # vstack and dedup; the consolidated table gets its own running index.
+    # The per-exposure provenance is in the exposure-key and iteration columns.
+    deduped = finalize_satstar_columns(deduped)
+    deduped['id'] = np.arange(1, len(deduped) + 1, dtype=np.int32)
     # record how many per-exposure catalogs this cache was built from, so a
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
@@ -3468,7 +3595,8 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp6'  # fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
+_SATSTAR_DEDUP_ALG = 'fp7'  # fp7: x_fit/y_fit detector pixels, unique id (#949)
+#                              fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
 #                              fp5: per-exposure ensemble statistics on the kept row (#925)
 #                              fp4: sky columns re-projected onto the current GWCS (#193)
 
@@ -4092,7 +4220,8 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
         out['skycoord_fit'] = SkyCoord(new_ra * u.deg, new_dec * u.deg,
                                        frame=old.frame.name)
         # The pixel columns (x_fit/y_fit/xcentroid/ycentroid) stay the
-        # representative exposure's: they are detector-frame and no single
+        # representative exposure's: they are detector pixels (x_fit/y_fit
+        # since #949; the stamp values are in *_cutout) and no single
         # detector pixel represents an average over exposures.  Sky is the
         # ensemble's, pixels are one exposure's, and they now differ by the
         # shift reported here.
@@ -4657,6 +4786,24 @@ def _blank_for_dtype(dtype, length):
     return np.full(length, np.nan)
 
 
+def _continue_host_ids(satstar_toadd, cat):
+    """Number appended satstar rows after the host catalog's own ``id`` values.
+
+    A satstar table's ``id`` is a running index of that table (#949), so on an
+    appended row it would repeat an id the host catalog already uses.  Rows that
+    replace a host row keep the host's id.  No-op when either side has no
+    ``id`` column.  Mutates ``satstar_toadd`` in place.
+    """
+    if 'id' not in cat.colnames or 'id' not in satstar_toadd.colnames:
+        return
+    if not len(satstar_toadd):
+        return
+    host = np.ma.filled(np.ma.asarray(cat['id']).astype(float), np.nan)
+    last = int(np.nanmax(host)) if np.isfinite(host).any() else 0
+    satstar_toadd['id'] = (last + np.arange(1, len(satstar_toadd) + 1)
+                           ).astype(cat['id'].dtype)
+
+
 def _fill_satstar_added_columns(satstar_toadd, cat):
     """Give appended satstar rows every column ``cat`` has.
 
@@ -4943,14 +5090,22 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         print(satstar_cat.colnames)
         raise KeyError("Missing flux error column")
 
-    # x_fit/y_fit in satstar catalogs are CUTOUT-frame coordinates (the fit
-    # runs in a pad-centered stamp, so most rows read ~(pad, pad)); the
+    # Satstar catalogs written before #949 carry CUTOUT-frame x_fit/y_fit (the
+    # fit runs in a pad-centered stamp, so most rows read ~(pad, pad)); the
     # detector-frame positions live in xcentroid/ycentroid (= x_fit + cutout
-    # origin, the coordinates skycoord_fit is computed from).  Writing x_fit
-    # into the catalog's pixel columns silently corrupted the x/y of every
-    # replaced row.  Use the detector-frame columns whenever present.
+    # origin, the coordinates skycoord_fit is computed from).  Writing that
+    # x_fit into the catalog's pixel columns silently corrupted the x/y of
+    # every replaced row.  Current catalogs (XYFRAME = 'detector') hold the same
+    # values in x_fit and xcentroid, so reading xcentroid is right for both.
+    # Only a table with neither the XYFRAME stamp nor xcentroid falls through
+    # to a stamp-local x_fit, and that case is reported.
     _sat_xcol = 'xcentroid' if 'xcentroid' in satstar_cat.colnames else 'x_fit'
     _sat_ycol = 'ycentroid' if 'ycentroid' in satstar_cat.colnames else 'y_fit'
+    if (_sat_xcol == 'x_fit'
+            and str(satstar_cat.meta.get('XYFRAME', '')) != 'detector'):
+        print("WARNING: replace_saturated: satstar catalog has neither "
+              "xcentroid nor an XYFRAME stamp; its x_fit/y_fit are read as "
+              "detector pixels but are probably stamp-local (#949)", flush=True)
 
     # Record the daophot->satstar match separation BEFORE the position is
     # overwritten, so downstream users can cut on match quality (identity
@@ -5033,6 +5188,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd.rename_column(xerr_colname, 'dx')
             satstar_toadd.rename_column(yerr_colname, 'dy')
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:
@@ -5075,6 +5231,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
             satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:
@@ -5405,7 +5562,8 @@ def main():
     merge_kwargs = dict(module=module, target=target, basepath=basepath,
                         indivexp=options.merge_singlefields,
                         resbgsub=options.resbgsub,
-                        iteration_label=options.iteration_label)
+                        iteration_label=options.iteration_label,
+                        field=options.field)
     if not options.skip_crowdsource:
         t0 = time.time()
         for suffix, on_error in CROWDSOURCE_MERGES:
