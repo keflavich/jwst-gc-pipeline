@@ -75,7 +75,7 @@ def resolve(proposal, obsid, instrument='nircam', filters=None):
             f'fields.yaml.\n\n'
             f'Add it, and every stage picks the target up:\n\n'
             f'  <target-name>:\n'
-            f'    root: orange              # or blue\n'
+            f'    root: orange\n'
             f'    observations:\n'
             f"      '{proposal}':\n"
             f'        nvisits: 1\n'

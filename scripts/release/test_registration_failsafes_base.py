@@ -1,10 +1,8 @@
 """The product tree this gate globs comes from the environment (``JWST_BASE``).
 
-``fields.yaml`` declares two roots -- ``orange`` (/orange/adamginsburg/jwst) and
-``blue`` (/blue/adamginsburg/adamginsburg/jwst) -- and a ``root: blue`` field is
-reachable under /orange only when a symlink was made for it.  gc-treasury (root
-blue, #421) has none, so with the base hardcoded to /orange every glob in this
-file matched nothing and the gate reported on an empty tree.  The sibling gates
+``fields.yaml`` declares one root, ``orange`` (/orange/adamginsburg/jwst), and
+every field is ``root: orange`` (#937).  A field whose directory is missing
+under the base matches nothing, and the gate reports on an empty tree.  The sibling gates
 ``check_interframe_overlap.py`` and ``check_astrometry_checkpoints.py`` already
 read ``JWST_BASE`` with the /orange default; these tests pin that this one now
 does too, and that the default is unchanged.

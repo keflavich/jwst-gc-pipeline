@@ -4,7 +4,7 @@ import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
 
-B = '/blue/adamginsburg/adamginsburg/jwst/brick'
+B = '/orange/adamginsburg/jwst/brick'
 sol = np.load(sys.argv[1])
 detkeys = [eval(k) for k in sol['detkeys']]
 dra, dde = sol['det_ra'], sol['det_de']

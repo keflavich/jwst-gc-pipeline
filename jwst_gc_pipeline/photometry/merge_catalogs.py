@@ -1556,7 +1556,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    iteration_label=None,
                    resbgsub=False,
                    obs_suffix='',
-                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                   basepath=field_registry.basepath('brick'),
                    satstar_proposal_id=None, satstar_field=None,
                    write_ecsv=True):
     print(f'Starting merge catalogs: catalog_type: {catalog_type} module: {module} target: {target}', flush=True)
@@ -1943,7 +1943,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         write_allcols=None,
                                         m2_registration=None,
                                         allow_all_empty=False,
-                                        basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                                        basepath=field_registry.basepath('brick')):
     """Merge one filter's per-frame catalogs into the indivexp-merged catalog.
 
     ``allow_all_empty``: what to do when EVERY per-frame catalog has 0 sources.
@@ -2305,7 +2305,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                       indivexp=False,
                       iteration_label=None,
                       resbgsub=False,
-                      basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+                      basepath=field_registry.basepath('brick')):
     if epsf:
         raise NotImplementedError
     print()
@@ -2464,7 +2464,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   filternames_override=None,
                   field=None,
                   progid=None,
-                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                  basepath=field_registry.basepath('brick'),
                   write_ecsv=True):
     """Cross-filter merge of per-filter daophot catalogs.
 
@@ -3216,7 +3216,7 @@ def _primary_satstar_catalog_path(filtername, target, basepath,
 
 
 def load_satstar_catalog(filtername, target='brick',
-                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                         basepath=field_registry.basepath('brick'),
                          proposal_id=None, field=None, phase=None):
     """Consolidated saturated-star catalog for one filter.
 
@@ -3603,7 +3603,7 @@ def select_wingcal_calibrator_files(filtername, basepath, phase=None):
     return select_satstar_phase_files(files, phase=phase)
 
 
-def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+def build_pooled_wingcal(filtername, basepath=field_registry.basepath('brick'),
                          write=True, phase=None, files=None):
     """Pool per-frame wing-selfcal calibrator measurements into a per-band
     C(r) table (Phase B1).
@@ -3731,7 +3731,7 @@ def load_pooled_wingcal(filtername, basepath, phase=None):
 
 
 def apply_pooled_wingcal(satstar_cat, filtername,
-                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                         basepath=field_registry.basepath('brick'),
                          phase=None):
     """Apply the pooled C(r) to satstar rows whose per-frame self-cal was
     SKIPPED (wingcal_ratio == 1.0 exactly; real per-frame ratios are never
@@ -3792,7 +3792,7 @@ def apply_pooled_wingcal(satstar_cat, filtername,
 
 
 def load_rejected_satstar_catalog(filtername, target='brick',
-                                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                                  basepath=field_registry.basepath('brick'),
                                   proposal_id=None, field=None, phase=None):
     """Table of gate-REJECTED satstar candidates for this band.
 
@@ -4468,7 +4468,7 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
-                        basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                        basepath=field_registry.basepath('brick'),
                         proposal_id=None, field=None, phase=None):
     # ``phase``: the cataloging phase being merged, so each exposure's satstar
     # catalog is that phase's (load_satstar_catalog).
@@ -4692,7 +4692,7 @@ def _fill_satstar_added_columns(satstar_toadd, cat):
 
 def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
-                      basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                      basepath=field_registry.basepath('brick'),
                       proposal_id=None, field=None, phase=None):
     # ``basepath`` locates the satstar catalogs (the cutout's own, for cutout
     # runs).  ``fwhm_basepath`` is unused (the fwhm_table.ecsv read it located

@@ -19,6 +19,7 @@ resolves every name exactly as it did before the move.  Tests that stub those
 helpers must patch THIS module (e.g. ``legacy.crowdsource_step.get_psf_model``),
 not the host module.
 """
+from jwst_gc_pipeline import fields as _fields_registry
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as _host
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.naming import frame_identity
@@ -1034,7 +1035,7 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                     blur=options.blur,
                                     target=options.target,
                                     obsdate=obsdate,
-                                    basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                                    basepath=_fields_registry.jwst_root(),
                                     psf_cache_dir=os.path.join(basepath, 'psfs'),
                                     instrument=instrument)
     dao_psf_model = grid

@@ -30,9 +30,9 @@ R_MASK = float(sys.argv[3]) if len(sys.argv) > 3 else 6.0
 NSTARS = int(sys.argv[4]) if len(sys.argv) > 4 else 40
 
 # use a frame NOT in the 12 used for calibration (nrca1 used frames 1-12)
-FRAME = (f'/blue/adamginsburg/adamginsburg/jwst/brick/{FILT.upper()}/pipeline/'
+FRAME = (f'/orange/adamginsburg/jwst/brick/{FILT.upper()}/pipeline/'
          f'jw02221001001_07101_00018_{DET}_destreak_o001_crf.fits')
-PSF_FN = (f'/blue/adamginsburg/adamginsburg/jwst/brick/psfs/'
+PSF_FN = (f'/orange/adamginsburg/jwst/brick/psfs/'
           f'nircam_{DET}_{FILT}_fovp101_samp2_npsf16.fits')
 
 from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid

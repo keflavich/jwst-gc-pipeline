@@ -294,7 +294,7 @@ def test_a_wildcard_obsid_field_still_takes_per_observation_keys(monkeypatch):
     coexist -- and an unregistered tile still raises rather than borrowing a
     neighbour's file.
     """
-    wildcard = F.Field('wildcard-refcat-probe', root='blue', observations=(
+    wildcard = F.Field('wildcard-refcat-probe', root='orange', observations=(
         F.Obs(proposal='4242', obsids={'nircam': ('*',)},
               reference_catalogs={'088': ('catalogs/o088.fits',)}),))
     monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (wildcard,))

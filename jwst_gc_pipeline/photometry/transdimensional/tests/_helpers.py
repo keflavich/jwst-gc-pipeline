@@ -5,7 +5,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-OUT = Path('/blue/adamginsburg/adamginsburg/jwst/brick/astrometry_paper/outputs/pcat_cutout')
+from jwst_gc_pipeline import fields
+
+OUT = Path(fields.basepath('brick')) / 'astrometry_paper' / 'outputs' / 'pcat_cutout'
 EPSF_PATH = OUT / 'psf' / 'epsf_f182m_nrcb3_e16_os5.fits'
 PCATDE_DIR = Path('/blue/adamginsburg/adamginsburg/repos/pcat/pcat-de/pcat-de')
 

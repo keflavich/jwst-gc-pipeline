@@ -37,10 +37,10 @@ Usage (one frame per task; see submit_artificial_star_completeness.sh)::
 
     python -m jwst_gc_pipeline.photometry.artificial_stars run \
         --band F212N --detector nrca1 --n-stars 1250 --seed 0 \
-        --workdir /blue/adamginsburg/adamginsburg/jwst/brick/artificial_star_tests
+        --workdir /orange/adamginsburg/jwst/brick/artificial_star_tests
 
     python -m jwst_gc_pipeline.photometry.artificial_stars analyze \
-        --workdir /blue/adamginsburg/adamginsburg/jwst/brick/artificial_star_tests
+        --workdir /orange/adamginsburg/jwst/brick/artificial_star_tests
 """
 import argparse
 import glob
@@ -59,6 +59,7 @@ from scipy.spatial import cKDTree
 
 # Pipeline building blocks (the m1 detection path + PSFPhotometry shim).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline import fields as field_registry
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
 # Detection parameters SINGLE-SOURCED from production (review #130 item 1):
@@ -87,17 +88,20 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 DETECTORS = ['nrca1', 'nrca2', 'nrca3', 'nrca4',
              'nrcb1', 'nrcb2', 'nrcb3', 'nrcb4']
 
+#: The Brick field directory, from the field registry (ends with a slash).
+_BRICK = field_registry.basepath('brick')
+
 #: Per-band frame source + injected-magnitude grid.  The mag ranges span the
 #: number-count turnover for each band (F212N ~19.5, F200W ~21 single-frame).
 BANDS = {
     'F212N': dict(
-        pipedir='/blue/adamginsburg/adamginsburg/jwst/brick/F212N/pipeline',
+        pipedir=f'{_BRICK}F212N/pipeline',
         frame_glob='jw02221001001_*_{det}_destreak_o001_crf.fits',
         mag_min=15.0, mag_max=21.0,
         proposal='2221',
     ),
     'F200W': dict(
-        pipedir='/blue/adamginsburg/adamginsburg/jwst/brick/F200W/pipeline',
+        pipedir=f'{_BRICK}F200W/pipeline',
         frame_glob='jw01182004001_*_{det}_destreak_o004_crf.fits',
         mag_min=16.0, mag_max=22.0,
         proposal='1182',
@@ -112,8 +116,8 @@ VEGA_ZEROPOINT_JY = {
     'F200W': 757.65380461946,
 }
 
-PSF_DIR = '/blue/adamginsburg/adamginsburg/jwst/brick/psfs'
-DEFAULT_WORKDIR = '/blue/adamginsburg/adamginsburg/jwst/brick/artificial_star_tests'
+PSF_DIR = f'{_BRICK}psfs'
+DEFAULT_WORKDIR = f'{_BRICK}artificial_star_tests'
 
 #: PSF FWHM in pixels (fwhm_table.ecsv values used by the pipeline).
 FWHM_PIX = {'F212N': 2.341, 'F200W': 2.141}

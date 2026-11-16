@@ -5,6 +5,7 @@ from astropy import units as u
 from astropy.table import Table
 
 from astropy.coordinates import SkyCoord
+from jwst_gc_pipeline import fields as field_registry
 from jwst_gc_pipeline.svo_filters import SvoFps
 from astropy import wcs
 from astropy.io import fits
@@ -21,7 +22,7 @@ def main(return_method=None, return_filter=None):
     """
     June 28, 2023: decided to switch to F405N-only reference
     """
-    basepath = '/blue/adamginsburg/adamginsburg/jwst/brick/'
+    basepath = field_registry.basepath('brick')
 
     for filtername, vvvcatfn in zip(('f405n', 'f444w', 'f200w',),
                                     ('F405N/pipeline/jw02221-o001_t001_nircam_clear-f405n-merged_vvvcat.ecsv',

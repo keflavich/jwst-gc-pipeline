@@ -26,7 +26,9 @@ import urllib.request
 
 import pytest
 
-LOCAL_DATA_ROOT = '/blue/adamginsburg/adamginsburg/jwst'
+from jwst_gc_pipeline import fields as _fields
+
+LOCAL_DATA_ROOT = _fields.jwst_root().rstrip('/')
 
 #: Cheap reachability probe.  Deliberately NOT `crds.get_context_name`: that
 #: pulls the whole cache config and raises the fatal error being avoided.

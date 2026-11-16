@@ -208,7 +208,7 @@ the pipeline writes, so start with it:
 # script can tell it is staging `brick`.
 export GC_BASEPATH_OVERRIDE=$HOME/scratch/demo/brick/
 scripts/reduction/stage_scratch_basepath.sh \
-    /blue/adamginsburg/adamginsburg/jwst/brick \
+    /orange/adamginsburg/jwst/brick \
     "$GC_BASEPATH_OVERRIDE" reduce destreak_o001_crf F410M
 ```
 

@@ -63,11 +63,11 @@ def _resolve_existing_path(path):
     cand = path.replace('//', '/')
     if os.path.exists(cand):
         return cand
-    for a, b in (('/blue/adamginsburg/adamginsburg/jwst/', '/orange/adamginsburg/jwst/'),
-                 ('/orange/adamginsburg/jwst/', '/blue/adamginsburg/adamginsburg/jwst/')):
-        alt = cand.replace(a, b)
-        if os.path.exists(alt):
-            return alt
+    # Catalogs written before #937 recorded the /blue tree; map it to /orange.
+    # Never map the other way: nothing is read from /blue any more.
+    alt = cand.replace('/blue/adamginsburg/adamginsburg/jwst/', '/orange/adamginsburg/jwst/')
+    if os.path.exists(alt):
+        return alt
     raise FileNotFoundError(f"crf not found for reprojection: {path!r}")
 
 

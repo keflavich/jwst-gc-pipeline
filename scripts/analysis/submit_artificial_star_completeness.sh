@@ -14,7 +14,7 @@ set -euo pipefail
 
 PIPE_ROOT=${PIPE_ROOT:-/orange/adamginsburg/repos/jwst-gc-pipeline-wt-artstar}
 PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-WORKDIR=${WORKDIR:-/blue/adamginsburg/adamginsburg/jwst/brick/artificial_star_tests}
+WORKDIR=${WORKDIR:-/orange/adamginsburg/jwst/brick/artificial_star_tests}
 LOGDIR=${LOGDIR:-/blue/adamginsburg/adamginsburg/brick_logs}
 NSTARS=${NSTARS:-1250}
 SEED=${SEED:-0}

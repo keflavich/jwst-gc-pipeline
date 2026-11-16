@@ -40,13 +40,13 @@ def test_the_roots_are_the_only_absolute_paths():
 
 
 def test_basepath_matches_the_root_it_names():
-    assert F.basepath('brick') == '/blue/adamginsburg/adamginsburg/jwst/brick/'
+    assert F.basepath('brick') == '/orange/adamginsburg/jwst/brick/'
     assert F.basepath('sgrc') == '/orange/adamginsburg/jwst/sgrc/'
 
 
-def test_an_unregistered_target_gets_the_blue_tree():
+def test_an_unregistered_target_gets_the_orange_tree():
     """What the `if target in (...)` branches this replaced did in their else."""
-    assert F.basepath('nosuchfield') == '/blue/adamginsburg/adamginsburg/jwst/nosuchfield/'
+    assert F.basepath('nosuchfield') == '/orange/adamginsburg/jwst/nosuchfield/'
 
 
 def test_wd1_and_wd2_are_on_orange():
@@ -529,7 +529,7 @@ def test_an_explicit_obsid_wins_over_the_wildcard(monkeypatch):
     """A field naming an observation outright is more specific than a field
     claiming everything, so the explicit claim wins for that obsid and the
     wildcard keeps the rest."""
-    special = F.Field('special', root='blue', observations=(
+    special = F.Field('special', root='orange', observations=(
         F.Obs(proposal='10678', obsids={'nircam': ('042',)}),))
     monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (special,))
     mapping = F.field_to_reg_mapping('10678', 'nircam')
@@ -559,7 +559,7 @@ def test_two_wildcard_owners_are_refused_when_the_REGISTRY_LOADS(tmp_path):
 
 def test_two_fields_cannot_both_hold_the_wildcard(monkeypatch):
     """'*' claims every observation, which only one field can do."""
-    rival = F.Field('rival', root='blue', observations=(
+    rival = F.Field('rival', root='orange', observations=(
         F.Obs(proposal='10678', obsids={'nircam': ('*',)}),))
     monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (rival,))
     with pytest.raises(F.FieldRegistryError, match='wildcard'):
