@@ -83,9 +83,15 @@ def _two_kind_scene():
     zf += np.random.default_rng(0).normal(0.0, 1.0, shape)
 
     sizes = sum_labels(sat, sources, np.arange(len(coms)) + 1)
+    # Independent group-0-saturated confirmation for both cores of the merged
+    # pair: each is a genuinely separate saturated star, so each has its own
+    # group-0-saturated core too (satstar_deblend_gate requires >=2 of these
+    # to accept the split; with none supplied it fails closed).
+    group0_saturated = _disk(shape, 60, 60, r=2) | _disk(shape, 70, 60, r=2)
     records = build_deblended_source_records(
         sat, sources, coms, sizes, zf, data, 2.0,
-        confirm_xy=[(60, 60), (70, 60), (120, 120)])
+        confirm_xy=[(60, 60), (70, 60), (120, 120)],
+        group0_saturated=group0_saturated)
     return stamp_seed_kinds(records, kinds), kinds
 
 
