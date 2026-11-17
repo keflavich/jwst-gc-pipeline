@@ -274,6 +274,27 @@ def _header_roll_table_provenance(path):
     return (None, None)
 
 
+def _header_roll_upstream_provenance(path):
+    """``(ROLLCUTG, ROLLCUPV)`` from a tile's PRIMARY or table HDU header, or
+    ``(None, None)`` if the cards are absent (#1269).
+
+    The FITS write that applies a roll correction re-stamps ``GCTAG`` and
+    ``GCPIPEV`` with the roll-correction run's own values, so for a rolled tile
+    they no longer name the run that produced the photometry.
+    ``catalog_roll_correction`` keeps the producer's values in ``ROLLCUTG`` and
+    ``ROLLCUPV``.  Tiles rolled before that change carry neither card.  The
+    gate in ``stage_release`` still compares ``GCTAG`` (``tile_pipeline_tag``),
+    so these are recorded beside it, not in its place."""
+    with fits.open(path, memmap=True) as hdul:
+        for hdu in hdul:
+            if 'ROLLCUTG' in hdu.header or 'ROLLCUPV' in hdu.header:
+                utg = hdu.header.get('ROLLCUTG')
+                upv = hdu.header.get('ROLLCUPV')
+                return (str(utg) if utg is not None else None,
+                        str(upv) if upv is not None else None)
+    return (None, None)
+
+
 def discover_bands(colnames):
     """Bands present in a tile's schema, discovered from ``flux_jy_<band>``
     column names (NOT hardcoded -- a schema change becomes visible instead of
@@ -514,6 +535,8 @@ def build_joint_catalog(input_dir, obsids=None,
     roll_corrected = next(iter(roll_flags.values())) if roll_flags else False
     roll_table_prov = {o: _header_roll_table_provenance(p)
                        for o, p in tile_paths.items()}
+    roll_upstream_prov = {o: _header_roll_upstream_provenance(p)
+                          for o, p in tile_paths.items()}
 
     sample = Table.read(next(iter(tile_paths.values())), memmap=True)
     bands = discover_bands(sample.colnames)
@@ -560,6 +583,8 @@ def build_joint_catalog(input_dir, obsids=None,
                 tile_pipeline_tag=_tile_pipeline_tag(p),
                 rollctab=roll_table_prov[o][0],
                 rollcver=roll_table_prov[o][1],
+                rollcutg=roll_upstream_prov[o][0],
+                rollcupv=roll_upstream_prov[o][1],
                 **rows_in_out[o],
             )
             for o, p in tile_paths.items()

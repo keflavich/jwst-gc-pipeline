@@ -60,7 +60,7 @@ import re
 import sys
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    REFERENCE_TIE_SOURCE_SUFFIX, parse_record_name)
+    REFERENCE_TIE_SOURCE_SUFFIX, parse_record_name, prefer_tokenised)
 from jwst_gc_pipeline.photometry.visit_consensus import (
     REGION_SMALL_BULK_MAX_FLAGGED_FRACTION, REGION_SMALL_BULK_SIGMA_TOL_MAS,
     REGION_SMALL_BULK_WORST_SIG_CAP_MAS)
@@ -455,31 +455,13 @@ def records(field, observations=None):
 def _prefer_tokenised(found):
     """Drop an UNTOKENISED record when a tokenised sibling exists.
 
-    Obs tokens were added partway through, so a field carries both
-    ``checkpoint_m3_F187N_latest.json`` (written before, and never overwritten
-    again once the tokenised name took over) and
-    ``checkpoint_m3_F187N_o007_latest.json``.  Reading both means a superseded
-    record from an earlier campaign refuses the field forever, no matter what
-    the current run measured -- sickle's untokened m3/F187N is from 2026-08-05
-    and its tokenised one from 2026-08-17.
-
-    Keyed on (stage, filter): the untokened file cannot say which observation it
-    belonged to, so the only safe reading is that a tokenised record for the same
-    stage and filter supersedes it.
-
-    ngc6334's shared-tree token (``_j7213``) counts as tokenised for the same
-    reason an obs token does -- it names which run wrote the record -- so an
-    untokened sibling of the same stage and filter is superseded by it.
+    The rule lives in ``astrometry_checkpoint.prefer_tokenised`` (issue #827) so
+    that the gate and the secondary readers cannot disagree about which record
+    is current.  Sickle's untokened m3/F187N (2026-08-05) is superseded by its
+    tokenised one (2026-08-17) under it; ngc6334's ``_j7213`` token counts as
+    tokenised.
     """
-    def _tokenised(i):
-        return bool(i["obs"] or i["proposal"])
-
-    def _key(i):
-        return (i["stage"], i["filt"], i.get("module"))
-
-    tokenised = {_key(i) for _p, i, _r in found if _tokenised(i)}
-    return [(p, i, r) for p, i, r in found
-            if _tokenised(i) or _key(i) not in tokenised]
+    return prefer_tokenised(found)
 
 
 _LEGACY_CONTEXT_MODULE_RE = re.compile(r"(?:^|\s)(?P<module>[a-z]+) \[[^\]]*\]\s*$")

@@ -184,8 +184,9 @@ def satstar_content_key(filename, *, path_prefix, use_merged_psf_for_merged=Fals
     from jwst_gc_pipeline.reduction.saturated_star_finding import _find_ramp_for
     ramp = _find_ramp_for(filename)
     _feed_stats(h, [ramp] if ramp else [])
-    # The single-group (G1-only) DQ flags are applied in memory from that ramp,
-    # so the crf bytes above do not show them; key on whether they apply.
+    # The single-group (G1-only) DQ flags are applied in memory from that ramp
+    # (on frames the G1ONLY_SAT_DQ gate flags), so the crf bytes above do not
+    # show them; key on whether they apply.
     from jwst_gc_pipeline.reduction import g1only_dq
     _g1 = g1only_dq.signature(filename)
     if _g1:
