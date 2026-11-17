@@ -330,9 +330,10 @@ def _read_xyf(path, flux_col='flux_fit', detector_frame=False):
     """Detector pixel positions and fluxes of the finite, positive-flux rows.
 
     A daophot catalog's ``x_fit``/``y_fit`` are detector pixels.  A satstar
-    catalog's are cutout-frame coordinates (the fit runs in a pad-centred
-    stamp, so most rows read about (pad, pad)); its detector pixels are
-    ``xcentroid``/``ycentroid``.  ``detector_frame=True`` reads those when both
+    catalog written before #949 holds cutout-frame coordinates there (the fit
+    runs in a pad-centred stamp, so most rows read about (pad, pad)); its
+    detector pixels are ``xcentroid``/``ycentroid``, which a current catalog
+    (``XYFRAME = 'detector'``) repeats in ``x_fit``/``y_fit``.  ``detector_frame=True`` reads those when both
     are present and falls back to ``x_fit``/``y_fit`` otherwise, the rule
     ``merge_catalogs.replace_saturated`` applies.
     """
