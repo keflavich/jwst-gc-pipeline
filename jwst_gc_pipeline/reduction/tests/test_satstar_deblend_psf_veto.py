@@ -334,14 +334,17 @@ def test_stats_count_components_and_splits(monkeypatch):
     zf, src = _frame([star], 0)
     monkeypatch.setattr(sd, 'deblend_blob_zeroframe',
                         lambda *a, **k: ([(30.0, 30.0), (30.0, 40.0)],
-                                         dict(psf_veto='off', n_vetoed=0)))
+                                         dict(psf_veto='off', n_vetoed=0,
+                                              order_key=[0.0, 0.0])))
     stats = {}
     recs, _ = _records(zf, src, stats=stats)
     assert len(recs) == 2
     assert (stats['n_components'], stats['n_split']) == (1, 1)
     assert 'n_failed' not in stats
     monkeypatch.setattr(sd, 'deblend_blob_zeroframe',
-                        lambda *a, **k: ([(30.0, 30.0)], dict(psf_veto='off', n_vetoed=0)))
+                        lambda *a, **k: ([(30.0, 30.0)],
+                                         dict(psf_veto='off', n_vetoed=0,
+                                              order_key=[0.0])))
     stats = {}
     _records(zf, src, stats=stats)
     assert (stats['n_components'], stats.get('n_split', 0)) == (1, 0)
