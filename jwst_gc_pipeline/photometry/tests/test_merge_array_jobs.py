@@ -13,6 +13,16 @@ from astropy.table import Table
 from jwst_gc_pipeline.photometry import merge_catalogs as MC
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_slurm_or_gate_env(monkeypatch):
+    # merge_catalogs.main() reads both variables.  Inside a Slurm array task
+    # SLURM_ARRAY_TASK_ID is set, and a task id past the last job makes main()
+    # raise ValueError before the code a test is aimed at.  Tests that need a
+    # value set it themselves; monkeypatch.setenv after this fixture wins.
+    monkeypatch.delenv('SLURM_ARRAY_TASK_ID', raising=False)
+    monkeypatch.delenv('RUN_REGISTRATION_GATE', raising=False)
+
+
 def test_brick_job_order_is_pinned():
     # Written out, not recomputed from the registry: a change of order silently
     # moves every array task onto a different filter.

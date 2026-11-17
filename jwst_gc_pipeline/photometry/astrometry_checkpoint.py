@@ -3307,6 +3307,96 @@ def parse_record_name(basename):
             'obs': obs, 'proposal': proposal, 'module': module}
 
 
+def record_is_tokenised(info):
+    """True when a parsed record name carries an observation or proposal token.
+
+    ngc6334's shared-tree token (``_j7213``) counts alongside an obs token: both
+    name the run that wrote the record.
+    """
+    return bool(info['obs'] or info['proposal'])
+
+
+def record_supersession_key(info):
+    """The identity under which a tokened record supersedes an untokened one.
+
+    An untokened record cannot say which observation it belonged to, so the only
+    safe reading is that a tokened record for the same stage, filter and merge
+    module replaces it.
+    """
+    return (info['stage'], info['filt'], info.get('module'))
+
+
+def prefer_tokenised(found, info_of=None):
+    """Drop an UNTOKENED record when a tokened sibling exists (issue #827).
+
+    Obs tokens were added partway through, so a field carries both
+    ``checkpoint_m3_F187N_latest.json`` (written before, and never overwritten
+    again once the tokened name took over) and
+    ``checkpoint_m3_F187N_o007_latest.json``.  Both end in ``_latest.json``, so
+    a glob reads both, and a superseded record from an earlier campaign then
+    answers for the field no matter what the current run measured.
+
+    ``found`` is any list; ``info_of`` maps an item to its
+    :func:`parse_record_name` dict (default: the item's second element, the
+    ``(path, info, record)`` shape the release gate uses).  Tokened wins over
+    untokened regardless of mtime: a freshly rerun untokened record from an old
+    checkout must not beat a tokened one.
+    """
+    info_of = info_of or (lambda item: item[1])
+    tokenised = {record_supersession_key(info_of(x)) for x in found
+                 if record_is_tokenised(info_of(x))}
+    return [x for x in found
+            if record_is_tokenised(info_of(x))
+            or record_supersession_key(info_of(x)) not in tokenised]
+
+
+def record_mtime(path):
+    """mtime of a record, following a symlink but surviving a dangling one.
+
+    ``os.path.getmtime`` raises ``FileNotFoundError`` on a symlink whose target
+    is gone; release trees carry symlinks, so a broken one in a checkpoint
+    directory must not take a listing down.  A dangling link reports its own
+    mtime.
+    """
+    try:
+        return os.path.getmtime(path)
+    except FileNotFoundError:
+        return os.lstat(path).st_mtime
+
+
+def current_records(record_dir, include_history=False):
+    """``{(stage, filt, module, obs, proposal): path}`` of the CURRENT records.
+
+    Lists ``checkpoint_*_latest.json`` under ``record_dir`` (the timestamped
+    history siblings as well when ``include_history``), parses each name with
+    :func:`parse_record_name`, skips names that are not checkpoint records and
+    drops every untokened record that a tokened one supersedes
+    (:func:`prefer_tokenised`).  Where several files share one key, which only
+    happens with ``include_history``, the newest mtime wins (the later name on
+    a tie).
+
+    This is the one reader the secondary tools should use instead of a bare
+    ``glob('checkpoint_*_latest.json')``, which also matches the pre-migration
+    untokened names.
+    """
+    pattern = 'checkpoint_*.json' if include_history else 'checkpoint_*_latest.json'
+    found = []
+    for path in sorted(glob.glob(os.path.join(str(record_dir), pattern))):
+        info = parse_record_name(os.path.basename(path))
+        if info is not None:
+            found.append((path, info))
+    out = {}
+    for path, info in prefer_tokenised(found):
+        key = (info['stage'], info['filt'], info['module'],
+               info['obs'], info['proposal'])
+        # Equal mtimes (a copy that dropped them) fall to the later name, which
+        # for timestamped siblings is the newer record.
+        if key not in out or ((record_mtime(path), path)
+                              > (record_mtime(out[key]), out[key])):
+            out[key] = path
+    return out
+
+
 def _filter_is_obs_ambiguous(record_dir, filtername):
     """True when more than one observation of this field images ``filtername``.
 

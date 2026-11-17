@@ -1923,7 +1923,7 @@ def _joint_build(root, name='2026-10-04_test', n_rows_total=100, n_tiles=2,
                  gate_override=None, pipeline_tag='tag-abc',
                  write_parquet=True, write_prov=True, dedup_radius_arcsec=0.2,
                  tiles_rollctab=None, tiles_path=None, write_tile_m8=True,
-                 tile_m8_rollctab=None):
+                 tile_m8_rollctab=None, tile_kind=None):
     build_dir = root / name
     build_dir.mkdir(parents=True)
     stem = 'gctreasury10678_joint_nircam'
@@ -1951,8 +1951,9 @@ def _joint_build(root, name='2026-10-04_test', n_rows_total=100, n_tiles=2,
             tiles_path[o] = str(tile)
             rollctab = (tile_m8_rollctab or {}).get(
                 o, tiles_rollctab.get(o) or f'sha1:{DEFAULT_ROLL_SHA}')
+            iteration = 'm8_dedup' if tile_kind == 'm8_dedup' else 'm8'
             _tile_m8_fits(tile_dir / ('basic_merged_indivexp_photometry_tables_'
-                                      f'merged_resbgsub_m8_{obs}.fits'),
+                                      f'merged_resbgsub_{iteration}_{obs}.fits'),
                           rollctab)
     if write_prov:
         prov = {
@@ -1962,6 +1963,7 @@ def _joint_build(root, name='2026-10-04_test', n_rows_total=100, n_tiles=2,
             'n_clusters': n_clusters,
             'roll_corrected': roll_corrected,
             'dedup_radius_arcsec': dedup_radius_arcsec,
+            **({'tile_kind': tile_kind} if tile_kind else {}),
             'overlap_gate': {
                 'tol_mas': tol_mas, 'n_pairs_checked': 1,
                 'n_overlapping': n_overlapping, 'n_failed': n_failed,
@@ -2633,6 +2635,55 @@ def test_tile_catalogs_accept_bare_observation_keys(sr, tmp_path, monkeypatch):
     assert [(obs, p.name) for obs, p in found] == [
         ('o100', 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o100.fits'),
         ('o101', 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o101.fits')]
+
+
+def test_tile_catalogs_of_an_m8_dedup_build_are_the_dedup_tables(sr, tmp_path,
+                                                                 monkeypatch):
+    """A build that read the m8_dedup tiles ships those same files (#1283)."""
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, tile_kind='m8_dedup')
+    found = sr.discover_tile_catalogs(build_dir)
+    assert [(obs, p.name) for obs, p in found] == [
+        ('o100', 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o100.fits'),
+        ('o101', 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o101.fits')]
+
+
+def test_m8_dedup_build_refuses_when_only_the_raw_m8_tile_is_there(sr, tmp_path,
+                                                                    monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    build_dir = _joint_build(root, tile_kind='m8_dedup')
+    prov = json.loads(next(build_dir.glob('*.prov.json')).read_text())
+    tile_dir = sr.Path(prov['tiles']['o101']['path']).parent
+    dedup = tile_dir / ('basic_merged_indivexp_photometry_tables_merged_'
+                        'resbgsub_m8_dedup_o101.fits')
+    dedup.rename(dedup.with_name(dedup.name.replace('m8_dedup', 'm8')))
+    with pytest.raises(sr.JointCatalogGateError, match='tile o101: no m8 table'):
+        sr.discover_tile_catalogs(build_dir)
+
+
+def test_stage_joint_catalog_manifest_and_readme_name_the_dedup_iteration(
+        sr, tmp_path, monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root, tile_kind='m8_dedup')
+    field_dir, _ = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                          tmp_path / 'releases')
+    manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    tiles = [f for f in manifest['files'] if f['kind'] == 'catalog_tile']
+    assert {f['iteration'] for f in tiles} == {'resbgsub_m8_dedup'}
+    assert all('m8_dedup' in f['dest'] for f in tiles)
+    readme = (field_dir / 'README.md').read_text()
+    assert 'cmd_default' in readme and 'UNFILTERED' not in readme
+
+
+def test_a_build_without_tile_kind_keeps_the_raw_m8_iteration(sr, tmp_path,
+                                                              monkeypatch):
+    root = _joint_field(sr, monkeypatch, tmp_path)
+    _joint_build(root)
+    field_dir, _ = sr.stage_joint_catalog('zz_joint', 'v9-test',
+                                          tmp_path / 'releases')
+    manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    tiles = [f for f in manifest['files'] if f['kind'] == 'catalog_tile']
+    assert {f['iteration'] for f in tiles} == {'resbgsub_m8'}
 
 
 def test_tile_catalog_is_a_frozen_copy(sr, tmp_path, monkeypatch):

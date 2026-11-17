@@ -18,13 +18,18 @@ import stpsf
 from jwst_gc_pipeline.atomic_io import atomic_write, publish_into
 from jwst_gc_pipeline.mast_names import filtername_from_header
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
+from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.psf_channel import (
     nircam_channel_safe_psf_kwargs)
 from jwst_gc_pipeline.photometry.wingcal import (
     bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
     MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
-    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se,
+    WING_MULT_TABLE, wing_multiplier_ratio)
+from jwst_gc_pipeline.photometry.psf_fitting import annulus_scatter_sigma
 from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
+from jwst_gc_pipeline.photometry.epsf_hybrid import (
+    maybe_apply_epsf_core, psf_provenance_meta, stpsf_detector_name)
 from photutils.psf import GriddedPSFModel
 
 
@@ -129,6 +134,37 @@ def psf_in_cutout_coords(psf_grid, x0, y0):
     model._cutout_xoff = float(x0)
     model._cutout_yoff = float(y0)
     return model
+
+
+def deblend_psf_stamp(psf_grid):
+    """The ``psf_stamp`` callable of ``deblend_blob_zeroframe`` for a gridded
+    PSF: ``stamp(yy, xx, yc, xc)`` is the unit-flux PSF of a star at detector
+    position (``yc``, ``xc``), evaluated at the detector pixels ``yy``, ``xx``
+    with the grid interpolated at the star's position.  ``None`` for any other
+    PSF model, which leaves the deblend without the PSF veto."""
+    if not isinstance(psf_grid, GriddedPSFModel):
+        return None
+
+    def stamp(yy, xx, yc, xc):
+        return psf_grid.evaluate(np.asarray(xx, dtype=float),
+                                 np.asarray(yy, dtype=float), 1.0, xc, yc)
+    return stamp
+
+
+def _satstar_psf_fov_pixels(header):
+    """PSF grid size for the in-FOV satstar fits: 1024 px on the LW detectors,
+    512 px on the SW ones (see the comment where ``get_saturated_stars`` reads
+    the grid)."""
+    detector = header.get('DETECTOR', '').upper()
+    return 1024 if detector in ('NRCALONG', 'NRCBLONG', 'NRCA5', 'NRCB5') else 512
+
+
+def _psf_provenance_detector(header):
+    """The stpsf detector whose core ``get_psf`` applied for this frame; None
+    for the merged module, where it is read from the grid's own metadata."""
+    if header.get('MODULE') == 'merged':
+        return None
+    return stpsf_detector_name(header['DETECTOR'])
 
 
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
@@ -285,6 +321,23 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
             # There's no way to do it _right_ right without going back to the original data,
             # which is untenable with this approach.  It's a huge project.
 
+    # Opt-in hybrid PSF (PSF_EPSF_CORE_DIR; photometry/epsf_hybrid.py, #1208):
+    # the unsaturated fits in get_psf_model use the ePSF core inside 10 px, so
+    # the satstar fits must too, or a step appears at the saturation boundary
+    # for the small cores whose usable pixels start inside ~12 px.  The same
+    # grid object comes back when the variable is unset or has no core for this
+    # detector/filter.  The detector is passed explicitly (None only for the
+    # merged module, whose grid may be one of a per-detector list): with None
+    # and no ``detector`` in the grid metadata the core is skipped with a
+    # warning, which would reproduce the bug silently.  The large grid that
+    # get_saturated_stars loads for forced and MIRI sources stays STPSF: MIRI
+    # has no core, and a NIRCam forced source's core lies off the frame, where
+    # the hybrid equals STPSF beyond 12 px.
+    if instrument.upper() == 'NIRCAM':
+        big_grid = maybe_apply_epsf_core(
+            big_grid, None if module == 'merged' else stpsf_detector_name(detector),
+            filtername, program=header.get('PROGRAM'))
+
     return big_grid
 
 
@@ -426,9 +479,13 @@ def _merge_overlapping_components(saturated, sources, nsource, overlap_frac,
 # read low/NaN in the core but have NaN-variance (unrecoverable) centers and/or
 # bright saturated wings, so they clear the floor.  0 = off (default for unlisted
 # filters -> behaviour unchanged).  Override per run with env SATSTAR_DATA_FLOOR.
+# Looked up by the science bandpass (``_satstar_floor_band``), not by FILTER.
 _SATSTAR_DATA_FLOOR = {
     'f140m': 1000., 'f162m': 1000., 'f182m': 1000., 'f187n': 1000., 'f210m': 1000.,
     'f335m': 800.,  'f360m': 800.,  'f405n': 1000., 'f410m': 800.,  'f480m': 1000.,
+    # channel-sibling estimates (not yet measured from per-field crf data), #950:
+    # f164n from f187n, f323n and f470n from f405n.
+    'f164n': 1000., 'f323n': 1000., 'f470n': 1000.,
 }
 
 
@@ -535,7 +592,44 @@ SAT_SEVERITY_FLOOR = {
     # channel-sibling estimates (not yet measured from per-field crf data):
     'f212n': 4000., 'f466n': 5000., 'f115w': 4000., 'f200w': 4000.,
     'f356w': 2500., 'f444w': 2500.,
+    'f164n': 8000., 'f323n': 5000., 'f470n': 5000.,
 }
+
+
+def _satstar_floor_band(header):
+    """Lower-case science bandpass that keys ``_SATSTAR_DATA_FLOOR`` and
+    ``SAT_SEVERITY_FLOOR`` (#950).
+
+    NIRCam parks its pupil-wheel bands behind a wide blocker: F405N and F466N
+    frames read ``FILTER=F444W``, F323N reads ``F322W2``, F164N and F162M read
+    ``F150W2``.  A FILTER lookup gave F405N the F444W severity floor, F323N and
+    F164N no floor, and left every pupil-wheel band without a data floor.
+    ``''`` (floor 0, gate off) when the header names no bandpass.
+
+    A non-bandpass pupil element (WLP8, GRISMR) also wins over FILTER here, so a
+    weak-lens or grism frame reads band ``wlp8`` or ``grismr`` and gets floor
+    (0, 0); neither is science imaging, and no warning fires for them."""
+    return _frame_bandpass(header).lower()
+
+
+_SATSTAR_FLOOR_UNLISTED_WARNED = set()
+
+
+def _warn_unlisted_floor_band(band):
+    """Print one line per band when a NIRCam narrow or medium band is in
+    neither floor table, so that it does not run ungated unnoticed (#950).
+    NIRCam wide bands and all MIRI bands (W and C suffixes) are deliberately
+    unlisted (0 = gate off) and stay quiet.  Never raises."""
+    band = str(band).lower()
+    if (not re.fullmatch(r'f\d{3}[mn]', band)
+            or band in _SATSTAR_DATA_FLOOR or band in SAT_SEVERITY_FLOOR
+            or band in _SATSTAR_FLOOR_UNLISTED_WARNED):
+        return
+    _SATSTAR_FLOOR_UNLISTED_WARNED.add(band)
+    print(f"WARNING: satstar: {band.upper()} has no entry in _SATSTAR_DATA_FLOOR "
+          f"or SAT_SEVERITY_FLOOR; the data and severity gates are off for it "
+          f"(set SATSTAR_DATA_FLOOR / SATSTAR_SEVERITY_FLOOR or add table rows)",
+          flush=True)
 
 
 def _resolve_satstar_severity_floor(filtername, explicit=None):
@@ -1237,6 +1331,29 @@ def satstar_fit_switches(env=None):
       wd2 F150W nrcb3 (#1058), the 13-19 mag rows that failed only this test
       at 1.0 and had 1 <= qfit_local < 5 all matched a dolphot star (61 of 61,
       51 within 0.3 mag); at qfit_local >= 5, 9 of 17 had no counterpart.
+    * ``SATSTAR_DEBLEND_PSF_MARGIN`` (default 0 = OFF): with the ZEROFRAME
+      deblend, a secondary peak must exceed this fraction of the PSF model at
+      its position after the accepted stars are fitted and subtracted
+      (``satstar_deblend._psf_veto_peaks``, #1195).  The synthetic
+      single-star runs split most stars on a PSF ring or spike bead without
+      it.  Only the deblend reads it, so it is keyed under ``dv`` only for a
+      frame whose deblend runs (``--deblend-satstars`` and a sibling
+      ``_ramp.fits``).  Needs a gridded in-FOV PSF (otherwise it reports
+      ``off`` and the plain search runs).  Cost: the veto fits up to 40 model
+      stars by NNLS and, with a ``GriddedPSFModel``, evaluates a spline stamp
+      per trial; a review of #1324 timed one synthetic 4,000 px component
+      with 8 saturated stars at 10 s with one BLAS thread and 77-88 s on a
+      loaded node with default threading, so export ``OMP_NUM_THREADS=1`` in
+      any job that turns it on.  Known limit: where the saturated core is
+      clipped by the image edge or two cores merge into one invalid region the
+      accepted-star positions are wrong and the veto can return MORE centres
+      than the plain search (synthetic scenes, ``test_satstar_deblend_psf_veto``).
+    * ``SATSTAR_DEBLEND_ORDER`` (default OFF): with the ZEROFRAME deblend,
+      the seeds of one component are fitted largest ZF-saturated core first
+      (``order_key``), then the unsaturated peaks in detection order.  Every
+      seed of a component carries the component's ``sat_area``, so the
+      ``-sat_area`` sort alone leaves the order inside a component at the
+      raster order of its cores (#1094).  ``sat_area`` itself is unchanged.
     * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
       ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
       recovered-core cap and the PSF fraction below which it is skipped
@@ -1261,10 +1378,13 @@ def satstar_fit_switches(env=None):
         'r_header': _env_switch('SATSTAR_ZF_R_HEADER', cap_on, env),
         'zf_flat': _env_switch('SATSTAR_ZF_FLAT', False, env),
         'seed_core_dq': _env_switch('SATSTAR_SEED_CORE_DQ', True, env),
+        'deblend_order': _env_switch('SATSTAR_DEBLEND_ORDER', False, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
         'recovered_cap': cap_on,
+        'deblend_psf_margin': max(
+            float(env.get('SATSTAR_DEBLEND_PSF_MARGIN', '') or 0.0), 0.0),
         'cap_min_psf_frac': float(
             env.get('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '') or 0.005),
     }
@@ -1275,7 +1395,8 @@ def satstar_fit_switches(env=None):
 #: band would still compute the ``qfit_local`` column and carry a different
 #: cache key from a run that never exported the gate.
 SATSTAR_OPTIN_ENV = ('SATSTAR_ZF_KEEP_FINITE', 'SATSTAR_OBS_PK_FROM_CRF',
-                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R')
+                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R',
+                     'SATSTAR_DEBLEND_ORDER')
 _OPTIN_BANDPASS_RE = re.compile(r'^F\d{3,4}(W2|[WMN])$')
 
 
@@ -1382,11 +1503,33 @@ def _satstar_data_floor_signature(filename, env=None):
             photmjsr = fh['SCI'].header.get('PHOTMJSR', h0.get('PHOTMJSR'))
     except (OSError, KeyError):
         return ''
-    table = float(_SATSTAR_DATA_FLOOR.get(str(h0.get('FILTER', '')).lower(), 0.0))
+    table = float(_SATSTAR_DATA_FLOOR.get(_satstar_floor_band(h0), 0.0))
     readout = satstar_readout_data_floor(h0, photmjsr, env=env)
     if table > 0 and readout is not None and 0 < readout < table:
         return f"dfr{_satstar_data_floor_readout_frac(env):g}"
     return ''
+
+
+def _satstar_floor_lookup_signature(filename):
+    """``'sf<data>-<sev>to<data>-<sev>'`` when the bandpass lookup of the data
+    and severity floor tables differs from the old FILTER lookup (#950), else
+    ``''``.  The first pair is what FILTER gave, the second what the bandpass
+    gives.  Only pupil-wheel frames can differ, so every other frame keeps its
+    key; a catalogue fitted under the FILTER lookup is refit once."""
+    try:
+        with fits.open(filename) as fh:
+            h0 = fh[0].header
+    except OSError:
+        return ''
+    legacy = str(h0.get('FILTER', '')).lower()
+    band = _satstar_floor_band(h0)
+    old = (float(_SATSTAR_DATA_FLOOR.get(legacy, 0.0)),
+           float(SAT_SEVERITY_FLOOR.get(legacy, 0.0)))
+    new = (float(_SATSTAR_DATA_FLOOR.get(band, 0.0)),
+           float(SAT_SEVERITY_FLOOR.get(band, 0.0)))
+    if old == new:
+        return ''
+    return f"sf{old[0]:g}-{old[1]:g}to{new[0]:g}-{new[1]:g}"
 
 
 def satstar_uncapped_flux_filters(env=None):
@@ -1489,6 +1632,72 @@ def apply_uncapped_flux(base_tab, filtername, env=None):
     return base_tab
 
 
+def satstar_wing_mult_filters(env=None):
+    """Bandpasses whose satstar CATALOG flux gets the wing multiplier of
+    ``photometry.wingcal.WING_MULT_TABLE``, from ``SATSTAR_WING_MULT_FILTERS``
+    (#1036).
+
+    Comma- and/or space-separated bandpass names, case-insensitive (returned
+    upper-case); unset or blank -> empty, i.e. no behaviour change.  The
+    variable changes the catalog flux and the satstar cache key, so a name
+    that has no table entry raises ``ValueError`` rather than switching the
+    correction off without a word."""
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_WING_MULT_FILTERS') or ''
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if tok not in WING_MULT_TABLE]
+    if bad:
+        raise ValueError(
+            f"SATSTAR_WING_MULT_FILTERS={raw!r}: {bad} have no wing "
+            f"multiplier; available: {sorted(WING_MULT_TABLE)}")
+    return frozenset(scope)
+
+
+def apply_wing_multiplier(base_tab, filtername, env=None):
+    """Opt-in wing multiplier (#1036): divide the satstar CATALOG flux of a
+    listed bandpass by ``wing_multiplier_ratio(wingcal_rmask)``.
+
+    On wd2 F150W the stars with a masked core of r_mask >= 4.5 px read about
+    0.3-0.4 mag bright against the narrowband predictions, and the frame
+    wing self-calibration (C about 1.0-1.05) does not reach that size.  When
+    ``filtername`` is listed in ``SATSTAR_WING_MULT_FILTERS`` (see
+    ``satstar_wing_mult_filters``), ``flux_fit`` and ``flux_err`` are divided
+    by the ratio and the ratio is recorded in ``wingmult_ratio``.  The column
+    is added only for listed bandpasses, so the default catalog schema (and
+    per-frame catalogs cached before this switch) is unchanged.
+
+    The ratio stays out of ``wingcal_ratio``: the pooled fallback in
+    ``merge_catalogs.apply_pooled_wingcal`` reads ``wingcal_ratio == 1.0`` as
+    "per-frame calibration skipped".  ``flux_fit_raw``, ``flux_fit_precap``,
+    the satstar model and the residual are untouched.  Out-of-field
+    (``outside_fov_seed``) rows are skipped for the reason given in
+    ``apply_uncapped_flux``.  Frames whose bandpass is listed carry ``wm`` in
+    ``satstar_fit_switch_signature``."""
+    if base_tab is None:
+        return base_tab
+    if str(filtername).upper() not in satstar_wing_mult_filters(env):
+        return base_tab
+    n = len(base_tab)
+    ratio = np.ones(n)
+    if n and 'wingcal_rmask' in base_tab.colnames:
+        ratio = wing_multiplier_ratio(
+            np.asarray(base_tab['wingcal_rmask'], dtype=float), filtername)
+        if 'outside_fov_seed' in base_tab.colnames:
+            ratio = np.where(np.asarray(base_tab['outside_fov_seed'], dtype=bool),
+                             1.0, ratio)
+        if (ratio != 1.0).any():
+            base_tab['flux_fit'] = np.asarray(base_tab['flux_fit'],
+                                              dtype=float) / ratio
+            if 'flux_err' in base_tab.colnames:
+                base_tab['flux_err'] = np.asarray(base_tab['flux_err'],
+                                                  dtype=float) / ratio
+            print(f"wing multiplier: {filtername}: {int((ratio != 1.0).sum())}/"
+                  f"{n} satstar catalog flux(es) divided by the wing "
+                  f"multiplier (max {np.max(ratio):.3f})", flush=True)
+    base_tab['wingmult_ratio'] = ratio
+    return base_tab
+
+
 def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
                                  env=None):
     """Cache key for the ``satstar_fit_switches`` of one frame.
@@ -1514,6 +1723,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     ``sq`` (``SATSTAR_SEED_CORE_DQ``, ON by default) moves seeds on any frame,
     so every frame's default key carries it and its older catalog is refit
     once.
+
+    ``sf<data>-<sev>to<data>-<sev>`` (#950) marks a pupil-wheel frame whose data
+    and severity floors, now keyed by the science bandpass, differ from what the
+    old FILTER lookup gave (``_satstar_floor_lookup_signature``).
     """
     sw = satstar_fit_switches(env)
     parts = []
@@ -1557,14 +1770,30 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['seed_core_dq']:
         # Acts on every in-FOV seed, with or without a ramp.
         parts.append('sq')
+    if deblend_with_zeroframe and anchor_runs and sw['deblend_psf_margin'] > 0:
+        # Changes which secondary peaks the deblend keeps (#1195).  The deblend
+        # reads the ZEROFRAME, so a frame without a sibling ``_ramp.fits``
+        # never runs it and keeps its key.  Left out when off, so the default
+        # key is the one before the veto existed.
+        parts.append(f"dv{sw['deblend_psf_margin']:g}")
+    if sw['deblend_order'] and deblend_with_zeroframe:
+        # Reorders the seeds of a deblended component (#1094); acts only
+        # where the ZEROFRAME deblend runs.
+        parts.append('do')
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
+    # The floor tables are keyed by the science bandpass (#950); a pupil-wheel
+    # frame whose floors changed from the old FILTER lookup is refit.
+    sf = _satstar_floor_lookup_signature(filename)
+    if sf:
+        parts.append(sf)
     # Single-group (G1-only) pixels flagged from the ramp change the seeds and
-    # the fit on frames that have any; a catalog fitted without it is stale.
+    # the fit on frames that get flagged ('g1': the auto gate said biased, or
+    # G1ONLY_SAT_DQ=1); a catalog fitted without it is stale there.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1 = g1only_dq.signature(filename)
     if g1:
@@ -1594,6 +1823,18 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             _bp = ''
         if _bp in satstar_seed_require_sat_dq_filters(env):
             parts.append('sd')
+    if satstar_wing_mult_filters(env):
+        # SATSTAR_WING_MULT_FILTERS changes the per-frame catalog
+        # flux_fit/flux_err (not the model) of the listed bandpasses (#1036).
+        # Same per-frame bandpass rule as 'uf'; the default (empty list) and
+        # every unlisted band keep their keys.
+        try:
+            with fits.open(filename) as fh:
+                _bp = _frame_bandpass(fh[0].header)
+        except OSError:
+            _bp = ''
+        if _bp in satstar_wing_mult_filters(env):
+            parts.append('wm')
     return '_'.join(parts)
 
 
@@ -2238,9 +2479,20 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     return recovered, rim_mask, deep_core_mask, R
 
 
+#: Modes of the ZEROFRAME fit anchor, recorded by ``SATZFMOD``.
+ZF_MODE_RIM = 'rim'               # rim rewritten from group 0, deep core masked
+ZF_MODE_KEEPFINITE = 'keepfinite'  # nothing to rewrite, deep core masked
+ZF_MODE_BLOB = 'blob'             # whole any-group SATURATED blob masked
+
+
+def zeroframe_default_provenance():
+    """Provenance of a frame fitted without the ZEROFRAME anchor (#681)."""
+    return {'mode': ZF_MODE_BLOB, 'n_rim': 0, 'n_deep': 0, 'R': float('nan')}
+
+
 def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
                          first_frame=None, R_header=None, cal_offset=None,
-                         flat=None):
+                         flat=None, provenance=None):
     """Apply the ZEROFRAME fit anchor for ``get_saturated_stars``.
 
     Returns ``(data, zf_deep_core, rim, rewrite_delta)``:
@@ -2253,6 +2505,13 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
       ``SATSTAR_OBS_PK_FROM_CRF`` is on, else ``None``.  It lets the
       observed-peak second chance read the UNREWRITTEN crf values while keeping
       ``data_working``'s neighbour-model subtraction.
+
+    ``provenance`` (optional dict) is filled in place with which treatment the
+    frame got (#681), for the ``SATZF*`` stamps: ``mode`` (``rim``,
+    ``keepfinite`` or ``blob``), ``n_rim`` (pixels rewritten), ``n_deep``
+    (pixels left masked as deep core; 0 for ``blob``, whose mask is the whole
+    SATURATED blob) and ``R`` (NaN when unusable).  The group-0 scale is not
+    among the return values, so this is the only way to read it.
 
     Under ``SATSTAR_ZF_KEEP_FINITE`` the rim can be empty with a usable R:
     every SATURATED pixel below the group-0 ceiling kept its ramp-fit rate.
@@ -2270,6 +2529,9 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
         data, dq, zeroframe, group0_saturated=group0_saturated,
         first_frame=first_frame, R_header=R_header, cal_offset=cal_offset,
         flat=flat)
+    prov = provenance if provenance is not None else {}
+    prov.update(zeroframe_default_provenance())
+    prov['R'] = float(R)
     if not np.isfinite(R):
         return data, None, rim, None
     sw = satstar_fit_switches()
@@ -2282,13 +2544,108 @@ def zeroframe_fit_anchor(data, dq, zeroframe, group0_saturated=None,
         if sw['obs_pk_from_crf']:
             delta = np.where(rim, np.asarray(rec, dtype=float)
                              - np.asarray(data, dtype=float), 0.0)
+        prov.update(mode=ZF_MODE_RIM, n_rim=int(rim.sum()),
+                    n_deep=int(deep.sum()))
         return rec, deep, rim, delta
     if sw['keep_finite']:
         print(f"satstar ZEROFRAME fit-anchor: no rim pixel to rewrite "
               f"(SATSTAR_ZF_KEEP_FINITE kept them, R={R:.4g}); masking the "
               f"{int(deep.sum())} deep-core pixels only", flush=True)
+        prov.update(mode=ZF_MODE_KEEPFINITE, n_deep=int(deep.sum()))
         return data, deep, rim, None
     return data, None, rim, None
+
+
+def zeroframe_reconcile_provenance(prov, zf_deep_core, rim):
+    """Make ``prov`` agree with the fit mask actually used (#681), in place.
+
+    The fit mask is ``zf_deep_core`` when it is not None and the whole SATURATED
+    blob otherwise, so that is the single source of truth for ``zf_fit`` and
+    ``SATZFFIT``.  ``zeroframe_fit_anchor`` fills ``prov`` from the same
+    branches, but it is a second channel: an anchor that returns a deep core and
+    leaves ``prov`` at its blob default would otherwise stamp "blob" on stars
+    fitted on the deep core.  Where the two disagree the mask wins; ``n_rim`` and
+    ``n_deep`` are then counted from the arrays.
+    """
+    if zf_deep_core is None:
+        if prov['mode'] != ZF_MODE_BLOB:
+            prov.update(zeroframe_default_provenance(), R=prov['R'])
+        return prov
+    if prov['mode'] == ZF_MODE_BLOB:
+        n_rim = 0 if rim is None else int(np.asarray(rim).sum())
+        prov.update(mode=ZF_MODE_RIM if n_rim else ZF_MODE_KEEPFINITE,
+                    n_rim=n_rim, n_deep=int(np.asarray(zf_deep_core).sum()))
+    return prov
+
+
+def stamp_zeroframe_provenance(target, prov):
+    """Write the ZEROFRAME fit-treatment keywords onto a header or table meta.
+
+    ``SATZFFIT`` is True when the fit mask was the group-0 deep core
+    (``rim`` and ``keepfinite``) and False when the whole SATURATED blob was
+    masked.  ``SATZFR`` is written only when R was finite.  Products written
+    before #681 carry none of these keywords, which readers take as unknown.
+    """
+    prov = prov if prov is not None else zeroframe_default_provenance()
+    target['SATZFFIT'] = (prov['mode'] != ZF_MODE_BLOB,
+                          'fit mask = group-0 deep core, not blob')
+    target['SATZFMOD'] = (prov['mode'], 'ZEROFRAME mode: rim/keepfinite/blob')
+    target['SATZFRIM'] = (int(prov['n_rim']), 'rim pixels rewritten (group 0)')
+    target['SATZFDEP'] = (int(prov['n_deep']), 'deep-core pixels left masked')
+    if np.isfinite(prov['R']):
+        target['SATZFR'] = (float(prov['R']), 'group-0 to rate scale R')
+    return target
+
+
+def stamp_deblend_stats(target, stats):
+    """Write the ZEROFRAME deblend counts onto a header or table meta (#1196).
+
+    ``DBLNCMP`` counts the components the deblender ran on, ``DBLNSPL`` those
+    it split into more than one star (after the PSF veto), ``DBLFAIL`` those
+    whose deblend raised and kept their centroid and ``DBLNVET`` the residual
+    peaks the PSF veto rejected (0 when ``SATSTAR_DEBLEND_PSF_MARGIN`` is off).
+    Nothing is written when ``stats`` is None, so a frame fitted without the
+    deblend carries none of them.  A ``fits.Header`` target gets
+    ``(value, comment)`` cards; a plain dict (a table's ``meta``) gets the
+    bare integers, which is what a read of the written file returns.
+    """
+    if stats is None:
+        return target
+    cards = (('DBLNCMP', int(stats.get('n_components', 0)),
+              'components the ZEROFRAME deblend ran on'),
+             ('DBLNSPL', int(stats.get('n_split', 0)),
+              'components split into >1 star'),
+             ('DBLFAIL', int(stats.get('n_failed', 0)),
+              'components whose deblend raised'),
+             ('DBLNVET', int(stats.get('n_vetoed', 0)),
+              'secondary peaks the PSF veto rejected'))
+    for key, value, comment in cards:
+        target[key] = (value, comment) if isinstance(target, fits.Header) else value
+    return target
+
+
+def zeroframe_row_provenance(prov, rim, sources, src_label, comp_slice=None):
+    """Per-source ZEROFRAME columns ``(zf_fit, zf_rim_in_core, zf_nrim_src)``.
+
+    ``zf_fit`` is 1 when the frame was fitted with the group-0 deep core as
+    the mask and 0 when the whole blob was masked.  ``zf_nrim_src`` counts the
+    rewritten rim pixels inside this source's saturated component
+    (``sources == src_label``), and ``zf_rim_in_core`` is 1 when there is at
+    least one.  Forced and outside-FOV seeds have no component: they read 0
+    and -1.  Seeds that a deblend split out of one component share its label,
+    so for them the count describes the component, not the star.
+    """
+    zf_fit = 0 if prov['mode'] == ZF_MODE_BLOB else 1
+    if src_label is None or sources is None:
+        return zf_fit, 0, -1
+    if rim is None:
+        return zf_fit, 0, 0
+    if comp_slice is not None and comp_slice[0] is not None:
+        n = int((np.asarray(rim)[comp_slice]
+                 & (np.asarray(sources)[comp_slice] == src_label)).sum())
+    else:
+        n = int((np.asarray(rim) & (np.asarray(sources) == src_label)).sum())
+    return zf_fit, int(n > 0), n
 
 
 def nearest_seed_cell(shape, own_yx, sibling_yx):
@@ -2691,6 +3048,20 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     return recovered, rim_mask, deep_core_mask, Kglobal
 
 
+def sort_source_records(source_records, deblend_order=False):
+    """Sort satstar seed records in place into fit order: largest saturated
+    component first (``sat_area``).  With ``deblend_order`` the stable second
+    key is the deblender's ``order_key`` (core radius, 0 for a peak; #1094),
+    largest first; records without one count as 0.  Without it the order inside
+    a component is the order the records arrived in."""
+    if deblend_order:
+        source_records.sort(key=lambda s: (-int(s.get('sat_area') or 0),
+                                           -float(s.get('order_key') or 0.0)))
+    else:
+        source_records.sort(key=lambda s: -int(s.get('sat_area') or 0))
+    return source_records
+
+
 def stamp_seed_kinds(source_records, seed_kinds):
     """Stamp per-component seed provenance onto deblended source records.
 
@@ -3023,14 +3394,11 @@ def bkg_scatter_fit_error(err, cutout, valid, x, y, bkg_inner, bkg_outer,
         1.4826 * MAD of the annulus pixels, NaN when fewer than
         ``min_pixels`` are usable.
     """
-    yy, xx = np.indices(cutout.shape)
-    rr = np.hypot(xx - x, yy - y)
-    sel = (valid & np.isfinite(cutout) & (rr >= bkg_inner) & (rr < bkg_outer))
-    if sel.sum() < min_pixels:
+    sigma = annulus_scatter_sigma(cutout, valid, x, y, bkg_inner, bkg_outer,
+                                  min_pixels=min_pixels)
+    if np.isnan(sigma):
         return err, np.nan
-    vals = cutout[sel]
-    sigma = float(1.4826 * np.median(np.abs(vals - np.median(vals))))
-    if not np.isfinite(sigma) or sigma <= 0:
+    if sigma <= 0:
         return err, sigma
     return np.sqrt(err ** 2 + sigma ** 2), sigma
 
@@ -3720,15 +4088,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _spike_ratio = float(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE_RATIO', 3.0))
     _readout_floor = satstar_readout_data_floor(
         header, fitsdata['SCI'].header.get('PHOTMJSR', header.get('PHOTMJSR')))
-    _sat_floor = _resolve_satstar_data_floor(header.get('FILTER', ''),
+    _floor_band = _satstar_floor_band(header)
+    _warn_unlisted_floor_band(_floor_band)
+    _sat_floor = _resolve_satstar_data_floor(_floor_band,
                                              explicit=sat_data_floor,
                                              readout_floor=_readout_floor)
     if _readout_floor is not None and _sat_floor == _readout_floor:
         print(f"Saturated starfinding: data floor {_sat_floor:.0f} MJy/sr from the "
               f"readout (table "
-              f"{_SATSTAR_DATA_FLOOR[str(header.get('FILTER', '')).lower()]:g})",
+              f"{_SATSTAR_DATA_FLOOR.get(_floor_band, 0.0):g})",
               flush=True)
-    _sev_floor = _resolve_satstar_severity_floor(header.get('FILTER', ''),
+    _sev_floor = _resolve_satstar_severity_floor(_floor_band,
                                                  explicit=satstar_severity_floor)
     _partner_xy = None
     _sibling_xy = None
@@ -3829,14 +4199,40 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # satstar_deblend.build_deblended_source_records.  When ``zeroframe is None``
     # this block is skipped and the behaviour is identical to before (one seed per
     # component at its refined centroid).
+    _deblend_big_grid = None
+    _dbl_stats = None
     if zeroframe is not None and zeroframe_deblend:
         from .satstar_deblend import build_deblended_source_records
         _inst_repl = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
         _, _fwhm_pix_db = get_fwhm(header, instrument_replacement=_inst_repl)
+        # PSF veto (#1195, SATSTAR_DEBLEND_PSF_MARGIN, default off): the in-FOV
+        # fit grid is read here instead of further down and reused there.
+        _dbl_kwargs = {}
+        _dbl_margin = satstar_fit_switches()['deblend_psf_margin']
+        if _dbl_margin > 0:
+            _deblend_big_grid = get_psf(
+                header, path_prefix=path_prefix,
+                use_merged_psf_for_merged=use_merged_psf_for_merged,
+                fov_pixels=_satstar_psf_fov_pixels(header))
+            _dbl_stamp = deblend_psf_stamp(_deblend_big_grid)
+            if _dbl_stamp is None:
+                print("satstar ZEROFRAME deblend: PSF veto needs a gridded PSF; "
+                      "running without it", flush=True)
+            else:
+                _dbl_kwargs = dict(psf_stamp=_dbl_stamp, psf_margin=_dbl_margin)
+        _dbl_stats = {}
         source_records = build_deblended_source_records(
             saturated, sources, coms, _sizes_by_label, zeroframe, data,
             _fwhm_pix_db, daophot_xy=deblend_daophot_xy,
-            confirm_xy=deblend_confirm_xy)
+            confirm_xy=deblend_confirm_xy, stats=_dbl_stats, **_dbl_kwargs)
+        if _dbl_stats.get('n_failed'):
+            print(f"satstar ZEROFRAME deblend: {_dbl_stats['n_failed']} "
+                  f"component(s) failed and kept their centroid; first: "
+                  f"{_dbl_stats['first_error']}", flush=True)
+        if _dbl_kwargs:
+            print(f"satstar ZEROFRAME deblend: PSF veto (margin "
+                  f"{_dbl_margin:g}) by component: "
+                  f"{_dbl_stats.get('psf_veto', {})}", flush=True)
         # Inherit each record's PARENT COMPONENT seed kind via its stamped
         # label; the bare 'dqsat' default reported every deblended seed as DQ
         # even when it came from the peak / subfloor / partner logic (#212).
@@ -3957,7 +4353,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # Subtracting the brighter star's PSF before fitting the fainter one
     # removes wing contamination at the cost of one PSF-model evaluation
     # per source.
-    source_records.sort(key=lambda s: -int(s.get('sat_area') or 0))
+    # SATSTAR_DEBLEND_ORDER (#1094): the stars of one deblended component share
+    # its sat_area, so the sort above leaves them in raster order of their
+    # cores.  The stable second key puts the larger cores (and then the
+    # unsaturated peaks, order_key 0, in detection order) first.
+    sort_source_records(source_records,
+                        deblend_order=satstar_fit_switches()['deblend_order'])
 
     if outside_star_pixels is not None:
         for xy in outside_star_pixels:
@@ -4002,6 +4403,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # rewrite - crf at the ZEROFRAME-rewritten pixels (0 elsewhere) when
     # SATSTAR_OBS_PK_FROM_CRF is on; see zeroframe_fit_anchor.
     _zf_rewrite_delta = None
+    # Which treatment the frame got (#681); recorded in the per-source
+    # zf_* columns and, through builtins, in the SATZF* header keywords.
+    _rim = None
+    _zf_prov = zeroframe_default_provenance()
     if zeroframe is not None:
         _dqarr_zf = (fitsdata['DQ'].data
                      if 'DQ' in [h.name for h in fitsdata] else None)
@@ -4010,10 +4415,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             group0_saturated=zeroframe_group0_saturated,
             first_frame=zeroframe_first_frame,
             cal_offset=zeroframe_cal_offset,
-            flat=zeroframe_flat,
+            flat=zeroframe_flat, provenance=_zf_prov,
             R_header=zeroframe_header_R(
                 header, fitsdata['SCI'].header.get(
                     'PHOTMJSR', header.get('PHOTMJSR'))))
+    # The mask (zf_deep_core is not None) decides zf_fit, not the anchor's report.
+    zeroframe_reconcile_provenance(_zf_prov, zf_deep_core, _rim)
+    builtins.satstar_zf_provenance = _zf_prov
 
     # Fit-quality switches (issue #972), read once per frame.
     _fit_switches = satstar_fit_switches()
@@ -4058,12 +4466,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # plateaus and matches catalog flux.  SW detectors keep 512 (Sickle
     # subarray data cannot diagnose larger sizes; full-frame fields may
     # need re-evaluation).
-    _det_for_fov = header.get('DETECTOR', '').upper()
-    _is_lw_for_satstar = _det_for_fov in ('NRCALONG', 'NRCBLONG', 'NRCA5', 'NRCB5')
-    _satstar_fov_pixels = 1024 if _is_lw_for_satstar else 512
-    big_grid = get_psf(header, path_prefix=path_prefix,
-                       use_merged_psf_for_merged=use_merged_psf_for_merged,
-                       fov_pixels=_satstar_fov_pixels)
+    # (the PSF-veto deblend, SATSTAR_DEBLEND_PSF_MARGIN, builds the same grid
+    # earlier and it is reused here)
+    if _deblend_big_grid is not None:
+        big_grid = _deblend_big_grid
+    else:
+        big_grid = get_psf(header, path_prefix=path_prefix,
+                           use_merged_psf_for_merged=use_merged_psf_for_merged,
+                           fov_pixels=_satstar_psf_fov_pixels(header))
 
     # Large PSF grid for forced (outside-FOV) sources: their diffraction spikes
     # extend ~40" into the FOV — that's 635 px (LW) to 1290 px (SW), much
@@ -4943,6 +5353,19 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # unmeasured seed.
         result['sat_area'] = np.full(
             len(result), int(src_sat_area) if src_sat_area else -1, dtype=int)
+
+        # ZEROFRAME treatment of this frame and of this source's component
+        # (#681).  int32 so that a catalog without the columns reads back as
+        # masked, not 0, after the consolidated cache's FITS round trip.
+        _zf_fit, _zf_in_core, _zf_nrim = zeroframe_row_provenance(
+            _zf_prov, _rim, sources, src_label,
+            comp_slice=(_comp_slices[src_label - 1]
+                        if (src_label is not None
+                            and 0 < src_label <= len(_comp_slices)) else None))
+        result['zf_fit'] = np.full(len(result), _zf_fit, dtype=np.int32)
+        result['zf_rim_in_core'] = np.full(len(result), _zf_in_core,
+                                           dtype=np.int32)
+        result['zf_nrim_src'] = np.full(len(result), _zf_nrim, dtype=np.int32)
 
         # stable saturated-component sky anchor (bbox centre) -> lets the
         # consolidation dedup merge same-component per-frame detections even when
@@ -6102,6 +6525,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             severity_floor=float(_sev_floor or 0.0))
         # Opt-in uncapped catalog flux (#1186): catalog only, model unchanged.
         base_tab = apply_uncapped_flux(base_tab, get_filtername(header))
+        # Opt-in F150W wing multiplier (#1036): catalog only, model unchanged.
+        base_tab = apply_wing_multiplier(base_tab, get_filtername(header))
+        # The per-source loop above works in stamp coordinates; from here on
+        # the table is a catalog, so x_fit/y_fit/x_init/y_init become detector
+        # pixels, the stamp values keep their own *_cutout columns, and id is
+        # a running index (#949).
+        base_tab = finalize_satstar_columns(base_tab)
+        stamp_deblend_stats(base_tab.meta, _dbl_stats)
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
@@ -6750,10 +7181,12 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     """
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
-    # Single-group (G1-only) NIRCam pixels carry a ~0.75x rate with clean DQ;
-    # flag them SATURATED|DO_NOT_USE (+ NaN) from the sibling _ramp.fits so
-    # the finder seeds them and the first-read recovery rebuilds them.
-    # In memory, idempotent; G1ONLY_SAT_DQ=0 disables.  See g1only_dq.py.
+    # Single-group (G1-only) NIRCam pixels carry a 0.75x rate with clean DQ on
+    # frames whose ramp fit divided G1 by TGROUP; flag them SATURATED|DO_NOT_USE
+    # (+ NaN) from the sibling _ramp.fits so the finder seeds them and the
+    # first-read recovery rebuilds them.  G1ONLY_SAT_DQ=auto (default) decides
+    # per frame from the data.  In memory, idempotent; G1ONLY_SAT_DQ=0
+    # disables.  See g1only_dq.py.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1only_dq.apply_to_hdul(fh, filename, label='satstar')
     data = fh['SCI'].data
@@ -6851,6 +7284,7 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         kwargs['zeroframe_deblend'] = True
     print("Running get_saturated_stars", flush=True)
     builtins.satstar_severity_dropped = None
+    builtins.satstar_zf_provenance = None
     satstar_table = get_saturated_stars(fh, **kwargs)
     # Written whatever the fit outcome (also when nothing was accepted), and
     # empty when nothing was dropped, so a rerun never leaves a stale file for
@@ -6870,7 +7304,19 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         print(f"Saved {len(_sev_dropped)} severity-gate drop(s) to {_sev_fn}",
               flush=True)
     if satstar_table is not None:
+        # Which ZEROFRAME treatment the fit got (#681), on the primary header
+        # that the model, residual and flag products copy; the catalog meta
+        # takes them from it.  Not part of SATRECOV/SATFITSW: it records the fit, it does
+        # not change it, so existing cached catalogs stay valid.
+        _zf_prov = getattr(builtins, 'satstar_zf_provenance', None)
+        stamp_zeroframe_provenance(header, _zf_prov)
         satstar_table.meta.update(header)
+        # Which PSF the fit used (PSFMODEL / EPSFSHA / ...), so a hybrid-run
+        # catalog is not mistaken for an STPSF one (#1208).  After the fit, so
+        # get_psf has populated the record; restricted to this frame's
+        # detector, as the process may have applied others.
+        satstar_table.meta.update(psf_provenance_meta(
+            get_filtername(header), detector=_psf_provenance_detector(header)))
         # Stamp the saturated-core recovery config so load_or_make_satstar_catalog
         # can tell whether a cached catalog matches this run's recovery settings
         # (see _satstar_recovery_signature); without it a recovery toggle silently

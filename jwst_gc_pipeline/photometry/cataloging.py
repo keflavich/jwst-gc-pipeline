@@ -24,11 +24,14 @@ with legacy ``iter2/iter3/iter4`` ones.
 The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 (BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
+import contextlib
 import copy
 import functools
 import glob
+import json
 
 import numpy as np
+import yaml.representer
 from astropy.coordinates import SkyCoord
 from astropy.io.registry import IORegistryError
 from astropy.table import Table
@@ -53,7 +56,7 @@ from jwst_gc_pipeline.photometry.requested_filters import (
     RequestedFilterHasNoFramesError, assert_requested_filters_have_frames)
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
-from jwst_gc_pipeline.atomic_io import write_table_atomic
+from jwst_gc_pipeline.atomic_io import atomic_write, write_table_atomic
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
@@ -332,6 +335,46 @@ def _bright_presub_peak_noise():
         raise ValueError(
             f"DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE={raw!r} must be finite and >= 0")
     return val
+
+
+# fit-to-seed match radius for the SATPROX_SEEDED_COMPANION exemption
+_SEEDED_COMPANION_RADIUS_PIX = 0.5
+
+
+def _seeded_companion_kwargs(ctx, prev_seed_catalog, is_miri):
+    """``SATPROX_SEEDED_COMPANION`` (default off): near-saturation-filter
+    kwargs that exempt seeded companions of handed-off bright stars.
+
+    A fit within ``_SEEDED_COMPANION_RADIUS_PIX`` of a ``prev_seed_catalog``
+    position is kept when every SATURATED pixel within ``near_sat_dist_pix``
+    of it is one the hand-off gave back to the fit (``ctx.handoff_restore``)
+    and it has a finite ``flux_fit > 0`` and finite ``qfit``
+    (``_L._seeded_companion_mask``).  Without it, gc-treasury F480M companions
+    4-5 px from a ~2e4 hand-off primary are fitted and then dropped because
+    the primary's restored late-group footprint reaches within 1 px of them.
+
+    Returns ``{}`` (filter unchanged) when the switch is off, for MIRI, for a
+    pass without a seed catalog (m1/m2), and on frames where the hand-off
+    restored no pixels.  An unrecognised on/off value raises
+    (``_handoff_env_flag``).
+    """
+    if not _handoff_env_flag('SATPROX_SEEDED_COMPANION', False):
+        return {}
+    restored = getattr(ctx, 'handoff_restore', None)
+    if is_miri or not prev_seed_catalog or restored is None:
+        return {}
+    seeds = _L._resolve_seed_skycoords(Table.read(prev_seed_catalog), ww=ctx.ww)
+    if len(seeds) == 0:
+        return {}
+    px, py = ctx.ww.world_to_pixel(seeds['skycoord'])
+    px = np.asarray(px, dtype=float)
+    py = np.asarray(py, dtype=float)
+    ok = np.isfinite(px) & np.isfinite(py)
+    print(f"[manual] SATPROX_SEEDED_COMPANION: {int(ok.sum())} seed position(s), "
+          f"{int(np.sum(restored))} restored SATURATED px", flush=True)
+    return dict(companion_seed_xy=np.column_stack([px[ok], py[ok]]),
+                companion_seed_radius_pix=_SEEDED_COMPANION_RADIUS_PIX,
+                companion_restored_mask=np.asarray(restored, dtype=bool))
 
 
 def _bright_presub_select(seed, data, peak_noise):
@@ -1517,6 +1560,36 @@ def _subset_model_image(phot, keep, shape):
         phot.__dict__.pop('_model_image_params', None)
 
 
+def _miri_satstar_excl_xy(satstar_table):
+    """Positions for the MIRI satstar-coincidence drop in ``_manual_phot_pass``.
+
+    Returns the ``(N, 2)`` array of ``x_fit``/``y_fit`` values the drop has
+    always been given, or None when there is none.  Those are the fit STAMP
+    coordinates (about 40, 40), not detector pixels, so the drop only ever
+    acted near that stamp position and was effectively dead.  Since #949 a
+    satstar table holds detector pixels in ``x_fit``/``y_fit`` and keeps the
+    stamp values in ``x_fit_cutout``/``y_fit_cutout``; this reads the stamp
+    values from either vintage so the MIRI per-frame daophot output does not
+    change with #949.  Activating the drop on detector positions (read
+    ``xcentroid``/``ycentroid``) removes daophot rows from every MIRI frame
+    and goes in its own PR.
+    """
+    if satstar_table is None or not len(satstar_table):
+        return None
+    names = satstar_table.colnames
+    for xcol, ycol in (('x_fit_cutout', 'y_fit_cutout'), ('x_fit', 'y_fit')):
+        if xcol in names and ycol in names:
+            break
+    else:
+        return None
+    sxv = np.asarray(satstar_table[xcol], dtype=float)
+    syv = np.asarray(satstar_table[ycol], dtype=float)
+    ok = np.isfinite(sxv) & np.isfinite(syv)
+    if not ok.any():
+        return None
+    return np.column_stack([sxv[ok], syv[ok]])
+
+
 def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
@@ -1531,7 +1604,9 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       miri_prominence_snr=0.0, prominence_bg_box=0,
                       prominence_data_i2d=None, prominence_ww_i2d=None,
                       frame_ww=None, protect_xy=None, protect_radius_pix=0.0,
-                      handoff_xy=None, handoff_radius_pix=0.0):
+                      handoff_xy=None, handoff_radius_pix=0.0,
+                      companion_seed_xy=None, companion_seed_radius_pix=0.0,
+                      companion_restored_mask=None):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -1542,6 +1617,23 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     ``handoff_xy``/``handoff_radius_pix`` exempt fits at the satstar channel's
     implied-peak-gate rejects from the near-saturation filter ONLY (see
     ``_gate_reject_handoff_xy``); ``None`` leaves the chain unchanged.
+    ``companion_seed_xy``/``companion_seed_radius_pix``/
+    ``companion_restored_mask`` likewise exempt seeded companions next to a
+    handed-off star's restored footprint (``_seeded_companion_mask``, env
+    ``SATPROX_SEEDED_COMPANION``); ``None`` leaves the chain unchanged.
+
+    ``init_params`` rows with ``keep_in_fit`` True (cross-epoch seeds, see
+    ``_build_manual_seed``) stay in the fit through the post-fit dedup, the
+    final overshoot drop and the non-positive-flux cut, so their neighbours
+    are fitted jointly with them; each of those rules is still evaluated on
+    them.  The near-saturation, satstar-wing and MIRI filters apply to them
+    unchanged.  At the end, the keep_in_fit rows that a rule would have
+    removed, or that ``keep_in_fit_listed`` marks as not listed by the seed
+    dedup, are removed from the catalog and from the returned model, so the
+    catalog follows the production rules with the jointly fitted values.  The
+    result keeps a ``keep_in_fit`` column; ``result.meta`` records KIFFIT
+    (keep_in_fit rows fitted) and KIFLIST (listed).  Without keep_in_fit rows
+    the chain is unchanged.
 
     Returns ``(result_table, modsky, phot_obj)``.  Does no file I/O.
     """
@@ -1593,6 +1685,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     result = phot(data, mask=mask, init_params=init_params,
                   error=np.where(bad, 1e10, err))
     _record_group_fit_meta(result, use_grouper, fit_maxiters)
+    kif = _attach_keep_in_fit(result, init_params)
 
     # --- post-fit dedup (1.0 px, qfit tiebreak) ---
     xfit = np.asarray(result['x_fit'], dtype=float)
@@ -1603,7 +1696,15 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     keep, n_disagree, owner = _dedup_close_sources(
         xy=np.column_stack([xfit, yfit]), flux=flux,
         min_sep_pix=1.0, quality=qfit, return_owner=True)
-    if int(len(keep) - np.sum(keep)) > 0:
+    keep_fit = keep
+    if kif:
+        prot = np.asarray(result['keep_in_fit'], dtype=bool)
+        result['keep_in_fit_listed'] &= keep
+        keep_fit = keep | prot
+        if np.any(prot & ~keep):
+            print(f"[{label}] post-fit dedup: {int(np.sum(prot & ~keep))} "
+                  f"keep_in_fit row(s) stay in the fit, not listed", flush=True)
+    if int(len(keep_fit) - np.sum(keep_fit)) > 0:
         # The survivor's seed is where the overshoot refit below pins it, so
         # give it the cluster seed nearest its fit (#1239).
         res = phot.results
@@ -1618,16 +1719,16 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                 print(f"[{label}] post-fit dedup seed hand-over: "
                       f"{moved.size} survivor(s) took an absorbed row's seed "
                       f"(nearer their fit)", flush=True)
-        phot.results = phot.results[keep]
+        phot.results = phot.results[keep_fit]
         # phot.init_params keeps each survivor's ORIGINAL seed, so after a
         # hand-over it no longer matches phot.results' x_init/y_init.  Nothing
         # downstream reads phot.init_params' positions; the refit reads
         # phot.results.
         if (phot.init_params is not None
-                and len(phot.init_params) == len(keep)):
-            phot.init_params = phot.init_params[keep]
+                and len(phot.init_params) == len(keep_fit)):
+            phot.init_params = phot.init_params[keep_fit]
         phot.__dict__.pop('_model_image_params', None)
-        print(f"[{label}] post-fit dedup: {len(keep)} -> {int(np.sum(keep))} "
+        print(f"[{label}] post-fit dedup: {len(keep_fit)} -> {int(np.sum(keep_fit))} "
               f"({n_disagree} flux-disagree clusters)", flush=True)
 
     # --- near-saturation + satstar-wing rejection ---
@@ -1635,7 +1736,10 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                             label=label, protect_xy=protect_xy,
                             protect_radius_pix=protect_radius_pix,
                             handoff_xy=handoff_xy,
-                            handoff_radius_pix=handoff_radius_pix)
+                            handoff_radius_pix=handoff_radius_pix,
+                            companion_seed_xy=companion_seed_xy,
+                            companion_seed_radius_pix=companion_seed_radius_pix,
+                            companion_restored_mask=companion_restored_mask)
     _filter_satstar_artifacts(phot, satstar_model_subtracted, err,
                               sig_K=float(options.satstar_artifact_sigK),
                               ratio_cut=float(options.satstar_artifact_ratio),
@@ -1919,9 +2023,21 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         # mask (which is aligned to the pre-drop table -- robust if the helper's
         # contract changes).
         _n_before = len(phot.results)
-        _filter_or_flag_model_overshoot(
-            phot, modsky, data, ratio=overshoot_drop_ratio, action='drop',
-            label=f'{label}:drop', flag_nonpositive_data=True)
+        if kif:
+            # the same test (annotation identical to action='drop'); remove
+            # the rows that are not keep_in_fit, delist the ones that are
+            _over = _filter_or_flag_model_overshoot(
+                phot, modsky, data, ratio=overshoot_drop_ratio, action='flag',
+                label=f'{label}:drop', flag_nonpositive_data=True)
+            _res = phot.results
+            _prot = np.asarray(_res['keep_in_fit'], dtype=bool)
+            _res['keep_in_fit_listed'] &= ~_over
+            if np.any(_over & ~_prot):
+                phot.results = _res[~(_over & ~_prot)]
+        else:
+            _filter_or_flag_model_overshoot(
+                phot, modsky, data, ratio=overshoot_drop_ratio, action='drop',
+                label=f'{label}:drop', flag_nonpositive_data=True)
         _n_dropped = _n_before - len(phot.results)
         if _n_dropped > 0:
             phot.__dict__.pop('_model_image_params', None)
@@ -1949,6 +2065,11 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     res = phot.results
     _flux = np.asarray(res['flux_fit'], dtype=float)
     fpos = _flux > 0
+    if kif:
+        # keep_in_fit rows with a finite flux stay (in the model), not listed
+        _kp = np.asarray(res['keep_in_fit'], dtype=bool) & np.isfinite(_flux)
+        res['keep_in_fit_listed'] &= fpos
+        fpos = fpos | _kp
     n_neg = int(len(fpos) - np.sum(fpos))
     if n_neg > 0:
         n_nan = int(np.sum(~np.isfinite(_flux)))
@@ -1963,7 +2084,58 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
               f"{n_neg - n_nan} with flux <= 0 (negative-peak), {n_nan} with "
               f"non-finite flux (fit had no usable pixels)", flush=True)
 
+    if kif:
+        modsky = _list_keep_in_fit(phot, modsky, data.shape, label)
+
     return phot.results, modsky, phot
+
+
+def _attach_keep_in_fit(result, init_params):
+    """Copy ``keep_in_fit`` / ``keep_in_fit_listed`` from ``init_params`` to
+    the fit ``result`` (photutils drops extra init columns; rows are matched by
+    ``id``, which is the init row + 1 without an ``id`` column).
+
+    Returns True when at least one fitted row is keep_in_fit, else False and
+    ``result`` is left unchanged.
+    """
+    prot = _seed_bool_column(init_params, 'keep_in_fit')
+    if not np.any(prot):
+        return False
+    listed = (_seed_bool_column(init_params, 'keep_in_fit_listed')
+              if 'keep_in_fit_listed' in init_params.colnames
+              else np.ones(len(init_params), dtype=bool))
+    init_id = (np.asarray(init_params['id'], dtype=np.int64)
+               if 'id' in init_params.colnames
+               else np.arange(1, len(init_params) + 1))
+    row = {int(i): j for j, i in enumerate(init_id)}
+    j = np.array([row[int(i)] for i in np.asarray(result['id'])], dtype=np.int64)
+    result['keep_in_fit'] = prot[j]
+    result['keep_in_fit_listed'] = listed[j] | ~prot[j]
+    return bool(np.any(prot[j]))
+
+
+def _list_keep_in_fit(phot, modsky, shape, label):
+    """Remove the keep_in_fit rows that are not listed (``_manual_phot_pass``)
+    and re-render the model of the rows that remain."""
+    res = phot.results
+    prot = np.asarray(res['keep_in_fit'], dtype=bool)
+    listed = np.asarray(res['keep_in_fit_listed'], dtype=bool)
+    res.meta['KIFFIT'] = (int(prot.sum()), 'keep_in_fit rows fitted')
+    res.meta['KIFLIST'] = (int(np.sum(prot & listed)), 'keep_in_fit rows listed')
+    print(f"[{label}] keep_in_fit listing: {int(prot.sum())} rows fitted, "
+          f"{int(np.sum(prot & listed))} listed", flush=True)
+    del res['keep_in_fit_listed']
+    if np.all(listed):
+        return modsky
+    phot.results = res[listed]
+    if (phot.init_params is not None
+            and len(phot.init_params) == len(listed)):
+        phot.init_params = phot.init_params[listed]
+    phot.__dict__.pop('_model_image_params', None)
+    if len(phot.results) == 0:
+        return np.zeros(shape, dtype=float)
+    return _make_model_image(phot, shape, psf_shape=(21, 21),
+                             include_local_bkg=False)
 
 
 # ---------------------------------------------------------------------------
@@ -2080,18 +2252,152 @@ def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
     return det
 
 
+def _seed_bool_column(table, name):
+    """``table[name]`` as a plain bool array, masked/absent rows False.
+
+    Seed tables are vstacked from catalogs with different columns, so a marker
+    column such as ``keep_in_fit`` is masked on the rows of the tables that
+    lacked it.
+    """
+    if table is None or name not in table.colnames:
+        return np.zeros(0 if table is None else len(table), dtype=bool)
+    col = table[name]
+    if hasattr(col, 'filled'):
+        col = col.filled(False)
+    return np.asarray(col, dtype=bool)
+
+
+def _xepoch_seed_rows(catalog):
+    """Seed rows from another epoch's vetted merged catalog.
+
+    Every row with a finite position and flux, as ``skycoord`` + ``flux``, with
+    ``seed_origin='xepoch'`` and ``keep_in_fit=True``.  ``is_saturated`` is
+    False: the satstar channel of THIS epoch owns its saturated stars, and the
+    near-saturation filter still removes fits on their cores.
+    """
+    cat = _L._resolve_seed_skycoords(Table(catalog, copy=False))
+    if len(cat) == 0:
+        out = Table()
+        out['skycoord'] = SkyCoord([] * u.deg, [] * u.deg)
+        out['flux'] = np.zeros(0)
+        out['is_saturated'] = np.zeros(0, dtype=bool)
+        out['seed_origin'] = np.zeros(0, dtype='U9')
+        out['keep_in_fit'] = np.zeros(0, dtype=bool)
+        return out
+    sc = cat['skycoord']
+    ra = np.asarray(sc.ra.deg, dtype=float)
+    dec = np.asarray(sc.dec.deg, dtype=float)
+    flux = (cat['flux'].filled(np.nan) if hasattr(cat['flux'], 'filled')
+            else cat['flux'])
+    flux = np.asarray(flux, dtype=float)
+    ok = np.isfinite(ra) & np.isfinite(dec) & np.isfinite(flux)
+    out = Table()
+    out['skycoord'] = SkyCoord(ra[ok] * u.deg, dec[ok] * u.deg, frame='icrs')
+    out['flux'] = flux[ok]
+    out['is_saturated'] = np.zeros(int(ok.sum()), dtype=bool)
+    out['seed_origin'] = np.full(int(ok.sum()), 'xepoch', dtype='U9')
+    out['keep_in_fit'] = np.ones(int(ok.sum()), dtype=bool)
+    return out
+
+
+def _union_xepoch_seed(prev_catalog, xepoch_rows):
+    """``prev_catalog`` + the cross-epoch rows, with ``is_saturated`` and
+    ``keep_in_fit`` filled on every row (False where a table lacked them)."""
+    if prev_catalog is None or len(prev_catalog) == 0:
+        return xepoch_rows
+    prev = Table(prev_catalog, copy=True)
+    prev['is_saturated'] = _seed_bool_column(prev, 'is_saturated')
+    prev['keep_in_fit'] = _seed_bool_column(prev, 'keep_in_fit')
+    if 'seed_origin' in prev.colnames:
+        prev['seed_origin'] = np.asarray(prev['seed_origin']).astype(str)
+    out = table_vstack([prev, xepoch_rows], metadata_conflicts='silent')
+    out['is_saturated'] = _seed_bool_column(out, 'is_saturated')
+    out['keep_in_fit'] = _seed_bool_column(out, 'keep_in_fit')
+    return out
+
+
+def _seed_dedup_keep_in_fit(xy, flux, min_sep_pix, is_saturated, keep_in_fit):
+    """Seed dedup that keeps every ``keep_in_fit`` row in the fit, and records
+    which of them the production dedup would list.
+
+    The production dedup (``_dedup_close_sources``, brightest / saturated wins)
+    is run on all rows to find what production would fit.  The fit set is then:
+
+    * every ``keep_in_fit`` row;
+    * the production dedup of the other rows, after removing the non-saturated
+      ones within ``min_sep_pix`` of a ``keep_in_fit`` row (that row covers
+      the position).
+
+    ``listed`` marks the rows the catalog lists (the later per-pass rules still
+    apply to them).  Rows that are not ``keep_in_fit`` are listed whenever
+    fitted.  A ``keep_in_fit`` row is listed when the production dedup keeps
+    it, or when it stands in for the production winner of its cluster: the
+    winner is a seed this dedup left out of the fit, so production would fit
+    it and this run has no fit of it.  When several ``keep_in_fit`` rows share
+    one such winner, the one nearest the winner stands in.
+
+    Returns ``(fit, listed, n_disagree, n_holes)``; ``n_holes`` counts
+    production winners that are not fitted and have no stand-in.
+    """
+    from scipy.spatial import cKDTree
+    xy = np.asarray(xy, dtype=float)
+    flux = np.asarray(flux, dtype=float)
+    n = len(xy)
+    prot = np.asarray(keep_in_fit, dtype=bool)
+    sat = (np.zeros(n, dtype=bool) if is_saturated is None
+           else np.asarray(is_saturated, dtype=bool))
+    prod_keep, _, owner = _dedup_close_sources(
+        xy=xy, flux=flux, min_sep_pix=min_sep_pix, quality=None,
+        is_saturated=is_saturated, return_owner=True)
+    ok = np.all(np.isfinite(xy), axis=1)
+    near = np.zeros(n, dtype=bool)
+    if np.any(prot & ok):
+        d = np.full(n, np.inf)
+        d[ok], _ = cKDTree(xy[prot & ok]).query(xy[ok], k=1)
+        near = ~prot & ~sat & (d <= min_sep_pix)
+    sub = np.flatnonzero(~near)
+    keep_sub, n_disagree = _dedup_close_sources(
+        xy=xy[sub], flux=flux[sub], min_sep_pix=min_sep_pix, quality=None,
+        is_saturated=None if is_saturated is None else sat[sub])
+    fit = np.zeros(n, dtype=bool)
+    fit[sub] = keep_sub
+    fit |= prot
+    listed = fit & (~prot | prod_keep)
+    stand_in = {}
+    for i in np.flatnonzero(prot & ~prod_keep):
+        w = int(owner[i])
+        if fit[w]:
+            continue
+        di = float(np.hypot(*(xy[i] - xy[w])))
+        if w not in stand_in or di < stand_in[w][1]:
+            stand_in[w] = (int(i), di)
+    for i, _ in stand_in.values():
+        listed[i] = True
+    n_holes = int(np.sum(prod_keep & ~fit)) - len(stand_in)
+    return fit, listed, int(n_disagree), n_holes
+
+
 def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix,
                        satstar_table, prev_catalog,
                        local_snr_threshold, roundlo, roundhi, sharplo, sharphi,
                        preferred_seed_skycoord_col=None,
                        dedup_min_sep_pix=None, label='', apply_snr_filter=True,
                        struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
-                       noise_floor_box=0, noise_floor_k=5.0, threshold_scale=1.0):
+                       noise_floor_box=0, noise_floor_k=5.0, threshold_scale=1.0,
+                       xepoch_catalog=None):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
     combine (prev_catalog + satstars) -> augment with the fresh detections (sky
     matched) -> SeededFinder -> dedup.  ``prev_catalog=None`` for the first pass.
+
+    ``xepoch_catalog`` (another epoch's vetted merged catalog; m7 with
+    ``--xepoch-field``) adds its rows to ``prev_catalog`` with
+    ``seed_origin='xepoch'`` and ``keep_in_fit=True``.  Seed rows with
+    ``keep_in_fit`` True, from any source, survive the seed dedup
+    (``_seed_dedup_keep_in_fit``); the output then carries ``keep_in_fit`` and
+    ``keep_in_fit_listed`` for ``_manual_phot_pass``.  Without such rows the
+    output is unchanged.
 
     Mirrors the legacy seed logic but omits the iter3 union-snap / per-filter
     inject blocks (those caused the spurious-seed provenance documented in the
@@ -2107,6 +2413,13 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
         prev_catalog = _subset_seed_to_frame(
             prev_catalog, ww, np.asarray(nan_replaced_data).shape, fwhm_pix,
             preferred_skycoord_col=preferred_seed_skycoord_col, label=label)
+    if xepoch_catalog is not None:
+        xep = _subset_seed_to_frame(
+            _xepoch_seed_rows(xepoch_catalog), ww,
+            np.asarray(nan_replaced_data).shape, fwhm_pix, label=f'{label}:xepoch')
+        print(f"[{label}] cross-epoch seed: {len(xep)} rows on the frame "
+              f"(keep_in_fit)", flush=True)
+        prev_catalog = _union_xepoch_seed(prev_catalog, xep)
 
     # MIRI early-phase coarse background subtraction (AG 2026-06-13): the F770W
     # pedestal is huge (image min ~200 MJy/sr) but the bright stars are HIGH
@@ -2186,6 +2499,28 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     seeded['flux_init'] = np.asarray(finstars['flux_init'], dtype=float)
     if 'is_saturated' in finstars.colnames:
         seeded['is_saturated'] = np.asarray(finstars['is_saturated'], dtype=bool)
+    keep_in_fit = _seed_bool_column(finstars, 'keep_in_fit')
+
+    if np.any(keep_in_fit):
+        # keep_in_fit rows stay in the fit; the listing follows production
+        sat = (np.asarray(seeded['is_saturated'], dtype=bool)
+               if 'is_saturated' in seeded.colnames else None)
+        fit, listed, _, n_holes = _seed_dedup_keep_in_fit(
+            np.column_stack([seeded['x_init'], seeded['y_init']]),
+            np.asarray(seeded['flux_init'], dtype=float),
+            dedup_min_sep_pix, sat, keep_in_fit)
+        seeded['keep_in_fit'] = keep_in_fit
+        seeded['keep_in_fit_listed'] = listed
+        n0 = len(seeded)
+        seeded = seeded[fit]
+        kf = np.asarray(seeded['keep_in_fit'], dtype=bool)
+        print(f"[{label}] seed dedup (keep_in_fit): {n0} -> {len(seeded)} "
+              f"within {dedup_min_sep_pix:.2f} px; {int(kf.sum())} keep_in_fit "
+              f"rows fitted, {int(np.sum(kf & ~np.asarray(seeded['keep_in_fit_listed'])))} "
+              f"of them not listed (production dedup drops them); "
+              f"{n_holes} production seed(s) with no fit and no stand-in",
+              flush=True)
+        return seeded
 
     # dedup seeds (brightest / saturated wins within dedup_min_sep_pix)
     if len(seeded) > 1:
@@ -3624,7 +3959,7 @@ def _check_bg_frame_suffix(bg_header, frame_suffix, label=''):
                        f"subtract it anyway.")
 
 
-def _satstar_recovery_signature(options):
+def _satstar_recovery_signature(options, filename=None):
     """A compact string identifying every option that changes the per-exposure
     satstar FIT.  It is stamped into the per-exposure satstar catalog (meta key
     ``SATRECOV``) and checked when that cache is reused, so toggling one of
@@ -3656,10 +3991,18 @@ def _satstar_recovery_signature(options):
     filter of brick alone stay valid for every run that does not ask for the
     deblend.  The token carries a version: ``_dbl2`` since the deblender
     resolves stars in large blended components (#1081), so deblended catalogs
-    seeded by the earlier deblender (``_dbl1``) are refit."""
+    seeded by the earlier deblender (``_dbl1``) are refit.
+
+    With ``filename`` given, the deblend token is written only for a frame that
+    has a sibling ``_ramp.fits``: ``get_saturated_stars`` deblends from the
+    ZEROFRAME and fits a frame without one with the legacy seeding, so such a
+    frame carries the same stamp whether or not the option is set (#1196)."""
     zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
     ramp = bool(getattr(options, 'satstar_ramp_recover', False))
     deblend = bool(getattr(options, 'deblend_satstars', False))
+    if deblend and filename is not None:
+        from jwst_gc_pipeline.reduction.saturated_star_finding import _find_ramp_for
+        deblend = _find_ramp_for(filename) is not None
     if not zf and not ramp:
         base = "off"
     else:
@@ -3828,8 +4171,16 @@ def _load_ramp_cube(crf_path):
                                           else np.asarray(gdq, dtype=int))
 
 
+def _frame_variants_of_paths(frames):
+    """Frame variant tokens of frame paths (``satstar_frame_variant``), or ``None``."""
+    from jwst_gc_pipeline.photometry.satstar_phase_selection import (
+        normalise_frame_variants, satstar_frame_variant)
+    return normalise_frame_variants(
+        {satstar_frame_variant(f) for f in frames} - {''})
+
+
 def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
-                                field=None, phase=None):
+                                field=None, phase=None, frame_variants=None):
     """Satstar catalogs of the partner band that ``--satstar-partner-seed`` reads.
 
     The partner's consolidated catalog when it exists; otherwise its
@@ -3838,6 +4189,11 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     ``phase`` being fit, or the exposure's latest earlier phase, as
     ``load_satstar_catalog`` reads them.  Reading every phase on disk seeded
     old runs' positions, including a later phase left from a previous run.
+
+    ``frame_variants`` is the frame variant(s) of the frames being fit
+    (``satstar_frame_variant``): only per-exposure catalogs fit on those frames
+    seed, as in ``load_satstar_catalog`` (#1194).  The consolidated catalog
+    is read as it stands.
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         consolidated_satstar_cache_path, satstar_catalog_in_observation,
@@ -3855,7 +4211,8 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     if pscope:
         files = [f for f in files
                  if satstar_catalog_in_observation(f, proposal_id, pscope)]
-    files, report = select_satstar_phase_files(files, phase=phase)
+    files, report = select_satstar_phase_files(
+        files, phase=phase, frame_variants=frame_variants)
     print(f"[manual] partner-band satstar seeds ({partner}): "
           f"{format_phase_report(report)}", flush=True)
     return files
@@ -3929,6 +4286,23 @@ def _default_nircam_satstar_lock_env(environ, sat_ext_nircam):
     if 'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2' not in environ:
         environ['NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2'] = (
             '0.5' if sat_ext_nircam else '0')
+
+
+def _truly_lost_fit_products(dqarr, truly_lost, instrument):
+    """Fit-mask pixels and near-saturation-veto DQ for ``--truly-lost-saturation-in-fit``.
+
+    Returns ``(fit_mask_add, dq_for_satveto)``.  ``fit_mask_add`` is the
+    ``truly_lost`` set plus every non-SATURATED bad flag
+    (``_bad_dq_bitmask(..., keep_recovered_saturation=True)``).
+    ``dq_for_satveto`` is a copy of ``dqarr`` with SATURATED cleared outside
+    ``truly_lost``, for ``_filter_near_saturation``; ``dqarr`` is not modified.
+    """
+    sat_bit = dqarr.dtype.type(_L.dqflags.pixel['SATURATED'])
+    fit_mask_add = np.asarray(truly_lost, dtype=bool) | (
+        (dqarr & _L._bad_dq_bitmask(
+            instrument, keep_recovered_saturation=True)) != 0)
+    dq_for_satveto = np.where(truly_lost, dqarr, dqarr & ~sat_bit)
+    return fit_mask_add, dq_for_satveto
 
 
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
@@ -4120,6 +4494,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
     mask = np.isnan(data) | bad
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
+    tl_in_fit = bool(getattr(options, 'truly_lost_saturation_in_fit', False))
+    sat_bit = int(_L.dqflags.pixel['SATURATED'])
     if dqarr is not None:
         # TRULY-LOST vs recovered saturation.  The cal/crf SATURATED flag marks
         # any pixel saturated in ANY ramp group, but a late-group saturation with
@@ -4140,13 +4516,16 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         #     recomputes `(dq & SATURATED)` itself, so the near-sat veto still
         #     fires on recovered pixels.
         # Both pinned in photometry/tests/test_truly_lost_saturation.py.
+        # `--truly-lost-saturation-in-fit` (default off, #567) extends the
+        # restriction to the fit mask and to the DQ handed to the veto.
         # How much this removes is a property of the REDUCTION, not of the
         # instrument: every band reduced with jwst <= 1.20.2 has SATURATED and
         # DO_NOT_USE coextensive (no-op), while current products keep a median
         # 15.7% of the mask on both NIRCam and MIRI.  See
         # scripts/analysis/truly_lost_saturation_census.py.
         dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
-        is_saturated = _L.truly_lost_saturated_mask(dqarr)
+        truly_lost = _L.truly_lost_saturated_mask(dqarr)
+        is_saturated = truly_lost
         # A real saturated core sits at/near the detector saturation level; but
         # JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated
         # sources (e.g. W51 F480M star RA=290.929589 Dec=+14.504683: DQ=6
@@ -4165,9 +4544,25 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         data_ = data.copy()
         data_[is_saturated] = np.nan
         mask |= is_saturated
-        mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+        if tl_in_fit:
+            # Opt-in (#567): the fit mask and the near-sat veto see only the
+            # truly-lost set.  `truly_lost` is taken before the data floor so
+            # the SATURATED fallback inside truly_lost_saturated_mask (frames
+            # with no DO_NOT_USE saturation) is honoured and sub-floor core
+            # pixels are not released.
+            fit_add, dq_for_satveto = _truly_lost_fit_products(
+                dqarr, truly_lost, instrument)
+            mask |= fit_add
+            print(f"[manual] truly-lost-saturation-in-fit: fit mask keeps "
+                  f"{int(truly_lost.sum())} of "
+                  f"{int(((dqarr & sat_bit) != 0).sum())} SATURATED px "
+                  f"(TLSATFIT=T)", flush=True)
+        else:
+            mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+            dq_for_satveto = dqarr
     else:
         data_ = data
+        dq_for_satveto = dqarr
     # MIRI detector-edge detection guard: daofind otherwise fires on the sharp
     # good/bad boundary GRADIENT at the edge-glow rim, injecting spurious "stars"
     # at the footprint border into the per-frame -> MERGED catalog.  These are
@@ -4270,7 +4665,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         _partner = _pmap.get(filtername.lower())
         if _partner:
             _pfiles = _partner_satstar_seed_files(
-                basepath, _partner, proposal_id, field, phase=satstar_label)
+                basepath, _partner, proposal_id, field, phase=satstar_label,
+                frame_variants=_frame_variants_of_paths([original_filename]))
             _parts = []
             for _pf in _pfiles:
                 try:
@@ -4356,7 +4752,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # forces a rebuild.  (Diagnosed on brick 2026-07: a full recovery re-run
         # left the m8 satstar mags byte-identical because the 07-25 caches were
         # reused.)
-        recovery_signature=_satstar_recovery_signature(options))
+        recovery_signature=_satstar_recovery_signature(options, filename))
     satstar_rejected_path = filename.replace(
         '.fits', f'{satstar_file_suffix}_satstar_rejected.fits')
     # Satstar implied-peak-gate hand-off (#925), NIRCam, all targets: the gate
@@ -4428,7 +4824,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             if sm.shape == nan_replaced_data.shape:
                 finite_model = np.where(np.isfinite(sm), sm, 0.0)
                 if dqarr is not None:
-                    was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+                    if tl_in_fit:
+                        # `--truly-lost-saturation-in-fit` (#567): the flag
+                        # un-masks the recovered pixels so the fit reads them;
+                        # filling them from the satstar model (0 away from an
+                        # accepted satstar) would hand the fit zeros instead of
+                        # their valid rate.  Only the truly-lost set is filled.
+                        was_sat = np.asarray(truly_lost, dtype=bool)
+                    else:
+                        was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
                     if handoff_restore is not None:
                         # keep the handed-off stars' measured cores
                         was_sat = was_sat & ~handoff_restore
@@ -4446,11 +4850,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group,
         exposure_=exposure_, visitid_=visitid_, vgroupid_=vgroupid_,
         inst_token=inst_token, im1=im1, ww=ww, data=data, err=err, bad=bad,
-        dqarr=dqarr, mask=mask, nan_replaced_data=nan_replaced_data,
-        dao_psf_model=dao_psf_model, grouper=grouper,
+        dqarr=dqarr, dq_for_satveto=dq_for_satveto,
+        truly_lost_in_fit=(tl_in_fit and dqarr is not None), mask=mask,
+        nan_replaced_data=nan_replaced_data, dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
         handoff_xy=handoff_xy, handoff_radius=handoff_radius,
+        handoff_restore=handoff_restore,
         handoff_unaccepted_sat=handoff_unaccepted_sat,
         original_data=original_data, background_map=background_map,
         bkg_basis=bkg_basis,
@@ -4627,6 +5033,36 @@ def _resid_nan_satstar_applies(iteration_label):
     return iteration_label in _resid_nan_satstar_passes()
 
 
+def _perframe_product_stub(ctx, iter_):
+    """Path stem of a manual pass's per-frame residual and model images
+    (``{stub}_residual.fits``, ``{stub}_model.fits``); ``iter_`` is the
+    iteration token.  The PSF token is ``ctx.epsf_``, so a reader that builds
+    ``ctx`` the way the writer did finds the writer's files."""
+    return (f'{ctx.out_basepath}/{ctx.filtername}/pipeline/'
+            f'{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
+            f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
+            f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+
+
+def _final_phase_frame_products(ctx, frame_kwargs):
+    """``(model path, catalogue path)`` of the final real phase's products for
+    the frame ``ctx`` prepares, for the m8 forced fill's neighbour subtraction.
+
+    The phase is the frame kwargs' ``satstar_label`` (the phase whose satstar
+    products the fill subtracts).  The model is the star-only image of
+    ``_save_manual_pass``; the catalogue is the unvetted per-frame table that
+    ``save_photutils_results`` wrote, with the same tokens."""
+    iter_ = _iteration_token(frame_kwargs['satstar_label'])
+    options = frame_kwargs['options']
+    obs_ = _L._obs_token_from_options(options)
+    catalog = (f'{ctx.out_basepath}/{ctx.filtername}/'
+               f'{ctx.filtername.lower()}_{ctx.module}{obs_}{ctx.visitid_}'
+               f'{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+               f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic.fits')
+    return f'{_perframe_product_stub(ctx, iter_)}_model.fits', catalog
+
+
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """Write the per-frame catalog (``save_photutils_results``) + residual +
     model for one manual pass, with the manual ``_m{N}`` iteration token.  The
@@ -4653,6 +5089,11 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     # by default, so its trees can hold catalogs from both regimes
     result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
                                'unaccepted SATURATED comps handed to daophot')
+    # --truly-lost-saturation-in-fit (#567) changes the fitted pixels under the
+    # SAME per-frame product names, so the header is where the A and B arms of
+    # the #418 comparison are told apart
+    result.meta['TLSATFIT'] = (bool(getattr(ctx, 'truly_lost_in_fit', False)),
+                               'fit mask/veto use truly-lost saturation only')
 
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
@@ -4679,10 +5120,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
             print(f"[{iteration_label}] residual: {int(_nanm.sum())} DQ-SATURATED px "
                   f"under accepted satstar models set to NaN (not measured)",
                   flush=True)
-    stub = (f'{bp}/{ctx.filtername}/pipeline/{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
-            f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
-            f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
-            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+    stub = _perframe_product_stub(ctx, iter_)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_residual.fits', residual)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_model.fits', modsky)
     return saved
@@ -4694,8 +5132,13 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                               bg_boxsizes=None, use_webbpsf=False, pupil='clear',
                               prev_seed_catalog=None, resbg_path=None,
                               satstar_flux_overrides=None,
-                              satstar_flux_drops=None):
+                              satstar_flux_drops=None,
+                              xepoch_seed_catalog=None):
     """Clean per-frame driver for the manual-iteration path.
+
+    ``xepoch_seed_catalog`` (m7 only; path from
+    :func:`xepoch_seed_catalog_path`) adds another epoch's vetted merged
+    catalog to the seed as keep_in_fit rows (``_build_manual_seed``).
 
     ``manual_phase`` in {'m12','m3','m4','m5','m6','m7'}:
       * 'm12' runs iter1 (unseeded daofind) then iter2 (daofind(residual1) +
@@ -4806,15 +5249,10 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # the satstar pixel positions once.  NIRCam: leave disabled (pix=0).
     _satstar_xy = None
     _satstar_excl_pix = 0.0
-    if _is_miri and ctx.satstar_table is not None and len(ctx.satstar_table):
-        _sst = ctx.satstar_table
-        if 'x_fit' in _sst.colnames and 'y_fit' in _sst.colnames:
-            _sxv = np.asarray(_sst['x_fit'], dtype=float)
-            _syv = np.asarray(_sst['y_fit'], dtype=float)
-            _ok = np.isfinite(_sxv) & np.isfinite(_syv)
-            if _ok.any():
-                _satstar_xy = np.column_stack([_sxv[_ok], _syv[_ok]])
-                _satstar_excl_pix = 1.5 * ctx.fwhm_pix
+    if _is_miri:
+        _satstar_xy = _miri_satstar_excl_xy(ctx.satstar_table)
+        if _satstar_xy is not None:
+            _satstar_excl_pix = 1.5 * ctx.fwhm_pix
 
     # Coadd-confirmed seed protection (extended-emission/crowded fields only):
     # exempt fits at i2d-seed positions from the satstar-wing / near-saturation
@@ -4861,6 +5299,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # _prepare_frame_for_photometry.
     _handoff_xy = None if _is_miri else getattr(ctx, 'handoff_xy', None)
     _handoff_radius = getattr(ctx, 'handoff_radius', 0.0)
+    _companion_kw = _seeded_companion_kwargs(ctx, prev_seed_catalog, _is_miri)
 
     def _pass(seed, label, prom_snr=None):
         # prom_snr: per-pass prominence-reject threshold.  None -> default
@@ -4874,7 +5313,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             dao_psf_model=ctx.dao_psf_model, init_params=seed,
             aperture_radius_pix=ctx.aperture_radius_pix,
             localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
-            grouper=ctx.grouper, options=options, dq=ctx.dqarr,
+            grouper=ctx.grouper, options=options,
+            dq=getattr(ctx, 'dq_for_satveto', ctx.dqarr),
             satstar_model_subtracted=(ctx.satstar_model_subtracted
                                       if ctx.satstar_model_subtracted is not None
                                       else np.zeros(ctx.data.shape)),
@@ -4889,7 +5329,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             prominence_data_i2d=_prom_i2d, prominence_ww_i2d=_prom_ww_i2d,
             frame_ww=ctx.ww, protect_xy=_protect_xy,
             protect_radius_pix=_protect_radius,
-            handoff_xy=_handoff_xy, handoff_radius_pix=_handoff_radius)
+            handoff_xy=_handoff_xy, handoff_radius_pix=_handoff_radius,
+            **_companion_kw)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(
@@ -4937,6 +5378,17 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # m3 / m4 / m5: single seeded pass
     prev = Table.read(prev_seed_catalog) if prev_seed_catalog else None
     snr = iter2_snr
+    xepoch = None
+    if xepoch_seed_catalog:
+        if manual_phase != 'm7':
+            raise ValueError(f"xepoch_seed_catalog is an m7 seed; got phase "
+                             f"{manual_phase!r}")
+        if _bright_presub_peak_noise() > 0:
+            # the pre-subtraction builds two seeds and dedups their union with
+            # the production rule, which would duplicate or drop keep_in_fit rows
+            raise ValueError("xepoch_seed_catalog cannot be combined with "
+                             "DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE")
+        xepoch = Table.read(xepoch_seed_catalog)
 
     def _seed_from(detection_image, nan_replaced):
         return _build_manual_seed(
@@ -4950,7 +5402,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             label=manual_phase, struct_x=struct_x, struct_y=struct_y,
             coarse_bg_box=coarse_bg_box,
             noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
-            threshold_scale=detect_scale)
+            threshold_scale=detect_scale, xepoch_catalog=xepoch)
 
     seed = _seed_from(ctx.nan_replaced_data, ctx.nan_replaced_data)
     _presub = _bright_presub_peak_noise()
@@ -5039,10 +5491,70 @@ def _phase_satstar_mask_inputs(options, opts_phase, phase, frames, cut_bp, filt)
     return fwhm, tuple(paths)
 
 
+#: Fraction of the nominal annulus area that must hold finite pixels for the
+#: annulus median to be used (the rest of the hole goes to the Gaussian fill).
+_ANNULUS_FILL_MIN_FRACTION = 0.25
+
+
+def _plug_holes_from_annulus(work, fov, holes, fwhm_px, inner_fwhm,
+                             width_fwhm=2.0):
+    """Fill each masked disk of ``work`` (in place) with the median of the
+    finite pixels in an annulus around it (#694).
+
+    ``holes`` is a list of ``(xc, yc, R)`` in pixels.  The annulus runs from
+    ``max(inner_fwhm * fwhm_px, R + 1)`` out to ``width_fwhm * fwhm_px`` beyond
+    that, so it excludes the star's own wing out to the inner radius.  Every
+    median is taken on the masked image as it was on entry (neighbours' disks
+    stay NaN and earlier plugs are not read), and the plugs are written after
+    the last median.  A hole whose annulus has fewer finite pixels than
+    ``_ANNULUS_FILL_MIN_FRACTION`` of its nominal area stays NaN.  Returns
+    ``(n_plugged, n_left_nan)``.
+    """
+    ny, nx = work.shape
+    plugs = []
+    n_left = 0
+    for xc, yc, Rm in holes:
+        r_in = max(inner_fwhm * fwhm_px, Rm + 1.0)
+        r_out = r_in + width_fwhm * fwhm_px
+        Ro = int(np.ceil(r_out))
+        ix, iy = int(round(xc)), int(round(yc))
+        y0, y1 = max(0, iy - Ro), min(ny, iy + Ro + 1)
+        x0, x1 = max(0, ix - Ro), min(nx, ix + Ro + 1)
+        if y0 >= y1 or x0 >= x1:
+            continue
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        rr2 = (xx - xc) ** 2 + (yy - yc) ** 2
+        ann = (rr2 >= r_in ** 2) & (rr2 <= r_out ** 2)
+        vals = work[y0:y1, x0:x1][ann]
+        vals = vals[np.isfinite(vals)]
+        nominal = np.pi * (r_out ** 2 - r_in ** 2)
+        if vals.size < max(3, _ANNULUS_FILL_MIN_FRACTION * nominal):
+            n_left += 1
+            continue
+        plugs.append((y0, y1, x0, x1, rr2 <= Rm ** 2, float(np.median(vals))))
+    for y0, y1, x0, x1, disk, val in plugs:
+        sub = work[y0:y1, x0:x1]
+        sub[disk & fov[y0:y1, x0:x1]] = val
+    return len(plugs), n_left
+
+
+def _residual_bg_fill_kwargs(options):
+    """The ``_build_source_masked_bg`` keyword arguments set by the
+    ``manual_residual_bg_*`` options (#694)."""
+    return dict(
+        mask_radius_fwhm=float(mopt(options, 'manual_residual_bg_mask_fwhm')),
+        fill_sigma_fwhm=float(mopt(options, 'manual_residual_bg_fill_sigma_fwhm')),
+        fill_mode=str(mopt(options, 'manual_residual_bg_fill_mode')),
+        fill_annulus_inner_fwhm=float(
+            mopt(options, 'manual_residual_bg_fill_annulus_fwhm')))
+
+
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
                             mask_radius_fwhm=2.0, median_size=3,
                             extra_source_catalogs=(),
-                            satstar_catalogs=(), satstar_mask_radius_fwhm=0.0):
+                            satstar_catalogs=(), satstar_mask_radius_fwhm=0.0,
+                            fill_sigma_fwhm=1.0, fill_mode='gauss',
+                            fill_annulus_inner_fwhm=3.0):
     """Build the smoothed background map from a mergedcat residual i2d with the
     fitted SOURCE CORES MASKED OUT before smoothing.
 
@@ -5066,9 +5578,23 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     than the 2 FWHM source disks; ``0`` (default) leaves them unmasked.  See
     the comment at the masking step for the measured numbers.
 
+    ``fill_sigma_fwhm`` / ``fill_mode`` / ``fill_annulus_inner_fwhm`` set how the
+    masked disks are refilled (#694).  The default (``'gauss'``, sigma 1 FWHM)
+    is a normalised Gaussian convolution whose half-width, 1.18 FWHM, is
+    narrower than the 2 FWHM hole, so the fill is drawn mainly from the ring
+    just outside the disk, where the star's own residual wing sits; that
+    pedestal enters the bg, is subtracted from the next phase's frames and
+    enlarges the wing.  ``fill_sigma_fwhm`` widens the kernel.  ``'annulus'``
+    fills each disk with the median of the finite pixels in an annulus starting
+    at ``max(fill_annulus_inner_fwhm * FWHM, R + 1)`` and 2 FWHM wide, with the
+    other holes still masked, and leaves the disk to the Gaussian fill where the
+    annulus holds too few finite pixels (image edge, crowded cores).
+
     Writes ``<mc_i2d>_..._smoothed_bg_i2d.fits`` (same name the plain smoother
     would produce) and returns its path.
     """
+    if fill_mode not in ('gauss', 'annulus'):
+        raise ValueError(f"fill_mode must be 'gauss' or 'annulus', got {fill_mode!r}")
     from astropy.io import fits as _fits
     from astropy.wcs import WCS as _WCS
     from astropy.coordinates import SkyCoord as _SkyCoord
@@ -5123,6 +5649,8 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
         src_ra.append(np.atleast_1d(np.asarray(_sc.ra.deg, dtype=float)))
         src_dec.append(np.atleast_1d(np.asarray(_sc.dec.deg, dtype=float)))
 
+    holes = []  # (xc, yc, Rm) of every masked disk, for the annulus fill
+
     def _mask_disks(ra_deg, dec_deg, Rm):
         """NaN out disks of radius ``Rm`` px at the given sky positions of
         ``work``; returns the number of disks that fall on the image."""
@@ -5141,6 +5669,7 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
             yy, xx = np.mgrid[y0:y1, x0:x1]
             disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= Rm ** 2
             work[y0:y1, x0:x1][disk] = np.nan
+            holes.append((float(xc), float(yc), float(Rm)))
             n += 1
         return n
 
@@ -5196,19 +5725,38 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
         if sat_ra and sum(len(a) for a in sat_ra):
             n_sat = _mask_disks(np.concatenate(sat_ra), np.concatenate(sat_dec), R_sat)
 
+    if fill_mode == 'annulus' and holes:
+        n_plug, n_fallback = _plug_holes_from_annulus(
+            work, fov, holes, fwhm_px, fill_annulus_inner_fwhm)
+        print(f"[bg] annulus fill: {n_plug} holes plugged, {n_fallback} left "
+              f"to the Gaussian fill", flush=True)
+
     # interpolate over the masked source disks (fill from surrounding diffuse bg)
     if np.any(np.isnan(work) & fov):
-        kern = _G2D(x_stddev=max(1.0, fwhm_px))
+        kern = _G2D(x_stddev=max(1.0, fill_sigma_fwhm * fwhm_px))
         work = _irn(work, kern, convolve=_cfft, allow_huge=True)
     sm = _ndi.median_filter(np.nan_to_num(work), size=int(median_size), mode='nearest')
     sm[~fov] = np.nan
     out = residual_to_smoothed_bg_i2d(mc_i2d_path)
-    _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
+    out_hdr = hdu.header.copy()
+    if (fill_mode, fill_sigma_fwhm, mask_radius_fwhm) != ('gauss', 1.0, 2.0):
+        # non-default fill options leave a trace in the product (#694)
+        out_hdr['BGFMODE'] = (fill_mode, 'residual-bg disk fill mode')
+        out_hdr['BGFSIG'] = (float(fill_sigma_fwhm), '[FWHM] fill Gaussian sigma')
+        out_hdr['BGMASKR'] = (float(mask_radius_fwhm), '[FWHM] masked disk radius')
+        if fill_mode == 'annulus':
+            out_hdr['BGFANN'] = (float(fill_annulus_inner_fwhm),
+                                 '[FWHM] fill annulus inner radius')
+    _fits.PrimaryHDU(data=sm.astype('float32'), header=out_hdr).writeto(out, overwrite=True)
     print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
           f"(masked {n_masked} sources, R={R:.1f}px"
           + (f", {n_sat} satstar positions at R_sat={R_sat:.1f}px"
              if n_sat else "")
-          + f", median box {median_size}px)", flush=True)
+          + f", median box {median_size}px"
+          + (f", fill {fill_mode}" if fill_mode != 'gauss' else "")
+          + (f", fill sigma {fill_sigma_fwhm:g} FWHM"
+             if fill_sigma_fwhm != 1.0 else "")
+          + ")", flush=True)
     return out
 
 
@@ -5250,6 +5798,52 @@ def crossband_seed_inputs(cut_bp, modules, filternames, options):
             if os.path.exists(p):
                 out.append((module, filt, p))
     return out
+
+
+def xepoch_seed_catalog_path(options, filtername):
+    """The other epoch's m7 vetted merged catalog of ``filtername``, or None.
+
+    Off (None) unless ``xepoch_field`` is set; ``xepoch_proposal_id`` and
+    ``xepoch_target`` must be set with it.  The name is the one that epoch's
+    own m7 finalize writes: ``merged_catalog_path`` for the ``merged`` module
+    under that target's basepath (and the same ``--cutout-region`` label as
+    this run), plus the vetted end token from ``vetted_obs_tokens`` for that
+    epoch's proposal and observation.  The target's basepath comes from the
+    fields registry; ``GC_BASEPATH_OVERRIDE`` applies to this run only.
+
+    Raises ValueError when only some of the three are set, and
+    FileNotFoundError when the catalog does not exist (the other epoch has not
+    finished m7, or the options name a different observation).
+    """
+    vals = {k: mopt(options, k) for k in
+            ('xepoch_field', 'xepoch_proposal_id', 'xepoch_target')}
+    given = {k: v not in (None, '') for k, v in vals.items()}
+    if not any(given.values()):
+        return None
+    if not all(given.values()):
+        raise ValueError(
+            f"the cross-epoch seed needs xepoch_field, xepoch_proposal_id and "
+            f"xepoch_target together; missing "
+            f"{sorted(k for k, g in given.items() if not g)}")
+    from jwst_gc_pipeline import fields as field_registry
+    prop = str(vals['xepoch_proposal_id'])
+    field = str(vals['xepoch_field'])
+    other_bp = _L._cutout_out_basepath(
+        field_registry.basepath(str(vals['xepoch_target'])), options)
+    merged = merged_catalog_path(other_bp, 'm7', 'merged', filtername, prop,
+                                 field, desat=options.desaturated,
+                                 bgsub=options.bgsub, resbgsub=True,
+                                 blur=options.blur)
+    vtok, _ = vetted_obs_tokens(prop, field, filtername=filtername,
+                                module='merged')
+    path = merged.replace('.fits', f'{vtok}_vetted.fits')
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"cross-epoch seed catalog not found: {path} (target "
+            f"{vals['xepoch_target']}, proposal {prop}, observation {field}, "
+            f"{filtername}); that epoch's m7 vetted merged catalog must exist "
+            f"before this run's m7")
+    return path
 
 
 def _catalog_dva_state(meta):
@@ -5314,12 +5908,133 @@ def _check_crossband_dva_consistency(states, label='m7 crossband seed'):
         raise RuntimeError(msg)
 
 
+class CrossbandSeedCollapsedError(RuntimeError):
+    """The m7 cross-band seed confirmed too small a fraction of the smallest
+    band's good detections (``manual_crossband_seed_collapse_action='raise'``)."""
+
+
+#: Seed files whose collapse warning this process has already printed.  Every
+#: m7 (module, filter) iteration rebuilds the same seed, so the message would
+#: otherwise repeat once per iteration.
+_CROSSBAND_SEED_COLLAPSE_WARNED = set()
+
+
+def _crossband_seed_health(n_good, n_in_seed, n_seed, ras, decs, snrs, filtidx,
+                           flist, *, max_sep_mas, min_frac):
+    """Health of a cross-band seed: per-band confirmed fraction and a coarse
+    band-to-band offset.
+
+    The fraction of a band is ``n_in_seed[band] / min(n_good)``, capped at 1:
+    how many of its good detections sit in a cluster the seed kept, over the
+    size of the *shallowest* band (``n_good`` and ``n_in_seed`` are accumulated
+    across modules by the caller).  The common denominator is deliberate: a
+    star can only be confirmed if the shallowest band detects it, so dividing a
+    deeper band by its own, larger ``n_good`` would flag every pair of unequal
+    depth as collapsed although every shallow-band star is confirmed.  A
+    cluster can hold several detections of one band, hence the cap.  ``frac``
+    is the smallest band fraction, so one band registered away from the others
+    flags the seed even when the rest agree (with three bands a pooled
+    ``n_seed / min(n_good)`` would not).  A
+    single-filter target has nothing to confirm against, so its fraction is None
+    and it is never flagged.
+
+    The offset is measured between the worst band and the highest median-S/N
+    other band by offset-histogram stacking in a 0.3 arcsec window
+    (``astrometry_offsets.measure_offset``, ``sweep=False``), as (second minus
+    first, the pair ordered by median S/N) in mas with dRA carrying the cos(dec)
+    factor.  It is a diagnostic: the histogram peak is only meaningful when the
+    offset lies inside that window, so it is recorded only when the measurement
+    reports a coherent peak (``offset_ok``); otherwise the offset is None and
+    ``offset_ok`` False.  The authority on registration is the m7 cross-filter
+    checkpoint.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    health = dict(n_good={k: int(v) for k, v in n_good.items()},
+                  n_in_seed={k: int(n_in_seed.get(k, 0)) for k in n_good},
+                  n_seed=int(n_seed), max_sep_mas=float(max_sep_mas),
+                  min_frac=float(min_frac), frac=None, band_frac=None,
+                  worst_band=None, collapsed=False,
+                  offset_filters=None, offset_dra_mas=None,
+                  offset_ddec_mas=None, offset_npairs=None, offset_ok=None,
+                  offset_contrast=None, offset_window_edge_fraction=None)
+    bands = [k for k, v in n_good.items() if v > 0]
+    worst = None
+    if len(bands) >= 2:
+        n_ref = float(min(n_good[k] for k in bands))
+        band_frac = {k: min(1.0, float(n_in_seed.get(k, 0)) / n_ref)
+                     for k in bands}
+        worst = min(bands, key=lambda k: band_frac[k])
+        health['band_frac'] = band_frac
+        health['worst_band'] = worst
+        health['frac'] = band_frac[worst]
+        health['collapsed'] = bool(health['frac'] < min_frac)
+    if len(flist) >= 2:
+        med = [(float(np.nanmedian(snrs[filtidx == k])) if np.any(filtidx == k)
+                else -np.inf) for k in range(len(flist))]
+        rank = [int(k) for k in np.argsort(-np.asarray(med), kind="stable")]
+        if worst is None:
+            pair = rank[:2]
+        else:
+            kw = flist.index(worst)
+            pair = sorted([kw, next(k for k in rank if k != kw)], key=rank.index)
+        k1, k2 = pair
+        m1, m2 = filtidx == k1, filtidx == k2
+        if m1.any() and m2.any():
+            res = measure_offset(
+                SkyCoord(ras[m1] * u.deg, decs[m1] * u.deg),
+                SkyCoord(ras[m2] * u.deg, decs[m2] * u.deg),
+                maxsep=0.3 * u.arcsec, bin_arcsec=0.01, min_pairs=200,
+                sweep=False)
+            if res is not None:
+                health['offset_filters'] = [flist[k1], flist[k2]]
+                health['offset_npairs'] = int(res['npairs'])
+                health['offset_ok'] = bool(res['ok'])
+                health['offset_contrast'] = float(res['contrast'])
+                health['offset_window_edge_fraction'] = float(
+                    res['window_edge_fraction'])
+                if res['ok']:
+                    health['offset_dra_mas'] = float(res['dra'])
+                    health['offset_ddec_mas'] = float(res['ddec'])
+    return health
+
+
+def _crossband_seed_health_message(health):
+    """One-line description of a collapsed seed, naming the counts and offset."""
+    counts = ', '.join(f"{k}={v}" for k, v in sorted(health['n_good'].items()))
+    fracs = ', '.join(f"{k}={v:.3f}"
+                      for k, v in sorted(health['band_frac'].items()))
+    msg = (f"WARNING [m7] crossband seed collapsed: {health['n_seed']} positions "
+           f"confirmed from good m6 detections ({counts}); confirmed fraction "
+           f"of the smallest band's good detections ({fracs}); worst band "
+           f"{health['worst_band']} {health['frac']:.3f} < {health['min_frac']:g} "
+           f"at a {health['max_sep_mas']:g} mas match radius.")
+    if health['offset_dra_mas'] is not None:
+        a, b = health['offset_filters']
+        msg += (f" Measured {b}-{a} offset (diagnostic, 0.3 arcsec window): "
+                f"dRA*cos(dec)={health['offset_dra_mas']:.1f} mas, "
+                f"dDec={health['offset_ddec_mas']:.1f} mas "
+                f"({health['offset_npairs']} pairs).")
+    elif health['offset_ok'] is False:
+        a, b = health['offset_filters']
+        msg += (f" No coherent {b}-{a} offset peak inside the 0.3 arcsec "
+                f"window (offset larger than the window, or unregistered); no "
+                f"offset is reported.")
+    msg += (" The bands are probably mis-registered by more than the match "
+            "radius; repair the reference tie (issues #921, #1198) rather "
+            "than widening the radius.  The m7 cross-filter checkpoint and "
+            "registration_failsafes.py --scan are the authority on "
+            "registration.")
+    return msg
+
+
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                           min_filters=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],
                           snr_min=MANUAL_DEFAULTS['manual_crossband_seed_snr_min'],
                           qfit_max=MANUAL_DEFAULTS['manual_crossband_seed_qfit_max'],
-                          dedup_radius_mas=30.0):
+                          dedup_radius_mas=30.0,
+                          min_frac=MANUAL_DEFAULTS['manual_crossband_seed_min_frac'],
+                          collapse_action=MANUAL_DEFAULTS['manual_crossband_seed_collapse_action']):
     """Cross-filter seed for m7 (iter7): STRINGENT -- only positions independently
     confirmed (S/N > snr_min AND qfit < qfit_max) in >= ``min_filters`` filters,
     clustered within ``max_sep_mas``.
@@ -5350,6 +6065,21 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     vetting floor uses flux / flux_err_prop (``manual_ext_snr_floor_propagated``).
     The seed's stricter definition is deliberate: a seed position is force-fit in
     every band, so it requires a detection that is significant in one frame.
+
+    Seed health (issue #981): bands registered worse than ``max_sep_mas`` apart
+    confirm almost nothing (gc-treasury has two NIRCam bands, so one band offset
+    by 66-272 mas collapsed the seed on o111, o113, o063 and o138).  For each
+    band the build counts the fraction of its good detections that sit in a
+    kept cluster (at most 1; the smallest over bands is ``SEEDFRAC``, so with
+    three or more bands one mis-registered band is flagged too).  Below
+    ``manual_crossband_seed_min_frac`` (0.3) it prints a ``WARNING [m7]
+    crossband seed collapsed`` line with the counts and, when the offset
+    measurement finds a coherent peak, a coarse band offset.  The numbers
+    go into the seed table meta (SEEDFRAC, SEEDCOLL, SEEDNGD, SEEDOFFX/Y) and a
+    ``crossband_seed_manual<obs>.health.json`` beside it.
+    ``manual_crossband_seed_collapse_action='raise'`` raises
+    ``CrossbandSeedCollapsedError`` instead of continuing.  There is no
+    wider-radius fallback: the repair is the reference tie.
     """
     from astropy.coordinates import SkyCoord
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
@@ -5358,12 +6088,19 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     snr_min = float(getattr(options, 'manual_crossband_seed_snr_min', snr_min))
     qfit_max = float(getattr(options, 'manual_crossband_seed_qfit_max', qfit_max))
     max_sep_mas = float(getattr(options, 'manual_crossband_seed_max_sep_mas', max_sep_mas))
+    min_frac = float(getattr(options, 'manual_crossband_seed_min_frac', min_frac))
+    collapse_action = str(getattr(options, 'manual_crossband_seed_collapse_action',
+                                  collapse_action))
+    if collapse_action not in ('warn', 'raise'):
+        raise ValueError(f"manual_crossband_seed_collapse_action must be 'warn' or "
+                         f"'raise', got {collapse_action!r}")
 
     # collect GOOD (independently-confirmed) detections from each filter's m6.
     # The path spelling lives in `crossband_seed_inputs` so the fan-out resume's
     # staleness check reads exactly the list this loop consumes.
     ras = []; decs = []; filtidx = []; snrs = []
     flist = []
+    n_good = {}   # good detections per filter, summed over modules
     dva_states = {}
     for module, filt, p in crossband_seed_inputs(cut_bp, modules, filternames,
                                                  options):
@@ -5382,6 +6119,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
         if key not in flist:
             flist.append(key)
         k = flist.index(key)
+        n_good[key] = n_good.get(key, 0) + int(good.sum())
         ras.extend(np.atleast_1d(sc.ra.deg)[good])
         decs.extend(np.atleast_1d(sc.dec.deg)[good])
         snrs.extend(snr[good])
@@ -5415,16 +6153,32 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     for i, r in enumerate(roots):
         members[r].append(i)
     seed_ra = []; seed_dec = []; nfilt = []; confl = []
+    n_in_seed = {}   # good detections per filter inside a kept cluster
     for r, mem in members.items():
         mem = np.array(mem)
         ufilt = np.unique(filtidx[mem])
         if len(ufilt) < min_filters:
             continue
+        for k in filtidx[mem]:
+            n_in_seed[flist[k]] = n_in_seed.get(flist[k], 0) + 1
         # seed position = highest-SNR member of the cluster
         best = mem[np.nanargmax(snrs[mem])]
         seed_ra.append(ras[best]); seed_dec.append(decs[best])
         nfilt.append(len(ufilt))
         confl.append(','.join(sorted(flist[k] for k in ufilt)))
+    out = crossband_seed_file(cut_bp, options)
+    health = _crossband_seed_health(n_good, n_in_seed, len(seed_ra), ras, decs,
+                                    snrs, filtidx, flist,
+                                    max_sep_mas=max_sep_mas, min_frac=min_frac)
+    # the JSON is written first so that an empty or raising build leaves it
+    with atomic_write(out.replace('.fits', '.health.json')) as _tmp:
+        with open(_tmp, 'w') as _fh:
+            json.dump(health, _fh, indent=1, sort_keys=True)
+    if health['collapsed']:
+        _msg = _crossband_seed_health_message(health)
+        if out not in _CROSSBAND_SEED_COLLAPSE_WARNED:
+            print(_msg, flush=True)
+            _CROSSBAND_SEED_COLLAPSE_WARNED.add(out)
     if not seed_ra:
         raise ValueError(f"m7 crossband seed: 0 positions confirmed in >={min_filters} filters "
                          f"(from {n} good detections) -- loosen manual_crossband_seed_min_filters")
@@ -5432,12 +6186,20 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     seed['skycoord'] = SkyCoord(np.array(seed_ra) * u.deg, np.array(seed_dec) * u.deg)
     seed['n_filt_confirmed'] = np.array(nfilt, dtype='i4')
     seed['confirming_filters'] = np.array(confl)
-    out = crossband_seed_file(cut_bp, options)
+    if health['frac'] is not None:
+        seed.meta['SEEDFRAC'] = health['frac']
+        seed.meta['SEEDCOLL'] = health['collapsed']
+        seed.meta['SEEDNGD'] = min(v for v in n_good.values() if v > 0)
+    if health['offset_dra_mas'] is not None:
+        seed.meta['SEEDOFFX'] = health['offset_dra_mas']
+        seed.meta['SEEDOFFY'] = health['offset_ddec_mas']
     # every m7 shard rebuilds this same path -- see write_table_atomic
     write_table_atomic(seed, out)
     print(f"[m7] wrote STRINGENT crossband seed {out} (n={len(seed)} confirmed in "
           f">={min_filters} filters @ {max_sep_mas:g} mas, SNR>{snr_min}, qfit<{qfit_max}; "
           f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
+    if health['collapsed'] and collapse_action == 'raise':
+        raise CrossbandSeedCollapsedError(_crossband_seed_health_message(health))
     return out
 
 
@@ -5908,6 +6670,46 @@ def propagate_independent_detection(merged_path):
     return done
 
 
+def write_crossband_ecsv(merged_path):
+    """Write the ECSV twin of an annotated cross-band FITS table.
+
+    ``merge_daophot`` writes the ECSV from the in-memory table, which is
+    before ``annotate_independent_detection`` adds ``independently_detected_*``
+    and ``n_filt_independent`` to the FITS; the ECSV then lacked the columns
+    that separate an independent per-band detection from a cross-band-seeded
+    force-fit (#1228).  ``run_manual_pipeline`` now passes ``write_ecsv=False``
+    to the merge and calls this once the FITS is final, so the twin has the
+    FITS table's columns.  ``{stem}.ecsv`` is written beside ``{stem}.fits``;
+    returns its path, or None when the FITS is absent.
+    """
+    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
+    if not os.path.exists(merged_path):
+        return None
+    stem = merged_path[:-len('.fits')] if merged_path.endswith('.fits') else merged_path
+    table = Table.read(merged_path)
+    _merge_catalogs._sanitise_meta_for_yaml(table)
+    _merge_catalogs._write_ecsv_twin(table, stem, True)
+    return f'{stem}.ecsv'
+
+
+def _write_crossband_ecsv_guarded(module, ecsv_modules, merged_path, phase):
+    """``write_crossband_ecsv`` for the modules that get a twin; never raises.
+
+    A failed write is reported and the run continues, as for the annotation
+    steps before it.  Returns the ECSV path, or None when the module has no
+    twin, the FITS is absent or the write failed.
+    """
+    if module not in ecsv_modules:
+        return None
+    try:
+        return write_crossband_ecsv(merged_path)
+    except (OSError, ValueError, KeyError,
+            yaml.representer.RepresenterError) as exc:
+        print(f"manual [{phase}]: writing the ECSV twin of "
+              f"{os.path.basename(merged_path)} failed ({exc})", flush=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
@@ -6278,7 +7080,8 @@ def _run_one_frame_manual(args):
                 prev_seed_catalog=args['prev_seed_catalog'],
                 resbg_path=args['resbg_path'],
                 satstar_flux_overrides=args.get('satstar_flux_overrides'),
-                satstar_flux_drops=args.get('satstar_flux_drops'))
+                satstar_flux_drops=args.get('satstar_flux_drops'),
+                xepoch_seed_catalog=args.get('xepoch_seed_catalog'))
             return (filename, True, None)
         except _L.CutoutNoOverlap as ex:
             return (filename, False, f'no-overlap: {ex}')
@@ -6297,7 +7100,8 @@ def _run_one_frame_manual(args):
 
 def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
                             dedup_arcsec=1.0, match_arcsec=0.1,
-                            return_keeper=False):
+                            return_keeper=False, distinct_pairs=None,
+                            demote=None):
     """Which in-field satstar rows are same-star duplicates of a better row.
 
     Two ``replaced_saturated`` rows within ``dedup_arcsec`` are treated as ONE
@@ -6359,6 +7163,16 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
     return_keeper : bool
         Also return, per row, the index of the kept row whose set it joined
         (its own index when kept).
+    distinct_pairs : callable, optional
+        ``distinct_pairs(i1, i2, sep_arcsec)`` -> bool array, called once
+        with every never-co-fit pair (row indices into ``sc``).  A True pair
+        is treated like a co-fit one: not a link, so its rows never share a
+        set.  ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` passes
+        :func:`_satstar_residual_distinct_pairs` here.
+    demote : array-like of bool, optional
+        Rows ranked below every non-demoted row when a set picks its
+        survivor (support and flux still order the rest).  Changes only
+        which row survives, never which rows share a set.
 
     Returns
     -------
@@ -6389,6 +7203,11 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
         d = d2d.arcsec
         a, b = slot[i1], slot[i2]
         cofit |= ((d[a] < r_pair) & (d[b] < r_pair) & (idx[a] != idx[b]))
+    if distinct_pairs is not None and (~cofit).any():
+        cand = np.where(~cofit)[0]
+        apart = np.asarray(distinct_pairs(i1[cand], i2[cand], sep[cand]),
+                           dtype=bool)
+        cofit[cand[apart]] = True       # a pair shown distinct: not a link
     links = {}
     for a, b in zip(i1[~cofit], i2[~cofit]):
         links.setdefault(int(a), set()).add(int(b))
@@ -6417,7 +7236,10 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
     sup = np.nan_to_num(np.asarray(support, dtype=float), nan=-np.inf)
     fl = np.nan_to_num(np.asarray(flux, dtype=float), nan=-np.inf)
     rank = np.empty(n, int)
-    rank[np.lexsort((-fl, -sup))] = np.arange(n)
+    if demote is None:
+        rank[np.lexsort((-fl, -sup))] = np.arange(n)
+    else:
+        rank[np.lexsort((-fl, -sup, np.asarray(demote, dtype=bool)))] = np.arange(n)
     for grp in members.values():
         best = min(grp, key=rank.__getitem__)
         for m in grp:
@@ -6427,7 +7249,7 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
 
 
 def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
-                             phase=None):
+                             phase=None, frame_variants=None):
     """Per-exposure satstar fit positions for :func:`_never_cofit_duplicates`.
 
     One SkyCoord per per-exposure satstar run: the accepted
@@ -6442,6 +7264,44 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
     catalog, or its latest earlier one, and the rejected file written beside
     it.  Pooling every phase on disk let an older run's detections decide
     whether two rows were ever fit side by side.
+
+    ``frame_variants`` is the frame variant(s) of the frames the merge reads,
+    as for ``load_satstar_catalog`` (#1194).
+
+    The positions are the ``'positions'`` of :func:`_satstar_cofit_runs`.
+    """
+    return [run['positions'] for run in _satstar_cofit_runs(
+        pipeline_dir, proposal_id=proposal_id, field=field, phase=phase,
+        frame_variants=frame_variants, frame_shapes=False)]
+
+
+def _satstar_cofit_runs(pipeline_dir, proposal_id=None, field=None,
+                        phase=None, frame_variants=None, frame_shapes=True):
+    """Per-exposure satstar runs, as read by :func:`_satstar_cofit_positions`.
+
+    One dict per run (one frame at one phase), in the order
+    :func:`_satstar_cofit_positions` returns them:
+
+    * ``'positions'`` -- SkyCoord of the accepted then the gate-rejected
+      fits (finite only), re-projected through the frame's current WCS;
+    * ``'accepted'`` -- the accepted fits alone (empty when the run has no
+      accepted row);
+    * ``'xy'`` -- ``(N, 2)`` frame pixel ``xcentroid``/``ycentroid`` of each
+      of ``'positions'`` (NaN where the column is absent; the satstar
+      ``x_fit``/``y_fit`` are stamp coordinates, not frame ones);
+    * ``'frame'``, ``'wcs'``, ``'shape'`` -- the exposure, its WCS and
+      ``(ny, nx)``; None when the frame is not on disk or unreadable (the
+      shape also when ``frame_shapes`` is False, which skips reading every
+      frame's SCI header);
+    * ``'residual'`` -- the run's ``*_satstar_residual.fits`` path (it may
+      not exist), None when the run has no accepted catalog.
+
+    ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` reads the residual and the
+    frame (:func:`_satstar_residual_distinct_pairs`) and the pixel
+    positions (:func:`_satstar_edge_only_rows`).
+
+    ``frame_variants`` selects the runs as in :func:`_satstar_cofit_positions`
+    (#1194).
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         satstar_obs_scope, satstar_catalog_in_observation)
@@ -6460,15 +7320,17 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
         files = [f for f in files
                  if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
     accepted, _acc_report = select_satstar_phase_files(
-        [f for f in files if f.endswith('_satstar_catalog.fits')], phase=phase)
+        [f for f in files if f.endswith('_satstar_catalog.fits')], phase=phase,
+        frame_variants=frame_variants)
     rejected, _ = select_rejected_for_catalogs(
         [f for f in files if f.endswith('_satstar_rejected.fits')], accepted,
-        phase=phase)
+        phase=phase, frame_variants=frame_variants)
     print(f"  satstar co-fit positions: "
           f"{format_phase_report(_acc_report)}", flush=True)
     files = sorted(accepted + rejected)
     runs = {}
     wcs_cache = {}
+    shape_cache = {}
     n_stale = 0
     for fn in files:
         tbl = Table.read(fn)
@@ -6484,25 +7346,387 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
                 wcs_cache[frame] = frame_wcs(frame)
             tbl, _shift = refresh_satstar_skycoords(tbl, wcs=wcs_cache[frame],
                                                     catalog_path=fn)
+            if frame not in shape_cache:
+                shape_cache[frame] = (_frame_sci_shape(frame) if frame_shapes
+                                      else None)
         else:
             n_stale += 1
         pos = SkyCoord(tbl['skycoord_fit'])
         ok = np.isfinite(pos.ra.deg) & np.isfinite(pos.dec.deg)
         if ok.any():
-            runs.setdefault(tail.sub('', fn), []).append(pos[ok])
+            stem = tail.sub('', fn)
+            if 'xcentroid' in tbl.colnames and 'ycentroid' in tbl.colnames:
+                xy = np.column_stack([np.asarray(tbl['xcentroid'], float),
+                                      np.asarray(tbl['ycentroid'], float)])[ok]
+            else:
+                xy = np.full((int(ok.sum()), 2), np.nan)
+            run = runs.setdefault(stem, {
+                'pos': [], 'acc': [], 'xy': [], 'frame': None, 'wcs': None,
+                'shape': None, 'residual': None})
+            run['pos'].append(pos[ok])
+            run['xy'].append(xy)
+            if fn.endswith('_satstar_catalog.fits'):
+                run['acc'].append(pos[ok])
+                run['residual'] = stem + '_satstar_residual.fits'
+            if frame is not None:
+                run['frame'] = frame
+                run['wcs'] = wcs_cache[frame]
+                run['shape'] = shape_cache[frame]
     if n_stale:
         print(f"  satstar co-fit positions: {n_stale} of {len(files)} per-exposure "
               f"satstar file(s) have no frame on disk; their stored sky positions "
               f"are used", flush=True)
     from astropy.coordinates import concatenate as _sc_concat
-    return [(_sc_concat(v) if len(v) > 1 else v[0]) for v in runs.values()]
+
+    def _cat(v):
+        if not v:
+            return SkyCoord([], [], unit='deg')
+        return _sc_concat(v) if len(v) > 1 else v[0]
+
+    return [{'stem': stem, 'positions': _cat(r['pos']),
+             'accepted': _cat(r['acc']), 'xy': np.concatenate(r['xy']),
+             'frame': r['frame'], 'wcs': r['wcs'], 'shape': r['shape'],
+             'residual': r['residual']}
+            for stem, r in runs.items()]
+
+
+def _frame_sci_shape(frame):
+    """``(ny, nx)`` of a frame's SCI extension, or None (logged) when the
+    header cannot be read."""
+    try:
+        hdr = fits.getheader(frame, 'SCI')
+    except (OSError, KeyError) as ex:
+        print(f"  satstar co-fit runs: no SCI header in "
+              f"{os.path.basename(frame)} ({type(ex).__name__}: {ex})",
+              flush=True)
+        return None
+    if 'NAXIS1' not in hdr or 'NAXIS2' not in hdr:
+        return None
+    return int(hdr['NAXIS2']), int(hdr['NAXIS1'])
+
+
+#: ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` keeps a never-co-fit pair as two
+#: stars when, in at least one frame that fits only the better-ranked
+#: member, the satstar residual at the other member holds BOTH at least this
+#: fraction of its peak light above the local background ...
+#: (env ``SATSTAR_INFIELD_RESID_RATIO_MIN``) ...
+_RESID_DEDUP_RATIO_MIN = 0.5
+#: ... AND, summed within ``_RESID_DEDUP_APER_PX`` of it, at least this
+#: fraction of its own fitted flux (same frame; env
+#: ``SATSTAR_INFIELD_RESID_FLUX_MIN``).  Tuned on gc-treasury 10678 m7
+#: o078 + o043 only (F480M and F212N), where the kept rows sit at >= 0.29
+#: (F480M) / >= 0.445 (F212N) and the rejected ones at <= 0.067 or below
+#: zero; untested on other fields and filters.
+_RESID_DEDUP_FLUX_MIN = 0.25
+_RESID_DEDUP_APER_PX = 3.0
+#: The other member is measured only where it lies at least this many
+#: pixels inside the frame (array edge).
+_RESID_DEDUP_INSIDE_PX = 20
+#: A row every one of whose fits lies at most ``_RESID_DEDUP_EDGE_PX``
+#: pixels from the science area, i.e. at most ``_RESID_DEDUP_EDGE_PX +
+#: _RESID_DEDUP_REFPIX`` = 14 px from the array edge (x or y <= 14, or
+#: >= n - 15, for an n-pixel axis), is demoted when its duplicate set
+#: picks a survivor.
+_RESID_DEDUP_EDGE_PX = 10
+_RESID_DEDUP_REFPIX = 4
+
+#: env var -> module default, read by :func:`_resid_dedup_thresholds`.
+_RESID_DEDUP_ENVS = {'SATSTAR_INFIELD_RESID_RATIO_MIN': _RESID_DEDUP_RATIO_MIN,
+                     'SATSTAR_INFIELD_RESID_FLUX_MIN': _RESID_DEDUP_FLUX_MIN}
+
+
+def _resid_dedup_thresholds():
+    """``(ratio_min, flux_min)`` of the ``'cofit_residual'`` residual test.
+
+    ``SATSTAR_INFIELD_RESID_RATIO_MIN`` / ``SATSTAR_INFIELD_RESID_FLUX_MIN``
+    override ``_RESID_DEDUP_RATIO_MIN`` / ``_RESID_DEDUP_FLUX_MIN``; empty
+    means the default.  A value that is not a finite number raises
+    ``ValueError`` naming the variable.
+    """
+    out = []
+    for env, default in _RESID_DEDUP_ENVS.items():
+        raw = os.environ.get(env, '').strip()
+        if not raw:
+            out.append(float(default))
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            raise ValueError(f"{env}={raw!r}; expected a number") from None
+        if not np.isfinite(val):
+            raise ValueError(f"{env}={raw!r}; expected a finite number")
+        out.append(val)
+    return tuple(out)
+
+
+def _satstar_residual_left(resid, data, x, y, flux):
+    """How much of a source is left in a satstar residual at ``(x, y)``.
+
+    Returns ``(peak_frac, flux_frac)``.  ``bg`` is the 20th percentile of
+    ``resid`` in the 31x31 box at ``(int(x), int(y))``.
+
+    * ``peak_frac = (r - bg) / (d - bg)``, with ``r`` and ``d`` the maxima of
+      ``resid`` and ``data`` in the 3x3 box at the rounded pixel; NaN when
+      the data peak is not finite or not above ``bg``.
+    * ``flux_frac`` = sum of ``resid - bg`` over the pixels (of that 31x31
+      box) whose centres lie within ``_RESID_DEDUP_APER_PX`` of ``(x, y)``,
+      divided by ``flux``; NaN when ``flux`` is not a positive number.
+
+    The caller keeps ``(x, y)`` at least 15 px inside both arrays.
+    """
+    xi, yi = int(x), int(y)
+    cut = np.asarray(resid[yi - 15:yi + 16, xi - 15:xi + 16], dtype=float)
+    if not np.isfinite(cut).any():
+        return np.nan, np.nan
+    bg = np.nanpercentile(cut, 20)
+    yy, xx = np.mgrid[yi - 15:yi + 16, xi - 15:xi + 16]
+    aper = np.hypot(xx - x, yy - y) <= _RESID_DEDUP_APER_PX
+    flux = float(flux)
+    flux_frac = (float(np.nansum((cut - bg)[aper])) / flux
+                 if np.isfinite(flux) and flux > 0 else np.nan)
+    xr, yr = int(round(x)), int(round(y))
+    box = (slice(yr - 1, yr + 2), slice(xr - 1, xr + 2))
+    r = np.asarray(resid[box], dtype=float)
+    d = np.asarray(data[box], dtype=float)
+    if not (np.isfinite(d).any() and np.isfinite(r).any()):
+        return np.nan, flux_frac
+    dp, rp = float(np.nanmax(d)), float(np.nanmax(r))
+    if dp <= bg:
+        return np.nan, flux_frac
+    return (rp - bg) / (dp - bg), flux_frac
+
+
+def _satstar_residual_distinct_pairs(sc, support, flux, runs, *,
+                                     match_arcsec=0.1, ratio_min=None,
+                                     flux_min=None,
+                                     inside_px=_RESID_DEDUP_INSIDE_PX,
+                                     log_rows=None):
+    """Residual test of ``SATSTAR_INFIELD_DEDUP='cofit_residual'``.
+
+    Returns ``distinct(i1, i2, sep_arcsec)`` for the ``distinct_pairs``
+    hook of :func:`_never_cofit_duplicates`, plus a ``stats`` dict it fills.
+
+    The satstar finder fits ONE star per saturated DQ component, so two real
+    stars that share a component in every frame are never fit side by side
+    and the co-fit rule collapses them (gc-treasury 10678 F480M m7: about
+    21 of the 32 rows collapsed in o078 + o043 are such stars, at
+    0.2-1.0").  For
+    a never-co-fit pair the member ranked lower by (support, flux) -- the one
+    'cofit' would drop -- is tested in every ACCEPTED run of ``runs``
+    (:func:`_satstar_cofit_runs`) that fit the better member within
+    ``min(match_arcsec, sep/2)`` and has no fit (accepted or rejected) of
+    the lower one: there, the frame's ``*_satstar_residual.fits`` still holds
+    the lower member's light unless the better member's model explains it.
+    The lower member's sky position is projected through the frame's WCS;
+    where it lies at least ``inside_px`` inside the frame,
+    :func:`_satstar_residual_left` (residual against the frame's SCI, and
+    against the lower member's ``flux``) is measured.  The pair is distinct
+    when at least one run gives BOTH a peak fraction ``>= ratio_min`` and an
+    aperture flux fraction ``>= flux_min`` (defaults from
+    :func:`_resid_dedup_thresholds`); a peak passed in one run and a flux in
+    another does not count.  Any other pair keeps the 'cofit' answer (a
+    link).  A run whose residual, frame or WCS is missing or unreadable
+    (including a truncated file, or a residual whose shape is not the 2-D
+    shape of the frame's SCI) is skipped and logged; a pair left with no
+    measurement because of that is counted as a fall-back to 'cofit'.
+
+    Why both: at separations of many PSF widths (gc-treasury F212N, 0.2-1.0"
+    = 3-14 FWHM) the better member's model is negligible at the lower one,
+    so the peak fraction is ~1 wherever the lower row sits, star or not.
+    On o078 + o043 m7 the peak test alone kept 103 of 154 collapsed F212N
+    rows, 62 of them with < 0.1 of their fitted flux in the residual (rows
+    whose every fit is at a detector edge), and 2 such F480M rows next to
+    much brighter stars.  Among the rows the peak test keeps there, the
+    flux fraction is >= 0.29 for those kept by both tests and <= 0.067 for
+    the rest (none in between).
+
+    Only the lower member is tested: a first-ring fit 0.28" from a bright
+    star with 17% of its flux (o043) leaves ~0.1 of its light where the
+    star alone was fit, while the star's light in the frame that fit only
+    the ring is under-subtracted, so testing the star would keep the ring.
+
+    ``log_rows`` (optional sequence of strings, one per row of ``sc``)
+    labels rows in the per-pair log line; RA/Dec otherwise.
+    """
+    if ratio_min is None or flux_min is None:
+        _r, _f = _resid_dedup_thresholds()
+        ratio_min = _r if ratio_min is None else ratio_min
+        flux_min = _f if flux_min is None else flux_min
+    ratio_min, flux_min = float(ratio_min), float(flux_min)
+    raw_flux = np.asarray(flux, dtype=float)
+    sup = np.nan_to_num(np.asarray(support, dtype=float), nan=-np.inf)
+    fl = np.nan_to_num(raw_flux, nan=-np.inf)
+    rank = np.empty(len(sc), int)
+    rank[np.lexsort((-fl, -sup))] = np.arange(len(sc))
+    stats = {'tested': 0, 'distinct': 0, 'explained': 0, 'untestable': 0,
+             'fallback': 0, 'missing_files': [], 'ratio_min': ratio_min,
+             'flux_min': flux_min}
+
+    def _label(i):
+        if log_rows is not None:
+            return str(log_rows[i])
+        return f"({sc[i].ra.deg:.6f}, {sc[i].dec.deg:+.6f})"
+
+    def distinct(i1, i2, sep):
+        i1 = np.asarray(i1, int)
+        i2 = np.asarray(i2, int)
+        sep = np.asarray(sep, float)
+        hi = np.where(rank[i1] <= rank[i2], i1, i2)
+        lo = np.where(rank[i1] <= rank[i2], i2, i1)
+        r_pair = np.minimum(float(match_arcsec), 0.5 * sep)
+        rows = np.unique(np.concatenate([hi, lo]))
+        sc_rows = sc[rows]
+        slot = np.full(len(sc), -1)
+        slot[rows] = np.arange(len(rows))
+        # per run: which pairs it tests (fits hi, no fit of lo)
+        todo = {}                    # run index -> pair indices
+        for k, run in enumerate(runs):
+            acc = run.get('accepted')
+            if acc is None or len(acc) == 0:
+                continue
+            _, d_acc, _ = sc_rows.match_to_catalog_sky(acc)
+            _, d_all, _ = sc_rows.match_to_catalog_sky(run['positions'])
+            d_acc, d_all = d_acc.arcsec, d_all.arcsec
+            sel = np.where((d_acc[slot[hi]] < r_pair)
+                           & (d_all[slot[lo]] >= r_pair))[0]
+            if len(sel):
+                todo[k] = sel
+        measured = np.zeros(len(i1), bool)
+        apart = np.zeros(len(i1), bool)
+        # the passing run with the largest flux fraction, for the log line
+        show_peak = np.full(len(i1), np.nan)
+        show_flux = np.full(len(i1), np.nan)
+        where = [''] * len(i1)
+        n_skipped = np.zeros(len(i1), int)
+        missing = set()
+        for k, sel in todo.items():
+            run = runs[k]
+            stem = os.path.basename(str(run.get('stem')))
+            wcs_k, shape = run.get('wcs'), run.get('shape')
+            resid_path, frame = run.get('residual'), run.get('frame')
+            if wcs_k is None or shape is None or frame is None:
+                n_skipped[sel] += 1
+                missing.add(f"{stem}: no frame / WCS")
+                continue
+            xs, ys = wcs_k.world_to_pixel(sc[lo[sel]])
+            xs = np.atleast_1d(np.asarray(xs, float))
+            ys = np.atleast_1d(np.asarray(ys, float))
+            ny, nx = shape
+            inside = (np.isfinite(xs) & np.isfinite(ys)
+                      & (xs >= inside_px) & (ys >= inside_px)
+                      & (xs < nx - inside_px) & (ys < ny - inside_px))
+            if not inside.any():
+                continue
+            if resid_path is None or not os.path.exists(resid_path):
+                n_skipped[sel[inside]] += 1
+                missing.add(f"{os.path.basename(str(resid_path))}: not on disk")
+                continue
+            with contextlib.ExitStack() as files:
+                # Reading only: a missing / garbled / truncated file, or one
+                # of the wrong shape, skips the run.  A file truncated inside
+                # its data raises TypeError ("buffer is too small for
+                # requested array") under memmap; a 1-D residual would
+                # IndexError in the cutout, hence the shape check.
+                try:
+                    rh = files.enter_context(fits.open(resid_path,
+                                                       memmap=True))
+                    fh = files.enter_context(fits.open(frame, memmap=True))
+                    resid, data = rh[0].data, fh['SCI'].data
+                    if resid is None or data is None:
+                        raise ValueError('no image data')
+                    if data.ndim != 2 or resid.shape != data.shape:
+                        raise ValueError(
+                            f"residual shape {resid.shape} is not the frame "
+                            f"SCI shape {data.shape} (2-D)")
+                except (OSError, KeyError, ValueError, TypeError) as ex:
+                    n_skipped[sel[inside]] += 1
+                    missing.add(f"{os.path.basename(str(resid_path))}: "
+                                f"{type(ex).__name__}: {ex}")
+                    continue
+                for j in np.where(inside)[0]:
+                    p = sel[j]
+                    pk, ff = _satstar_residual_left(
+                        resid, data, xs[j], ys[j], raw_flux[lo[p]])
+                    if np.isfinite(pk) or np.isfinite(ff):
+                        measured[p] = True
+                    # both tests in the SAME run; a non-finite value (an
+                    # inf pixel in the residual) proves nothing
+                    if not (np.isfinite(pk) and np.isfinite(ff)
+                            and pk >= ratio_min and ff >= flux_min):
+                        continue
+                    apart[p] = True
+                    if not ff <= show_flux[p]:
+                        show_peak[p], show_flux[p], where[p] = pk, ff, stem
+        stats['tested'] += len(i1)
+        stats['distinct'] += int(apart.sum())
+        stats['explained'] += int((measured & ~apart).sum())
+        stats['fallback'] += int((~measured & (n_skipped > 0)).sum())
+        stats['untestable'] += int((~measured & (n_skipped == 0)).sum())
+        stats['missing_files'].extend(sorted(missing))
+        for m in sorted(missing):
+            print(f"  satstar in-field dedup [cofit_residual]: residual test "
+                  f"skipped a run ({m}); its pairs fall back to 'cofit' "
+                  f"unless another run measures them", flush=True)
+        for p in np.where(apart)[0]:
+            print(f"  satstar in-field dedup [cofit_residual]: kept as two "
+                  f"stars: {_label(lo[p])} (support {sup[lo[p]]:g}, flux "
+                  f"{fl[lo[p]]:.4g}) and {_label(hi[p])} (support "
+                  f"{sup[hi[p]]:g}, flux {fl[hi[p]]:.4g}), {sep[p]:.3f}\" "
+                  f"apart: frames that fit only the second leave "
+                  f"{show_peak[p]:.2f} of the first's peak and "
+                  f"{show_flux[p]:.2f} of its flux (in {where[p]})",
+                  flush=True)
+        return apart
+
+    return distinct, stats
+
+
+def _satstar_edge_only_rows(sc, runs, *, match_arcsec=0.1,
+                            edge_px=_RESID_DEDUP_EDGE_PX,
+                            refpix=_RESID_DEDUP_REFPIX):
+    """Rows whose every satstar fit lies at a detector edge.
+
+    For each row of ``sc``, the nearest fit (accepted or rejected) of every
+    run in ``runs`` (:func:`_satstar_cofit_runs`) within ``match_arcsec`` is
+    taken, at its frame pixel ``xcentroid``/``ycentroid``.  A fit's edge
+    distance is ``min(x, y, nx - 1 - x, ny - 1 - y) - refpix``: its distance
+    from the science area, which starts ``refpix`` reference pixels in from
+    the array edge.  A row is edge-only when it has at least one such fit
+    and every one has edge distance ``<= edge_px``.  With the defaults
+    (10 + 4) that is every fit at most 14 px from the array edge: x or y
+    ``<= 14``, or ``>= n - 15`` on an n-pixel axis (385 of 400; 2033 of a
+    2048-px NIRCam array).  Runs without a frame shape, and fits without a
+    pixel position, are not counted.  o078 F480M m7: a star fit at 0-5 px from
+    the nrcb edge in two frames outranked its interior fits (two frames,
+    49-50 px in) on flux, and the interior row was the one dropped.
+    """
+    n = len(sc)
+    dmax = np.full(n, -np.inf)
+    nfit = np.zeros(n, int)
+    for run in runs:
+        pos, xy, shape = run.get('positions'), run.get('xy'), run.get('shape')
+        if pos is None or len(pos) == 0 or xy is None or shape is None:
+            continue
+        idx, d2d, _ = sc.match_to_catalog_sky(pos)
+        hit = d2d.arcsec < match_arcsec
+        if not hit.any():
+            continue
+        ny, nx = shape
+        x, y = xy[idx[hit], 0], xy[idx[hit], 1]
+        edge = np.minimum.reduce([x, y, nx - 1 - x, ny - 1 - y]) - refpix
+        good = np.isfinite(edge)
+        rows = np.where(hit)[0][good]
+        nfit[rows] += 1
+        dmax[rows] = np.maximum(dmax[rows], edge[good])
+    return (nfit > 0) & (dmax <= edge_px)
 
 
 def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
                                     dedup_arcsec=1.0, fov_pad_psf=5.0,
                                     dedup_offfov_only=True,
                                     cofit_positions=None,
-                                    cofit_match_arcsec=0.1):
+                                    cofit_match_arcsec=0.1,
+                                    cofit_runs=None):
     """Post-merge cleanup of off-FOV satstar artifacts (per-filter merged catalog).
 
     A) Collapse ``replaced_saturated`` rows clustering within ``dedup_arcsec`` to a
@@ -6520,7 +7744,15 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
        every close pair count as never co-fit.  ``dedup_offfov_only=False``
        restores the 1.0" friends-of-friends over every row, which drops
        distinct in-field stars (#12 of missed_satstars_20260925: 0.71" from
-       #11, the two fit separately in 5 of 6 frames).
+       #11, the two fit separately in 5 of 6 frames).  ``cofit_runs``
+       (:func:`_satstar_cofit_runs`, the runs behind ``cofit_positions``;
+       ``SATSTAR_INFIELD_DEDUP='cofit_residual'``) adds the residual test
+       (:func:`_satstar_residual_distinct_pairs`): a never-co-fit pair whose
+       lower-ranked member's light is left in the satstar residual of a
+       frame that fit only the other is kept as two stars, and a member
+       whose every fit is within 10 px of the science area, i.e. 14 px of
+       the array edge (:func:`_satstar_edge_only_rows`), is not chosen as a
+       set's survivor while another member is not.
     B) Drop NON-satstar rows projecting > ``fov_pad_psf`` PSF widths OUTSIDE this
        filter's data FOV.  These are m7 cross-band-seed artifacts: the shared
        seed unions positions from ALL filters, so positions covered only by other
@@ -6604,13 +7836,36 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
                 _sup = (np.asarray(merged['satstar_nframes'], dtype=float)[inf_idx]
                         if 'satstar_nframes' in merged.colnames
                         else np.ones(len(inf_idx)))
+                _inf_flux = np.asarray(merged[fcol], dtype=float)[inf_idx]
+                _distinct = _demote = _rstats = None
+                if cofit_runs is not None:
+                    _distinct, _rstats = _satstar_residual_distinct_pairs(
+                        sc[inf_idx], _sup, _inf_flux, cofit_runs,
+                        match_arcsec=cofit_match_arcsec)
+                    _demote = _satstar_edge_only_rows(
+                        sc[inf_idx], cofit_runs, match_arcsec=cofit_match_arcsec)
                 _inf_drop = _never_cofit_duplicates(
-                    sc[inf_idx], _sup,
-                    np.asarray(merged[fcol], dtype=float)[inf_idx],
+                    sc[inf_idx], _sup, _inf_flux,
                     cofit_positions, dedup_arcsec=dedup_arcsec,
-                    match_arcsec=cofit_match_arcsec)
+                    match_arcsec=cofit_match_arcsec,
+                    distinct_pairs=_distinct, demote=_demote)
                 drop[inf_idx[_inf_drop]] = True
                 n_infield = int(_inf_drop.sum())
+                if _rstats is not None:
+                    print(f"  satstar in-field dedup [cofit_residual]: "
+                          f"{_rstats['tested']} never-co-fit pair(s) tested: "
+                          f"{_rstats['distinct']} kept as two stars (a frame "
+                          f"that fits only the other leaves >= "
+                          f"{_rstats['ratio_min']:g} of the lower member's "
+                          f"peak and >= {_rstats['flux_min']:g} of its flux), "
+                          f"{_rstats['explained']} collapsed on the "
+                          f"measurement, {_rstats['untestable']} untestable, "
+                          f"{_rstats['fallback']} fell back to 'cofit' (missing "
+                          f"or unreadable residual/frame: "
+                          f"{len(_rstats['missing_files'])} run(s)); "
+                          f"{int(_demote.sum())} of {len(inf_idx)} in-field "
+                          f"row(s) are edge-only (ranked last when a set "
+                          f"picks its survivor)", flush=True)
                 print(f"  satstar in-field dedup: {n_infield} of {len(inf_idx)} "
                       f"in-field replaced_saturated row(s) collapsed (never "
                       f"co-fit in any of {n_runs} per-exposure "
@@ -6654,7 +7909,7 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
 
 #: Values of ``SATSTAR_INFIELD_DEDUP`` and its per-instrument variants; see
 #: :func:`_infield_dedup_settings`.
-_INFIELD_DEDUP_MODES = ('cofit', 'none', 'legacy')
+_INFIELD_DEDUP_MODES = ('cofit', 'cofit_residual', 'none', 'legacy')
 
 #: instrument -> (env var, default mode) for :func:`_infield_dedup_settings`.
 _INFIELD_DEDUP_ENVS = {'nircam': ('SATSTAR_INFIELD_DEDUP', 'cofit'),
@@ -6719,6 +7974,15 @@ def _infield_dedup_settings(target, module, filt, header_instrument=None):
     * ``'cofit'``  -- collapse only in-field rows that no per-exposure satstar
       run ever fit side by side (:func:`_never_cofit_duplicates`), keeping the
       best-supported member.
+    * ``'cofit_residual'`` -- ``'cofit'``, except that a never-co-fit pair
+      whose lower-ranked member's light is left in the satstar residual of
+      a frame that fit only the other is kept as two stars
+      (:func:`_satstar_residual_distinct_pairs`, thresholds
+      :func:`_resid_dedup_thresholds`), and a member whose every fit is
+      within 10 px of the science area (14 px of the array edge) is not a
+      set's survivor while another member is
+      (:func:`_satstar_edge_only_rows`).  Opt-in: the thresholds were tuned
+      on gc-treasury 10678 m7 o078 + o043 F480M/F212N only.
     * ``'none'``   -- keep every in-field row.
     * ``'legacy'`` -- the 1.0" friends-of-friends over every
       ``replaced_saturated`` row, which deletes distinct in-field stars.
@@ -6754,7 +8018,7 @@ def _infield_dedup_settings(target, module, filt, header_instrument=None):
     mode = _infield_dedup_mode(env_name, default)
     if str(target).lower() in _EXTENDED_EMISSION_TARGETS:
         return mode, env_name, True, False
-    return mode, env_name, mode != 'legacy', mode == 'cofit'
+    return mode, env_name, mode != 'legacy', mode in ('cofit', 'cofit_residual')
 
 
 def _gc_perframe_images(this_i2d, prev_i2d, marker_dir, filt, phase):
@@ -7100,6 +8364,43 @@ def _resolve_crossband_ref_filter(options, filternames):
     return pick
 
 
+def _maybe_annotate_cmd_default(paths, label='m8'):
+    """Add ``oksep_pass`` / ``cmd_default`` to each existing table in ``paths`` (#1283).
+
+    Skipped when ``M8_CMD_DEFAULT=0`` is set.  A failure on one table is
+    logged and the others still run; the rewrite is atomic, so a table is
+    either annotated or left as it was.  Returns the paths that were annotated.
+    """
+    if os.environ.get('M8_CMD_DEFAULT', '1') == '0':
+        return []
+    from astropy.io.registry import IORegistryError
+    from jwst_gc_pipeline.photometry.cmd_default import annotate_cmd_default
+    done = []
+    for _p in paths:
+        if not (_p and os.path.exists(_p)):
+            continue
+        try:
+            annotate_cmd_default(_p)
+        except (OSError, KeyError, ValueError, IndexError, TypeError,
+                IORegistryError) as _cex:
+            print(f"manual [{label}]: cmd_default flag FAILED ({_p}): {_cex}",
+                  flush=True)
+            continue
+        done.append(_p)
+    return done
+
+
+def _annotate_cmd_default_m7(xb_path, label='m7'):
+    """``_maybe_annotate_cmd_default`` on a cross-band table and its ``_qualcuts*`` subsets.
+
+    Every subset the merge wrote is matched by glob, so the field's oksep
+    suffix (whatever proposal number it carries) needs no spelling here.
+    """
+    return _maybe_annotate_cmd_default(
+        [xb_path] + sorted(glob.glob(f"{xb_path[:-len('.fits')]}_qualcuts*.fits")),
+        label)
+
+
 def _maybe_flag_m8_spikes(dedup_path, m8_path, options, label='m8'):
     """Add the diffraction-spike flag columns to an m8_dedup file (#1035).
 
@@ -7155,14 +8456,23 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
             out = m8_path.replace('.fits', '_dedup.fits')
     _stage = 'dedup'
     try:
-        from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
-        dedup_merged_catalog(m8_path, out)
+        from jwst_gc_pipeline.photometry.dedup_catalog import (
+            dedup_merged_catalog, parse_band_resolve_mas)
+        dedup_merged_catalog(
+            m8_path, out,
+            winner_emag_ratio=getattr(options, 'm8_dedup_winner_emag_ratio', None),
+            band_resolve_mas=parse_band_resolve_mas(
+                getattr(options, 'm8_dedup_band_resolve_mas', None)))
         print(f"manual [{label}]: m8 dedup -> {out}", flush=True)
         _stage = 'spike flag'
         try:
             # Catalog-level diffraction-spike flag (#1035): adds flag columns
             # to the dedup file, never removes rows.  Best-effort.
             _maybe_flag_m8_spikes(out, m8_path, options, label)
+            # Default CMD selection as columns on the full tables (#1283),
+            # computed on the finished dedup table and the raw m8.
+            _stage = 'cmd_default flag'
+            _maybe_annotate_cmd_default([m8_path, out], label)
         finally:
             # Runs whether or not the flag step raised, so a flag failure
             # cannot skip the brick anti-clobber copy.  The stage label is
@@ -7258,7 +8568,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
-        path = _pick_refcat(cands, field=field)
+        path = _pick_refcat(cands, field=field, proposal=proposal_id)
         if (gaia_fallback and not path
                 and not _refcat_is_required(proposal_id, field)):
             # A field outside the VVV footprint carries only the Gaia seed
@@ -7269,7 +8579,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
             gcands = sorted(
                 p for p in glob.glob(f"{basepath}/catalogs/gaia_refcat*.fits")
                 if _GAIA_REFCAT_RE.match(os.path.basename(p)))
-            path = _pick_refcat(gcands, field=field)
+            path = _pick_refcat(gcands, field=field, proposal=proposal_id)
             if path:
                 print(f"astrom checkpoint: no gaia_virac2_refcat under "
                       f"{basepath}/catalogs; using the Gaia-only seed refcat",
@@ -7289,6 +8599,12 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
         return load_reference_catalog(path)
     where = f"{basepath}/catalogs"
     if _refcat_is_required(proposal_id, field):
+        from jwst_gc_pipeline.photometry.naming import SHARED_TREE_PROPOSALS
+        # Proposals that share one directory are told apart by proposal, not
+        # observation: an `_o<NNN>` name is the same for both (#818).
+        build_token = (f"--proposal-token {proposal_id}"
+                       if str(proposal_id) in SHARED_TREE_PROPOSALS
+                       else f"--obs-token {field}")
         msg = (f"astrom checkpoint: no reference catalog under {where} for "
                f"proposal {proposal_id} observation {field}, whose alignment "
                f"config declares the VIRAC2 frame.  Without it the checkpoints "
@@ -7297,7 +8613,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
                f"green.  Build one with\n"
                f"  python -m jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery "
                f"--base {basepath} --epoch <YYYY.Y> --ra <deg> --dec <deg> "
-               f"--radius <deg> [--obs-token {field}]\n"
+               f"--radius <deg> [{build_token}]\n"
                f"or point ASTROM_REFCAT at an existing one.  Set "
                f"{ALLOW_CONSENSUS_ONLY_ENV}=1 to run without an absolute tie "
                f"(the result is not releasable).")
@@ -9754,7 +11070,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
 
     # A bad SATSTAR_INFIELD_DEDUP* value would otherwise raise only at the
     # first post-merge cleanup, after that phase's per-frame fits have run.
+    # The same for the 'cofit_residual' thresholds (SATSTAR_INFIELD_RESID_*).
     _validate_infield_dedup_env()
+    _resid_dedup_thresholds()
 
     cut_bp = _L._cutout_out_basepath(basepath, options)
     os.makedirs(os.path.join(cut_bp, 'catalogs'), exist_ok=True)
@@ -10127,7 +11445,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 prepare_frame=_prepare_frame_for_photometry,
                 frame_arg_builder_for=_builder_for,
                 nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
-                n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1))
+                n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
+                bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
+                nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
+                frame_products=_final_phase_frame_products,
+                nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
             # Partial fill writes one band only -> dedup waits for the merge
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
             if not _m8_partial:
@@ -10416,9 +11738,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # path on every run, so their mtime is always "now".
                 _seed_inputs = [q for q in (vetted_prev, det_i2d, bg_sub,
                                             resbg_path) if q]
+                # cross-epoch seed (off unless --xepoch-field): the other
+                # epoch's m7 vetted merged catalog, a seed input like the rest
+                xepoch_seed = (xepoch_seed_catalog_path(opts_phase, filt)
+                               if phase == 'm7' else None)
                 if phase == 'm7':
                     _seed_inputs += [q for _m, _f, q in crossband_seed_inputs(
                         cut_bp, modules, filternames, options)]
+                    if xepoch_seed:
+                        _seed_inputs.append(xepoch_seed)
+                        print(f"manual [m7] {filt}/{module}: cross-epoch seed "
+                              f"{xepoch_seed} (keep_in_fit)", flush=True)
 
                 # candidate frames (scan on first phase, cache thereafter)
                 if phase == phases[0]:
@@ -10510,6 +11840,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         'resbg_path': resbg_path,
                         'satstar_flux_overrides': satstar_overrides.get((module, filt)),
                         'satstar_flux_drops': satstar_drops.get((module, filt)),
+                        'xepoch_seed_catalog': xepoch_seed,
                     })
 
                 # Collision guard: every frame's per-frame output identity
@@ -10970,12 +12301,25 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 (_infield_mode, _infield_env, _offfov_only,
                  _want_cofit) = _infield_dedup_settings(
                     target, module, filt, header_instrument=_hdr_instrument)
-                _cofit = None
+                _cofit = _cofit_runs = None
                 if _want_cofit:
-                    _cofit = _satstar_cofit_positions(
-                        os.path.join(cut_bp, filt, 'pipeline'),
-                        proposal_id=proposal_id, field=field,
-                        phase=merge_label)
+                    if _infield_mode == 'cofit_residual':
+                        # the same runs, plus each run's frame, WCS, shape
+                        # and satstar residual for the residual test
+                        _cofit_runs = _satstar_cofit_runs(
+                            os.path.join(cut_bp, filt, 'pipeline'),
+                            proposal_id=proposal_id, field=field,
+                            phase=merge_label,
+                            frame_variants=_frame_variants_of_paths(
+                                frame_cache.get((module, filt), [])))
+                        _cofit = [_r['positions'] for _r in _cofit_runs]
+                    else:
+                        _cofit = _satstar_cofit_positions(
+                            os.path.join(cut_bp, filt, 'pipeline'),
+                            proposal_id=proposal_id, field=field,
+                            phase=merge_label,
+                            frame_variants=_frame_variants_of_paths(
+                                frame_cache.get((module, filt), [])))
                 _ext_note = ('; extended-emission target, off-FOV rows only'
                              if str(target).lower() in _EXTENDED_EMISSION_TARGETS
                              else '')
@@ -10987,7 +12331,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
                     fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)),
                     dedup_offfov_only=_offfov_only,
-                    cofit_positions=_cofit)
+                    cofit_positions=_cofit, cofit_runs=_cofit_runs)
                 if _ndup or _noff:
                     print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
                           f"removed {_ndup} duplicate satstar row(s) + {_noff} "
@@ -11231,7 +12575,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                 extra_source_catalogs=([_seed_for_bg]
                                                        if _seed_for_bg else ()),
                                 satstar_catalogs=_sat_paths,
-                                satstar_mask_radius_fwhm=_sat_fwhm)
+                                satstar_mask_radius_fwhm=_sat_fwhm,
+                                **_residual_bg_fill_kwargs(options))
                             _bg_fresh = True
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "
@@ -11293,7 +12638,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     if _do_crossband and not getattr(options, 'cutout_region', ''):
         ref_filter = _resolve_crossband_ref_filter(options, filternames)
         # FITS for every module; the slow ECSV twin for the merged module only
-        # unless the run has none (#1227).
+        # unless the run has none (#1227).  merge_daophot never writes it
+        # (and removes an earlier run's); write_crossband_ecsv writes it from
+        # the annotated FITS below (#1228).
         _xb_ecsv_modules = crossband_ecsv_modules(
             modules, getattr(options, 'manual_crossband_ecsv_all_modules', False))
         for module in modules:
@@ -11336,7 +12683,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 field=field,
                 progid=proposal_id,
                 vetted=True,
-                write_ecsv=(module in _xb_ecsv_modules))
+                write_ecsv=False)
             # The cross-band MERGED catalog is written by merge_daophot with
             # naming.merged_catalog_obs_token (its `_obssuf`), NOT the PER-FRAME
             # token.  They differ for exactly the PER_OBS_MERGED_FIELDS entries:
@@ -11369,6 +12716,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             except (OSError, ValueError, KeyError) as _pex:
                 print(f"manual [{last_phase}]: copying the independent-detection "
                       f"flags onto the _qualcuts subsets failed ({_pex})", flush=True)
+            # Default CMD selection (#1283): oksep_pass / cmd_default on the
+            # merged table and its subsets, after n_filt_independent exists.
+            _annotate_cmd_default_m7(_xb, last_phase)
+            # Last step of the post-annotation block (after any column added
+            # to the FITS): the ECSV twin carries the FITS table's columns.  It
+            # is written even when annotation failed, without the flags.
+            _write_crossband_ecsv_guarded(module, _xb_ecsv_modules, _xb, last_phase)
             # provenance sidecar for the m7 cross-band catalog (after annotate,
             # which mutates the file); stamp as stage 'm7'.  Its seed parent is
             # the POOL of every filter's m6 merged catalog (the cross-band seed
@@ -11422,7 +12776,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         prepare_frame=_prepare_frame_for_photometry,
                         frame_arg_builder_for=_builder_for,
                         nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
-                        n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1))
+                        n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
+                        bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
+                        nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
+                        frame_products=_final_phase_frame_products,
+                        nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
                     _stamp_catalog_provenance(
                         _m8, 'm8', options,
