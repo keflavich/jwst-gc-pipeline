@@ -132,11 +132,18 @@ FIELDS = {
     # `cloudef` tree also holds a few stray o005 mosaics, and the exact
     # `proposal_prefix` is what keeps them out of the o002 release.
     #
-    # MIRI is WITHHELD from both on purpose: 2092's o004/o006/o008 F770W/F2100W
-    # were never run through the pipeline (only 2024 MAST i2d sit on disk), so
-    # there is no product to ship and no `miri:` key here. Issue #596 tracks
-    # reducing them; when it closes, add the entries rather than pointing these
-    # at the archive files.
+    # MIRI is still WITHHELD from both, and there is no `miri:` key.  The 2092
+    # o004/o006/o008 F770W/F2100W products are reduced (PR #839; per-observation
+    # `*_clear-f*-mirimage_data_i2d.fits` under cloudef/F770W|F2100W/pipeline/),
+    # but three things stay open before they ship (issue #596):
+    #   * the o004 F770W mosaic was quarantined by the m2 checkpoint
+    #     (`..._im0_badastrom.fits`) and its crf frames predate the correction;
+    #   * the offsets table carries tie rows for F770W o004 only, so the F2100W
+    #     and o006/o008 F770W frames have no measured tie;
+    #   * whether consensus-tied (not VIRAC2-locked) MIRI ships is a release
+    #     decision, as is the split of o006, which images the control field.
+    # When those close, add explicit `miri:` entries with `src` paths to the
+    # reduced mosaics rather than pointing these at the archive files.
     "cloudef": {
         "data_dir": Path("/orange/adamginsburg/jwst/cloudef"),
         "proposal_prefix": "jw02092-o002_t001_nircam_clear",

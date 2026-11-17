@@ -356,8 +356,10 @@ def test_the_registry_import_is_not_shadowed_by_a_local_variable():
 
 
 def test_cloudef_keeps_its_miri_observations():
-    """Present in the catalog driver's copy of the map, absent from the reduce
-    driver's -- which is the copy this registry was generated from."""
+    """cloudef owns 2092 o004/o006/o008 (MIRI) in the registry.
+
+    ``alignment_config`` carries a matching ``FieldAlignment`` for them since
+    PR #839, so the registry's claim now has a reduction chain behind it."""
     assert F.field_to_reg_mapping('2092', 'miri') == {
         '004': 'cloudef', '006': 'cloudef', '008': 'cloudef'}
 
