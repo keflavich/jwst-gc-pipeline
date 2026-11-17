@@ -67,17 +67,69 @@ positions that are meant to *be* the reference. But averaging visits that are
 disagreement — bias is half the offset — while the row count inflates with
 unmerged duplicates, and nothing about the output would say so.
 
-So each visit's bulk offset from the anchor visit is **measured and recorded**
-(`IVMAXMAS`, `IV_<visit>` in the meta), with the density-immune offset histogram
-and the window sweep, never a nearest-neighbour median. A visit beyond
-`GROSS_INTER_VISIT_MAS` (100 mas) raises `InterVisitOffsetError` and no catalog
-is written. That is a **gross** gate in the sense `CLAUDE.md` uses for the
-sparse-Gaia cross-check — it catches "these visits were never tied", not a
-few-mas imperfection, and against a dense catalog the histogram peak over-reads
-by a few mas anyway. The recorded values are what make a fine threshold
-choosable later. A tie that cannot be measured at all (too few stars for a
-histogram peak) is recorded as such and counted in `IVNOMEAS`; it is not
-silently treated as zero.
+So the visits are compared **where they share sky**, and the result is
+**measured and recorded** (`IVMAXMAS`, `IV_<visit>` in the meta), with the
+density-immune offset histogram and the window sweep, never a nearest-neighbour
+median. The comparison is `interframe_overlap.pairwise_overlap_offsets`: a pair
+counts as overlapping when the footprint-intersection box holds at least
+`MIN_VISIT_OVERLAP_STARS` (30) stars of both visits, the offset is measured on
+the intersection only, and a swept peak that its narrow-window confirmation
+rejects is not a tie. Each visit's `IV_<visit>` entry is its tie to the first
+earlier overlapping visit, named at the end of the entry (`vs 001`).
+
+The visits of a tiling programme (cloudef 2092 o002/o004/o006/o008) are
+disjoint tiles. Measured against visit 1, a tile returns the geometric step
+between the tiles (59.2", 54.0") or a sliver-overlap alias (1.15"), and no
+registration error is involved. Three states are kept apart, because only the
+first is "nothing to check":
+
+| State | `IV_<visit>` text | Meta count | Gated |
+|---|---|---|---|
+| No shared footprint (or no star of one visit in it) | `NOT COMPARABLE (no footprint overlap with another visit)` | `IVNOOVL` | no |
+| Shared footprint, fewer than 30 stars of one visit in it | `OVERLAP TOO THIN (...; not checked)` | `IVTHIN` | no, but whole-catalog check below |
+| Shared footprint, 30+ stars, no confirmed tie | `NOT MEASURABLE vs <visit> (...)` | `IVNOMEAS` | no, but whole-catalog check below |
+
+A visit with no overlapping neighbour keeps its absolute frame from the m2
+checkpoint's tie of that visit to the reference. `IVMAXMAS` is the worst
+overlapping pair, and is `NaN` (absent from the FITS header, because astropy
+cannot store a NaN card) when no pair has a confirmed tie.
+
+**A large shift on a small footprint is refused, not pooled.** The
+footprint-intersection box is the right place to measure two visits that are on
+a common frame. When the shift is a large fraction of the footprint (a 20"
+shift of a 36" square) the box holds stars whose partners lie outside it, no
+true pair survives, and the narrow-window confirmation rejects the peak. The
+box-only rule then called the pair `NOT MEASURABLE`, left it out of the gate and
+pooled every star twice (2,914 rows; main refused it). So every pair whose
+footprints share sky but whose box gives no confirmed tie (`NOT MEASURABLE` or
+`OVERLAP TOO THIN`) is re-measured on the **whole catalogs** (swept histogram,
+then the same narrow-window confirmation). A confirmed offset beyond
+`GROSS_INTER_VISIT_MAS` raises `InterVisitOffsetError`, and the message says the
+pair was measured on the whole catalogs. A confirmed small offset is recorded as
+a measurement. The confirmation is what keeps this from re-creating the tile
+failure: two disjoint tiles peak at their geometric step, but that peak has no
+coherent narrow-window core, so it is not confirmed and the pair stays
+unchecked. A pair that neither the box nor the whole catalogs can confirm is
+pooled; if its raw box peak exceeds the gross gate, a `UserWarning` says so.
+Limit: the whole-catalog confirmation needs a coherent core holding at least
+5% of the smaller catalog, so two visits of very different depth that overlap
+only partially can still pass as `NOT MEASURABLE`.
+
+`IV_<visit>` is the shift that moves *this* visit onto the first earlier
+visit it overlaps with a confirmed tie (`vs 001`), so a visit that sits +20 mas
+in Dec from visit 001 reads `ddec=-20.00`. That is the sign convention of the
+files written before the pairwise comparison; `off` is the magnitude and is
+what the gate uses.
+
+The gate covers every overlapping, measurable pair, not only the pairs with
+the first visit, so a misregistration between tiles 5 and 6 is still caught.
+A pair beyond `GROSS_INTER_VISIT_MAS` (100 mas) raises `InterVisitOffsetError`,
+which names the pair, and no catalog is written. That is a **gross** gate in
+the sense `CLAUDE.md` uses for the sparse-Gaia cross-check — it catches "these
+visits were never tied", not a few-mas imperfection, and against a dense
+catalog the histogram peak over-reads by a few mas anyway. The recorded values
+are what make a fine threshold choosable later. A pair that is not gated is
+recorded as such (above), never as 0.
 
 **The exposure-vs-consensus tolerance is 2 mas** (`EXPOSURE_CONSENSUS_TOL_MAS`).
 These are the same stars, in the same filter, minutes apart, so a disagreement
