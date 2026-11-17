@@ -68,6 +68,9 @@ from ..photometry.astrometry_offsets import measure_offset
 # on disk for the same group, so keying on the raw token would split one pointing's
 # detectors across two rows -- the exact failure the column exists to prevent.)
 from ..photometry.astrometry_checkpoint import vgroup_key
+from ..photometry.naming import (
+    LABEL_TOKEN_PREFIX, MODULE_BLIND_LABEL_ORDER, glob_perframe_catalogs,
+    perframe_variant_summary)
 
 V2EP = 2014.0
 SEARCH = 0.3 * u.arcsec
@@ -180,8 +183,13 @@ def perframe_matches(basename, mtag):
     exposure.  Require the exposure number to be followed IMMEDIATELY by the
     merge tag.  Only sickle carries ``group_`` per-frame catalogs today
     (sgrc/cloudc/brick have none), which is why the over-match went unseen.
+
+    The m3..m7 merge-label token (``_daophot_basic_lbl<label>``,
+    ``naming.perframe_label_token``) is accepted: which label's fit of a frame
+    is read is decided in ``_gather``, one per frame.
     """
-    return bool(re.search(rf'_exp\d+{re.escape(mtag)}_daophot_basic\.fits$',
+    return bool(re.search(rf'_exp\d+{re.escape(mtag)}_daophot_basic'
+                          rf'(?:{re.escape(LABEL_TOKEN_PREFIX)}[a-z0-9]+)?\.fits$',
                           basename))
 
 
@@ -934,8 +942,20 @@ def _gather(filt, base, sub, mtag, dets, prop=None, field=None, otag=''):
     seen = {}
     unstamped = []
     for det in dets:
-        for f in sorted(glob.glob(f'{base}/{sub}/{filt}_{det}{otag}'
-                                  f'_visit*_vgroup*_exp*{mtag}_daophot_basic.fits')):
+        # Legacy and m3..m7 merge-label-tokened names; ONE per frame.  The tie
+        # is module-blind (any pass's fit of a frame measures its position),
+        # so the fixed MODULE_BLIND_LABEL_ORDER picks, then the legacy name.
+        # Without the choice the two spellings of one frame would trip the
+        # duplicate-frame refusal below.
+        det_fns, _variant_counts = glob_perframe_catalogs(
+            f'{base}/{sub}/{filt}_{det}{otag}'
+            f'_visit*_vgroup*_exp*{mtag}_daophot_basic.fits',
+            MODULE_BLIND_LABEL_ORDER, other_labels=True)
+        if _variant_counts['labelled']:
+            print("  " + perframe_variant_summary(
+                _variant_counts, f"{filt}/{det}{mtag}", 'any (module-blind)'),
+                flush=True)
+        for f in det_fns:
             b = os.path.basename(f)
             # The glob over-matches the grouped-fit variant; see perframe_matches.
             if not perframe_matches(b, mtag):

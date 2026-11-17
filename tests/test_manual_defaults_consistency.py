@@ -51,3 +51,16 @@ def test_dict_keys_referenced_by_cli_exist():
     missing = sorted({k for k in re.findall(r"MANUAL_DEFAULTS\['(\w+)'\]", text)
                       if k not in MANUAL_DEFAULTS})
     assert not missing, f'CLI references undefined MANUAL_DEFAULTS keys: {missing}'
+
+
+def test_dict_keys_read_through_mopt_exist():
+    # mopt() raises KeyError on an unknown name, but only when the call runs;
+    # the manual pipeline's call sites are deep inside run_manual_pipeline
+    root = os.path.join(os.path.dirname(__file__), '..', 'jwst_gc_pipeline',
+                        'photometry')
+    missing = set()
+    for fn in ('cataloging.py', 'crowdsource_catalogs_long.py'):
+        text = open(os.path.join(root, fn)).read()
+        missing |= {(fn, k) for k in re.findall(r"\bmopt\(\w+,\s*'(\w+)'", text)
+                    if k not in MANUAL_DEFAULTS}
+    assert not missing, f'mopt() reads undefined MANUAL_DEFAULTS keys: {sorted(missing)}'

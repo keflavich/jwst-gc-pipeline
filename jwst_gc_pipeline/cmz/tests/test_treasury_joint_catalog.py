@@ -14,7 +14,7 @@ SUFFIX = TJC.qualcuts_suffix()
 
 def _write_tile(path, ra, dec, f212=None, f480=None, ef212=None,
                 roll_corrected=None, gctag='2026-09-24_PR959',
-                rollctab=None, rollcver=None):
+                rollctab=None, rollcver=None, rollcutg=None, rollcupv=None):
     n = len(ra)
     t = Table()
     t['skycoord_ref'] = SkyCoord(ra=np.asarray(ra) * u.deg,
@@ -33,6 +33,10 @@ def _write_tile(path, ra, dec, f212=None, f480=None, ef212=None,
         t.meta['ROLLCTAB'] = rollctab
     if rollcver is not None:
         t.meta['ROLLCVER'] = rollcver
+    if rollcutg is not None:
+        t.meta['ROLLCUTG'] = rollcutg
+    if rollcupv is not None:
+        t.meta['ROLLCUPV'] = rollcupv
     t.write(path, overwrite=True)
 
 
@@ -118,6 +122,26 @@ def test_header_roll_table_provenance(tmp_path):
     assert TJC._header_roll_table_provenance(str(p_stamped)) == (
         'sha1:1721e98c8599', '2026-09-29_PR1004-3-g0e21107b')
     assert TJC._header_roll_table_provenance(str(p_bare)) == (None, None)
+
+
+def test_header_roll_upstream_provenance(tmp_path):
+    p_stamped = tmp_path / 'a.fits'
+    p_bare = tmp_path / 'b.fits'
+    _write_tile(p_stamped, *_grid_tile_coords(266.3, -29.1),
+               roll_corrected=True, rollcutg='2026-11-03_PR1266', rollcupv='921d1ef9')
+    _write_tile(p_bare, *_grid_tile_coords(266.4, -29.1), roll_corrected=True)
+    assert TJC._header_roll_upstream_provenance(str(p_stamped)) == (
+        '2026-11-03_PR1266', '921d1ef9')
+    assert TJC._header_roll_upstream_provenance(str(p_bare)) == (None, None)
+    # either card alone is enough
+    p_tag = tmp_path / 'c.fits'
+    p_ver = tmp_path / 'd.fits'
+    _write_tile(p_tag, *_grid_tile_coords(266.5, -29.1), roll_corrected=True,
+               rollcutg='2026-11-03_PR1266')
+    _write_tile(p_ver, *_grid_tile_coords(266.6, -29.1), roll_corrected=True,
+               rollcupv='921d1ef9')
+    assert TJC._header_roll_upstream_provenance(str(p_tag)) == ('2026-11-03_PR1266', None)
+    assert TJC._header_roll_upstream_provenance(str(p_ver)) == (None, '921d1ef9')
 
 
 def test_assert_no_mixed_roll_correction_raises():
@@ -325,6 +349,29 @@ def test_build_joint_catalog_records_per_tile_roll_table_provenance(tmp_path):
     assert prov['tiles']['041']['rollcver'] == '2026-10-02_PR1030'
 
 
+def test_build_joint_catalog_records_upstream_tag_beside_gctag(tmp_path):
+    """A rolled tile's GCTAG names the roll run; the producer's tag is in
+    ROLLCUTG.  Both are recorded, and tile_pipeline_tag stays the GCTAG that
+    stage_release compares against the m8 table (#1269)."""
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=8, ny=8, step_arcsec=3.0)
+    ra1, dec1 = _grid_tile_coords(266.50, -29.30, nx=8, ny=8, step_arcsec=3.0)
+    p0 = in_dir / f'basic_merged_m7_o040{SUFFIX}.fits'
+    _write_tile(p0, ra0, dec0, roll_corrected=True,
+               rollcutg='2026-11-03_PR1266', rollcupv='921d1ef9')
+    _write_tile(in_dir / f'basic_merged_m7_o041{SUFFIX}.fits', ra1, dec1,
+               roll_corrected=True)
+    _, prov = TJC.build_joint_catalog(str(in_dir))
+    # (the FITS write hook stamps the running tag over the fixture's gctag)
+    assert prov['tiles']['040']['tile_pipeline_tag'] == TJC._tile_pipeline_tag(str(p0))
+    assert prov['tiles']['040']['tile_pipeline_tag'] != '2026-11-03_PR1266'
+    assert prov['tiles']['040']['rollcutg'] == '2026-11-03_PR1266'
+    assert prov['tiles']['040']['rollcupv'] == '921d1ef9'
+    assert prov['tiles']['041']['rollcutg'] is None
+    assert prov['tiles']['041']['rollcupv'] is None
+
+
 def test_build_joint_catalog_tiles_with_no_rollctab_record_none(tmp_path):
     in_dir = tmp_path / 'tiles'
     in_dir.mkdir()
@@ -352,3 +399,111 @@ def test_qualcuts_suffix_is_the_treasury_proposal():
     """The tile glob asks the per-field registry; for gc-treasury that is
     program 10678, the token every on-disk treasury table carries."""
     assert TJC.qualcuts_suffix().endswith('10678')
+
+
+# ---------------------------------------------------------------------------
+# tile_kind='m8_dedup' (#1283): every row of the m8_dedup tiles, cmd_default
+# ahead of the band count in the winner rule
+# ---------------------------------------------------------------------------
+M8_STEM = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup'
+
+
+def _write_m8_tile(path, ra, dec, cmd_default, n_indep, f480=None,
+                   with_flag=True, **kwargs):
+    """An m8_dedup-like tile: the _write_tile schema plus the flag and forced columns."""
+    _write_tile(path, ra, dec, f480=f480, **kwargs)
+    t = Table.read(path)
+    if with_flag:
+        t['cmd_default'] = np.asarray(cmd_default, dtype=bool)
+    t['n_filt_independent'] = np.asarray(n_indep, dtype=np.int16)
+    t['forced_snr_f480m'] = np.full(len(t), 50.0)
+    t.write(path, overwrite=True)
+
+
+def test_discover_m8_dedup_tiles_excludes_module_siblings_and_m7_subsets(tmp_path):
+    ra, dec = _grid_tile_coords(266.30, -29.10)
+    _write_m8_tile(tmp_path / f'{M8_STEM}_o040.fits', ra, dec, [True] * 36, [2] * 36)
+    for mod in ('nrca', 'nrcb'):
+        _write_m8_tile(tmp_path / f'{M8_STEM.replace("merged_i", mod + "_i", 1)}_o040.fits',
+                       ra, dec, [True] * 36, [2] * 36)
+    # an m7 oksep tile of another obsid is not an m8_dedup tile
+    _write_tile(tmp_path / f'basic_merged_m7_o041{SUFFIX}.fits', ra, dec)
+    paths = TJC.discover_tile_paths(str(tmp_path), tile_kind='m8_dedup')
+    assert set(paths) == {'040'}
+    assert os.path.basename(paths['040']).startswith('basic_merged_')
+    # the default kind still finds only the m7 oksep tile
+    assert set(TJC.discover_tile_paths(str(tmp_path))) == {'041'}
+
+
+def test_unknown_tile_kind_is_refused(tmp_path):
+    with pytest.raises(ValueError, match='tile_kind'):
+        TJC.discover_tile_paths(str(tmp_path), tile_kind='m8')
+
+
+def test_m8_dedup_tile_without_cmd_default_is_refused(tmp_path):
+    ra, dec = _grid_tile_coords(266.30, -29.10)
+    p = tmp_path / f'{M8_STEM}_o040.fits'
+    _write_m8_tile(p, ra, dec, [True] * 36, [2] * 36, with_flag=False)
+    with pytest.raises(KeyError, match='add_cmd_default_flag'):
+        TJC._load_match_rows(str(p), '040', ['f212n', 'f480m'], 'm8_dedup')
+
+
+def test_m7_match_rows_do_not_read_the_flag(tmp_path):
+    ra, dec = _grid_tile_coords(266.30, -29.10)
+    p = tmp_path / f'basic_merged_m7_o040{SUFFIX}.fits'
+    _write_tile(p, ra, dec)
+    rows = TJC._load_match_rows(str(p), '040', ['f212n', 'f480m'])
+    assert 'cmd_default' not in rows
+
+
+def test_winner_rule_prefers_cmd_default_over_more_bands():
+    mt = _match_table(
+        ra=[266.5, 266.50001], dec=[-29.0, -29.0], obsid=['040', '041'],
+        n_bands=[2, 2], edge_dist=[30.0, 3.0], f212_err=[0.01, 0.05])
+    mt['cmd_default'] = [False, True]
+    mt['n_indep'] = [2.0, 2.0]
+    keep, also_in = TJC.dedup_match_table(mt, dedup_radius_arcsec=0.2)
+    # row 0 would win on edge distance and error; the flag decides first
+    assert list(keep) == [False, True]
+
+
+def test_winner_rule_prefers_independent_detections_when_flags_tie():
+    mt = _match_table(
+        ra=[266.5, 266.50001], dec=[-29.0, -29.0], obsid=['040', '041'],
+        n_bands=[2, 2], edge_dist=[30.0, 3.0], f212_err=[0.01, 0.05])
+    mt['cmd_default'] = [False, False]
+    mt['n_indep'] = [1.0, 2.0]
+    keep, _ = TJC.dedup_match_table(mt, dedup_radius_arcsec=0.2)
+    assert list(keep) == [False, True]
+
+
+def test_build_joint_catalog_m8_dedup_keeps_forced_rows_and_records_kind(tmp_path):
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=8, ny=8, step_arcsec=3.0)
+    ra1, dec1 = _grid_tile_coords(266.50, -29.30, nx=8, ny=8, step_arcsec=3.0)
+    flag0 = np.arange(64) % 2 == 0          # half the rows fail cmd_default
+    _write_m8_tile(in_dir / f'{M8_STEM}_o040.fits', ra0, dec0, flag0,
+                   np.where(flag0, 2, 1))
+    _write_m8_tile(in_dir / f'{M8_STEM}_o041.fits', ra1, dec1, [True] * 64, [2] * 64)
+    table, prov = TJC.build_joint_catalog(str(in_dir), tile_kind='m8_dedup')
+    assert len(table) == 128                # the flagged-out rows stay
+    assert int(np.sum(table['cmd_default'])) == 32 + 64
+    assert 'forced_snr_f480m' in table.colnames
+    assert prov['tile_kind'] == 'm8_dedup'
+    assert prov['winner_rule'][:2] == ['cmd_default', 'n_filt_independent']
+    assert table.meta['CMZTKIND'] == 'm8_dedup'
+
+
+def test_build_joint_catalog_default_kind_is_unchanged(tmp_path):
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=8, ny=8, step_arcsec=3.0)
+    _write_tile(in_dir / f'basic_merged_m7_o040{SUFFIX}.fits', ra0, dec0)
+    table, prov = TJC.build_joint_catalog(str(in_dir))
+    assert prov['tile_kind'] == 'm7_oksep'
+    assert prov['winner_rule'] == ['most_finite_bands',
+                                   'largest_edge_distance_arcsec',
+                                   'lowest_f212n_flux_err_jy',
+                                   'lowest_row_index']
+    assert 'CMZTKIND' not in table.meta

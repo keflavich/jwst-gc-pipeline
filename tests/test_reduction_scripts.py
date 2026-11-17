@@ -370,6 +370,59 @@ def test_purge_satstar_caches(tmp_path):
     assert m.purge(str(tmp_path), 'brick', ['F182M'], execute=True) == 0
 
 
+def _old_vintage_satstar(path, n=4, with_xcentroid=True):
+    import numpy as np
+    from astropy.table import Table
+    t = Table({'id': np.ones(n, dtype=int),
+               'x_fit': np.linspace(40, 80, n), 'y_fit': np.linspace(41, 81, n),
+               'flux_fit': np.full(n, 1e4)})
+    if with_xcentroid:
+        t['xcentroid'] = t['x_fit'] + np.linspace(100, 1900, n)
+        t['ycentroid'] = t['y_fit'] + np.linspace(200, 1800, n)
+    t.write(path)
+
+
+def test_migrate_satstar_xy(tmp_path):
+    from astropy.table import Table
+    m = _load('migrate_satstar_xy')
+    pipe = tmp_path / 'brick' / 'F182M' / 'pipeline'
+    cats = tmp_path / 'brick' / 'catalogs'
+    pipe.mkdir(parents=True)
+    cats.mkdir(parents=True)
+    a = pipe / 'exp1_m12_satstar_catalog.fits'
+    ext = pipe / 'exp1_m12_extended_satstar_catalog.fits'
+    b = cats / 'f182m_consolidated_satstar_catalog.fits'
+    no_x = pipe / 'exp2_m12_satstar_catalog.fits'
+    other = pipe / 'exp1_m12_satstar_rejected.fits'
+    for p in (a, ext, b):
+        _old_vintage_satstar(p)
+    _old_vintage_satstar(no_x, with_xcentroid=False)
+    _old_vintage_satstar(other)
+    before = {p: p.read_bytes() for p in (a, ext, b, no_x, other)}
+
+    # per-exposure files are listed before the consolidated cache
+    files = m.satstar_files(str(tmp_path), 'brick', ['F182M'])
+    assert files[-1] == str(b) and str(other) not in files
+
+    # dry run changes nothing
+    assert m.migrate(str(tmp_path), 'brick', ['F182M']) == 3
+    assert all(p.read_bytes() == before[p] for p in before)
+
+    # --apply migrates the three files; the one without xcentroid is skipped
+    assert m.migrate(str(tmp_path), 'brick', ['F182M'], apply=True) == 3
+    for p in (a, ext, b):
+        t = Table.read(p)
+        assert t.meta['XYFRAME'] == 'detector'
+        assert list(t['id']) == [1, 2, 3, 4]
+        assert t['x_fit'].max() > 100
+    assert no_x.read_bytes() == before[no_x]
+    assert other.read_bytes() == before[other]
+    assert not list(pipe.glob('*.tmp*'))
+
+    # a second run finds nothing to do
+    assert m.migrate(str(tmp_path), 'brick', ['F182M'], apply=True) == 0
+
+
 # --- apply_m2_checkpoint_corrections: per-exposure extension ---------------
 
 def _write_m2_record(records_dir, filt, visit_exposures):
@@ -1593,6 +1646,51 @@ def test_checkpoint_cli_drops_subfloor_and_keeps_the_bulk_tie(tmp_path, monkeypa
     kept = seen['corr']
     assert len(kept) == 1, kept
     assert 'consensus->reference' in kept[0]['source'], kept
+
+
+def test_checkpoint_cli_glob_takes_one_spelling_per_frame(tmp_path, monkeypatch,
+                                                          capsys):
+    """A legacy-shaped --catalog-glob also takes the m3..m7 merge-label-tokened
+    catalogs and keeps ONE spelling per frame (merged > nrca > nrcb > legacy),
+    never the tokened residual/model images the ``_lbl*`` glob also matches."""
+    m = _load('run_astrometry_checkpoint')
+    base = tmp_path / 'F212N'
+    base.mkdir()
+    stem = 'f212n_nrcb1_o001_visit001_vgroup1_exp{e:05d}_m4_daophot_basic'
+    # exp4: only a label outside MODULE_BLIND_LABEL_ORDER (a --modules value
+    # such as nrcb1) -- still a fit of the frame, so a module-blind reader
+    # takes it (other_labels=True)
+    for e, tails in ((1, ('', '_lblnrcb', '_lblmerged')),
+                     (2, ('', '_lblnrcb', '_lblnrcb_residual')),
+                     (3, ('',)), (4, ('_lblnrcb1',))):
+        for t in tails:
+            (base / (stem.format(e=e) + t + '.fits')).write_bytes(b'')
+
+    class _Stop(Exception):
+        pass
+
+    read = []
+
+    def _read(fn, *a, **k):
+        read.append(fn.rsplit('/', 1)[-1])
+        if len(read) == 4:
+            raise _Stop
+        return object()
+
+    monkeypatch.setattr(m, 'Table', type('T', (), {'read': staticmethod(_read)}))
+    monkeypatch.setattr(m, 'load_reference_catalog', lambda *a, **k: object())
+    with pytest.raises(_Stop):
+        m.main(['--stage', 'm4', '--filter', 'F212N',
+                '--catalog-glob', str(base / '*_m4_daophot_basic.fits'),
+                '--refcat', str(tmp_path / 'r.fits'),
+                '--basepath', str(tmp_path), '--proposal-id', '10678',
+                '--obsid', '001'])
+    assert read == [stem.format(e=1) + '_lblmerged.fits',
+                    stem.format(e=2) + '_lblnrcb.fits',
+                    stem.format(e=3) + '.fits',
+                    stem.format(e=4) + '_lblnrcb1.fits'], read
+    out = capsys.readouterr().out
+    assert '4 frame(s); 3 read from merge-label-tokened names' in out, out
 
 
 def test_an_absent_offsets_table_names_the_bootstrap_path(tmp_path, capsys):

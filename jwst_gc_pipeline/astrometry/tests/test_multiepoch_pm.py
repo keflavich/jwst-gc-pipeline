@@ -10,9 +10,12 @@ import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord, concatenate
 import astropy.units as u
+from astropy.table import QTable, Table
 
+from jwst_gc_pipeline.astrometry import multiepoch_pm
 from jwst_gc_pipeline.astrometry.multiepoch_pm import (
-    affine_tie, build_pm_catalog_2epoch, TieNotVerifiedError)
+    affine_tie, build_pm_catalog_2epoch, TieNotVerifiedError,
+    load_jwst_m7, std_columns_to_arcsec)
 
 CENTER = SkyCoord(266.5 * u.deg, -28.5 * u.deg)
 RNG = np.random.default_rng(20260918)
@@ -532,3 +535,138 @@ def test_overlay_json_refuses_old_fits_without_ref_columns(tmp_path):
     doc = make_overlay_json(str(fits_path), str(tmp_path / 'o.json'), 'x', verbose=False,
                             frame='src', ref_observations=['o112', 'o118'])
     assert doc['meta']['ref_observations'] == ['o112', 'o118']
+
+
+def _m7_table(std_ra, std_dec, filt='f200w'):
+    n = len(std_ra)
+    t = Table()
+    t['skycoord_ref'] = SkyCoord((CENTER.ra.deg + np.arange(n) * 1e-4) * u.deg,
+                                 np.full(n, CENTER.dec.deg) * u.deg)
+    t[f'mag_ab_{filt}'] = np.full(n, 18.0)
+    t[f'std_ra_{filt}'] = np.asarray(std_ra, float)
+    t[f'std_dec_{filt}'] = np.asarray(std_dec, float)
+    return t
+
+
+def test_load_jwst_m7_std_columns_are_degrees(tmp_path):
+    """std_ra/std_dec are degrees (merge_catalogs.py); 1e-6 deg is 3.6 mas."""
+    path = tmp_path / 'm7.fits'
+    _m7_table([1e-6, 2e-6], [1e-6, 3e-6]).write(path)
+    jwst = load_jwst_m7(str(path))
+    np.testing.assert_allclose(jwst['ex'], [3.6e-3, 7.2e-3])
+    np.testing.assert_allclose(jwst['ey'], [3.6e-3, 10.8e-3])
+
+
+def test_load_jwst_m7_zero_nan_and_missing_use_floor(tmp_path):
+    path = tmp_path / 'm7.fits'
+    _m7_table([0.0, np.nan, -1e-6], [0.0, np.nan, 1e-6]).write(path)
+    jwst = load_jwst_m7(str(path))
+    np.testing.assert_allclose(jwst['ex'], 0.005)
+    np.testing.assert_allclose(jwst['ey'], [0.005, 0.005, 3.6e-3])
+    # No std columns at all: every row takes the floor.
+    t = _m7_table([1e-6], [1e-6])
+    t.remove_columns(['std_ra_f200w', 'std_dec_f200w'])
+    path2 = tmp_path / 'm7_nostd.fits'
+    t.write(path2)
+    jwst = load_jwst_m7(str(path2))
+    np.testing.assert_allclose(jwst['ex'], 0.005)
+    np.testing.assert_allclose(jwst['ey'], 0.005)
+
+
+def test_std_columns_to_arcsec_cosdec_is_opt_in():
+    t = _m7_table([1e-6], [1e-6])
+    ex, ey = std_columns_to_arcsec(t, 'f200w')
+    np.testing.assert_allclose([ex[0], ey[0]], 3.6e-3)
+    ex, ey = std_columns_to_arcsec(t, 'f200w', dec_deg=-28.5, apply_cosdec=True)
+    np.testing.assert_allclose(ex[0], 3.6e-3 * np.cos(np.deg2rad(-28.5)))
+    np.testing.assert_allclose(ey[0], 3.6e-3)
+    with pytest.raises(ValueError):
+        std_columns_to_arcsec(t, 'f200w', apply_cosdec=True)
+    # The default switch leaves the coordinate-RA convention unchanged.
+    assert multiepoch_pm.STD_RA_APPLY_COSDEC is False
+
+
+@pytest.mark.parametrize('apply_cosdec', [False, True])
+def test_load_jwst_m7_and_treasury_loader_agree(tmp_path, monkeypatch, apply_cosdec):
+    """build_treasury_pm._load_one and load_jwst_m7 share one conversion site."""
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as B
+    monkeypatch.setattr(multiepoch_pm, 'STD_RA_APPLY_COSDEC', apply_cosdec)
+    t = _m7_table([1e-6, 0.0, 2e-6], [2e-6, 1e-6, np.nan])
+    t['skycoord_f200w'] = t['skycoord_ref']
+    t['flux_f200w'] = np.full(3, 1e-3)
+    t['flux_err_f200w'] = np.full(3, 1e-5)
+    path = tmp_path / 'm7.fits'
+    t.write(path)
+    a = load_jwst_m7(str(path))
+    b = B._load_one(str(path), 'f200w', 2023.7, 5.0, 0)
+    np.testing.assert_allclose(a['ex'], b['ex'])
+    np.testing.assert_allclose(a['ey'], b['ey'])
+    if apply_cosdec:
+        np.testing.assert_allclose(a['ex'][0], 3.6e-3 * np.cos(np.deg2rad(CENTER.dec.deg)))
+
+
+def test_std_columns_to_arcsec_nonfinite_and_infinite_rows_are_nan():
+    t = _m7_table([np.inf, np.nan, 0.0, -1e-6, 1e-6], [np.inf, np.nan, 0.0, -1e-6, 1e-6])
+    ex, ey = std_columns_to_arcsec(t, 'f200w')
+    assert np.isnan(ex[:4]).all() and np.isnan(ey[:4]).all()
+    np.testing.assert_allclose([ex[4], ey[4]], 3.6e-3)
+
+
+def test_std_columns_to_arcsec_bare_column_wins_over_suffixed():
+    """A table with both bare and suffixed std columns is read from the bare pair."""
+    t = _m7_table([5e-6], [5e-6])
+    t['std_ra'] = [1e-6]
+    t['std_dec'] = [2e-6]
+    ex, ey = std_columns_to_arcsec(t, 'f200w')
+    np.testing.assert_allclose([ex[0], ey[0]], [3.6e-3, 7.2e-3])
+    # Without the bare pair the suffixed one is used.
+    t.remove_columns(['std_ra', 'std_dec'])
+    ex, ey = std_columns_to_arcsec(t, 'f200w')
+    np.testing.assert_allclose([ex[0], ey[0]], 18e-3)
+
+
+def test_std_columns_to_arcsec_masked_entries_are_nan():
+    t = Table(masked=True)
+    t['std_ra_f200w'] = np.ma.array([1e-6, 1e20, 2e-6], mask=[False, True, False])
+    t['std_dec_f200w'] = np.ma.array([1e-6, 1e-6, 1e20], mask=[False, False, True])
+    ex, ey = std_columns_to_arcsec(t, 'f200w')
+    np.testing.assert_allclose(ex, [3.6e-3, np.nan, 7.2e-3])
+    np.testing.assert_allclose(ey, [3.6e-3, 3.6e-3, np.nan])
+
+
+def test_std_columns_to_arcsec_honours_column_units():
+    """A unit-bearing column is converted from its unit, not read as degrees."""
+    t = Table()
+    t['std_ra_f200w'] = [3.6, 7.2]
+    t['std_ra_f200w'].unit = u.mas
+    t['std_dec_f200w'] = [1e-6, 2e-6]
+    t['std_dec_f200w'].unit = u.deg
+    ex, ey = std_columns_to_arcsec(t, 'f200w')
+    np.testing.assert_allclose(ex, [3.6e-3, 7.2e-3])
+    np.testing.assert_allclose(ey, [3.6e-3, 7.2e-3])
+    q = QTable()
+    q['std_ra_f200w'] = [3.6, 7.2] * u.mas
+    q['std_dec_f200w'] = [1e-6, 2e-6] * u.deg
+    ex, ey = std_columns_to_arcsec(q, 'f200w')
+    np.testing.assert_allclose(ex, [3.6e-3, 7.2e-3])
+    np.testing.assert_allclose(ey, [3.6e-3, 7.2e-3])
+    # A non-angular unit is refused instead of being multiplied by 3600.
+    t['std_ra_f200w'].unit = u.Jy
+    with pytest.raises(u.UnitConversionError):
+        std_columns_to_arcsec(t, 'f200w')
+
+
+@pytest.mark.parametrize('missing', [['std_ra_f200w'], ['std_dec_f200w'],
+                                     ['std_ra_f200w', 'std_dec_f200w']])
+def test_treasury_loader_raises_when_std_columns_absent(tmp_path, missing):
+    """_load_one keeps raising KeyError when either std column is absent."""
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as B
+    t = _m7_table([1e-6], [1e-6])
+    t['skycoord_f200w'] = t['skycoord_ref']
+    t['flux_f200w'] = [1e-3]
+    t['flux_err_f200w'] = [1e-5]
+    t.remove_columns(missing)
+    path = tmp_path / 'm7_nostd.fits'
+    t.write(path)
+    with pytest.raises(KeyError):
+        B._load_one(str(path), 'f200w', 2023.7, 5.0, 0)

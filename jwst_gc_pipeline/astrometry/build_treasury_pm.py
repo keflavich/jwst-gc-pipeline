@@ -52,22 +52,12 @@ def _col(t, base, filt):
     raise KeyError(f'neither {base!r} nor {c!r} in {t.colnames}')
 
 
-# merge_catalogs.py computes std_ra/std_dec as the scatter of avg_ra/avg_dec,
-# which it builds as SkyCoord(..., unit=(u.deg, u.deg)) -- so these columns
-# are in DEGREES, not arcsec (no FITS unit is set on them either, so this has
-# to be read out of merge_catalogs.py, not the table). Every JWST-native PM
-# script this session assumed arcsec -- including the existing, VIRAC-
-# validated cloudef_pm_flystar.py, where it went unnoticed only because
-# VIRAC2's much larger position error dominates that error budget and the
-# JWST-side term is negligible either way. It is NOT negligible here: both
-# epochs are JWST-native, so getting this wrong shrinks the combined
-# pm_ra_err/pm_dec_err by ~3600x and makes the "trustworthy" error cut pass
-# almost everything regardless of real quality.
-DEG_TO_ARCSEC = 3600.0
-# merge_catalogs.py's degenerate-position guard sets std_ra/std_dec to exactly
-# 0.0 for seeded/copied per-frame positions with no real multi-frame scatter
-# to measure; treat that the same as NaN/missing rather than a real zero.
-_DEGENERATE_DEG = 0.0
+# std_ra/std_dec are DEGREES (merge_catalogs.py scatter of avg_ra/avg_dec, no
+# FITS unit set); the conversion to arcsec, the degenerate-0.0 guard and the
+# optional cos(dec) scaling live in multiepoch_pm.std_columns_to_arcsec so that
+# this driver and load_jwst_m7 share one site.  Reading them as arcsec shrinks
+# the combined pm_ra_err/pm_dec_err by ~3600x (jwst-gc-pipeline#140, #922).
+DEG_TO_ARCSEC = M.STD_DEG_TO_ARCSEC
 
 
 def _sat_flags(t, filt):
@@ -87,18 +77,18 @@ def _load_one(path, filt, epoch, sn_cut, obs_index):
     sc_col = _col(t, 'skycoord', filt)
     fl_col = _col(t, 'flux', filt)
     fe_col = _col(t, 'flux_err', filt)
-    ex_col = _col(t, 'std_ra', filt)
-    ey_col = _col(t, 'std_dec', filt)
+    _col(t, 'std_ra', filt)     # raise KeyError when absent, as for the columns above
+    _col(t, 'std_dec', filt)
     sc = SkyCoord(t[sc_col])
     flux = np.asarray(t[fl_col], float)
     flux_err = np.asarray(t[fe_col], float)
-    ex = np.asarray(t[ex_col], float) * DEG_TO_ARCSEC
-    ey = np.asarray(t[ey_col], float) * DEG_TO_ARCSEC
+    ex, ey = M.std_columns_to_arcsec(t, filt, dec_deg=sc.dec.deg,
+                                     apply_cosdec=M.STD_RA_APPLY_COSDEC)
     ok = (np.isfinite(sc.ra.deg) & np.isfinite(flux) & (flux > 0) &
           np.isfinite(flux_err) & (flux_err > 0) & (flux / flux_err > sn_cut))
     return dict(sc=sc[ok],
-                ex=np.where(np.isfinite(ex[ok]) & (ex[ok] > _DEGENERATE_DEG), ex[ok], 0.005),
-                ey=np.where(np.isfinite(ey[ok]) & (ey[ok] > _DEGENERATE_DEG), ey[ok], 0.005),
+                ex=np.where(np.isfinite(ex[ok]), ex[ok], 0.005),
+                ey=np.where(np.isfinite(ey[ok]), ey[ok], 0.005),
                 flux=flux[ok], mag=-2.5 * np.log10(flux[ok]), sat=sat[ok],
                 epoch=epoch, n=int(ok.sum()), obs_index=obs_index)
 

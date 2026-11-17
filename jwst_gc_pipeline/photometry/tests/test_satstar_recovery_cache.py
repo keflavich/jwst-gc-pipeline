@@ -96,6 +96,23 @@ def test_missing_deblend_attribute_reads_as_off():
     assert _satstar_recovery_signature(o) == "off"
 
 
+def test_deblend_token_needs_a_ramp_for_the_frame(tmp_path):
+    """A frame with no sibling ``_ramp.fits`` is fitted with the legacy seeding
+    whatever the option says, so it carries the same stamp either way (#1196);
+    a frame with a ramp keeps the ``_dbl2`` token."""
+    frame = tmp_path / "jw02221001001_02101_00001_nrcb1_cal.fits"
+    frame.touch()
+    on, off = _opts(deblend_satstars=True), _opts()
+    assert (_satstar_recovery_signature(on, str(frame))
+            == _satstar_recovery_signature(off, str(frame)) == "off")
+    zf = _opts(satstar_zeroframe_recover=True, deblend_satstars=True)
+    assert _satstar_recovery_signature(zf, str(frame)) == "zf1_ramp0_dil3"
+    (tmp_path / "jw02221001001_02101_00001_nrcb1_ramp.fits").touch()
+    assert _satstar_recovery_signature(on, str(frame)) == "off_dbl2"
+    assert _satstar_recovery_signature(off, str(frame)) == "off"
+    assert _satstar_recovery_signature(zf, str(frame)) == "zf1_ramp0_dil3_dbl2"
+
+
 def _write_cache(path, sig):
     t = Table({"flux": [1.0, 2.0]})
     if sig is not None:
@@ -225,3 +242,37 @@ def test_deblended_cache_is_not_reused_by_a_plain_run(tmp_path, monkeypatch):
         fn, path_prefix=str(tmp_path),
         recovery_signature=_satstar_recovery_signature(_opts()))
     assert calls["n"] == 1
+
+
+@pytest.mark.parametrize("with_ramp, expected", [(True, "off_dbl2"),
+                                                 (False, "off")])
+def test_frame_preparation_passes_the_frame_to_the_signature(
+        tmp_path, monkeypatch, with_ramp, expected):
+    """``_prepare_frame_for_photometry`` computes the signature of THIS frame:
+    with ``--deblend-satstars`` the ``_dbl2`` token appears only when the frame
+    has a sibling ``_ramp.fits`` (#1196).  A call that dropped the frame name
+    would stamp ``off_dbl2`` on both."""
+    from jwst_gc_pipeline.photometry import cataloging as C
+    from jwst_gc_pipeline.photometry.tests import test_gate_reject_handoff as G
+    from jwst_gc_pipeline.photometry.tests.test_handoff_filter_scope import (
+        _prepare_band)
+    prep_options = G._prep_options
+
+    def _options():
+        opts = prep_options()
+        opts.deblend_satstars = True
+        return opts
+    monkeypatch.setattr(G, '_prep_options', _options)
+    returned = []
+    signature = C._satstar_recovery_signature
+
+    def _spy(options, filename=None):
+        # the frame's directory exists by now; add its ramp
+        if with_ramp:
+            (tmp_path / 'F212N' / 'pipeline'
+             / 'jw10678132001_02101_00004_nrcalong_ramp.fits').touch()
+        returned.append(signature(options, filename))
+        return returned[-1]
+    monkeypatch.setattr(C, '_satstar_recovery_signature', _spy)
+    _prepare_band(tmp_path, monkeypatch, 'F212N', 'implied_peak_gate')
+    assert returned == [expected]

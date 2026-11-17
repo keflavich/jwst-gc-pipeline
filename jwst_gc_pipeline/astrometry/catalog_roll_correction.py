@@ -946,6 +946,15 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
                 ROLLCPIV=('visit coverage centroid', 'rotation pivot'),
                 ROLLPIX=('pixel cols refer to UNCORRECTED WCS', 'x/y not rotated'),
                 ROLLCDAT=(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'applied UTC'))
+    if is_fits:
+        # The FITS writer stamps GCPIPEV/GCTAG with THIS run's commit over the
+        # producer's (provenance.install_fits_provenance_hook), so keep the
+        # input's values under ROLLCUPV/ROLLCUTG.  ECSV output keeps them in meta.
+        for key, card, cmt in (('GCTAG', 'ROLLCUTG', 'upstream GCTAG'),
+                               ('GCPIPEV', 'ROLLCUPV', 'upstream GCPIPEV')):
+            val = next((h.header[key] for h in (hl[0], hl[ti]) if key in h.header), None)
+            if val is not None:
+                prov[card] = (str(val), cmt)
     vis_cards = []
     for i, m in enumerate(model_cache.values()):
         for j, v in enumerate(m.visits):
@@ -1032,7 +1041,16 @@ def enumerate_field(field_name, include_perframe=False, include_releases=True,
     out = {'catalogs': sorted(p for p in glob.glob(os.path.join(base, 'catalogs', '*'))
                               if os.path.isfile(p))}
     if include_perframe:
-        out['perframe'] = sorted(glob.glob(os.path.join(base, 'F*', '*_m[0-9]*_daophot_basic.fits')))
+        # legacy and m3..m7 merge-label-tokened per-frame names
+        # (``..._daophot_basic_lbl<label>.fits``); every file is listed, the
+        # rotation applies to each.  The tokened glob also matches the tokened
+        # residual/model/mergedcat images; keep catalogs only.
+        from jwst_gc_pipeline.photometry.naming import is_perframe_catalog_name
+        out['perframe'] = sorted(set(
+            glob.glob(os.path.join(base, 'F*', '*_m[0-9]*_daophot_basic.fits'))
+            + [p for p in glob.glob(os.path.join(
+                base, 'F*', '*_m[0-9]*_daophot_basic_lbl*.fits'))
+               if is_perframe_catalog_name(p)]))
     if include_releases:
         out['release'] = sorted(glob.glob(os.path.join(release_root, 'v*', '**', field_name,
                                                        'catalogs', '*.fits'), recursive=True))

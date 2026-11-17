@@ -105,6 +105,242 @@ def _iteration_token(iteration_label):
     return f'_{token}'
 
 
+# --- the merge-label token of the m3..m7 per-frame products ---------------
+# ``run_manual_pipeline`` fits a NIRCam frame once per merge label that has it
+# in scope: its own module pass (``nrca`` / ``nrcb``) and the ``merged`` pass.
+# At m3..m7 those fits take LABEL-SCOPED inputs (the label's crossband seed,
+# its smoothed residual background, its satstar overrides/drops), so they are
+# two different measurements.  Per-frame products are named by the DETECTOR,
+# so without a label in the name both fits write one path and whichever
+# finishes last is what every label's finalize reads.  The token below puts
+# the label in the name for exactly those phases.
+#
+# Placement: immediately AFTER ``_daophot_<kind>`` (``..._m7_daophot_basic
+# _lblnrcb.fits``, ``..._daophot_basic_lblnrcb_residual.fits``).  Every reader
+# glob/regex in the tree ends in a literal ``_daophot_basic.fits``,
+# ``_daophot_<kind>_residual.fits`` or ``_daophot_[a-z]+_(residual|model)``,
+# so no in-tree reader written before the token can match a tokened name: a
+# reader that was missed sees only the legacy names (what it saw before),
+# never both spellings of one frame.  That holds for patterns ending in such a
+# literal tail; a looser wildcard (``*_daophot_*.fits``, ``*daophot*basic*``)
+# matches both spellings of a refit frame and needs
+# :func:`choose_perframe_variants`.  A token anywhere BEFORE ``_daophot_`` would be
+# swallowed by the loose ``*_daophot_basic.fits`` / ``*_m[0-9]*_daophot_basic
+# .fits`` globs that several scripts use.
+#
+# m12 (iteration labels m1/m2) keeps the legacy names: its fits take no
+# label-scoped input, and the cross-label resume (#841) relies on one fit
+# serving every label there.
+
+#: Phases whose per-frame products carry the merge-label token.
+LABEL_TOKEN_PHASES = ('m3', 'm4', 'm5', 'm6', 'm7')
+
+#: Literal that opens the token; the label follows with no separator.
+LABEL_TOKEN_PREFIX = '_lbl'
+
+#: A merge label as it may appear in the token (``nrca``, ``nrcb``,
+#: ``merged``, ``mirimage``, ``nis``).  No underscore, so the token ends at the
+#: next ``_`` or ``.``.
+_MERGE_LABEL_RE = re.compile(r'^[a-z0-9]+$')
+
+#: The token where it sits in a per-frame name.  Group 1 is the
+#: ``_daophot_<kind>`` it follows, group 2 the label.
+_LABEL_TOKEN_RE = re.compile(r'(_daophot_[a-z]+)_lbl([a-z0-9]+)(?=[_.])')
+
+#: The end of a per-frame CATALOG name, legacy or tokened.
+_PERFRAME_CATALOG_TAIL_RE = re.compile(
+    r'_daophot_[a-z]+(?:_lbl[a-z0-9]+)?\.fits$')
+
+#: Label priority for MODULE-BLIND readers (astrometry: the stage checkpoint,
+#: the VIRAC2/frame-offset solvers), which need ONE fit of every frame and do
+#: not care which pass produced it.  ``merged`` first: it covers every
+#: detector, so every call of the reader picks the same file for a frame
+#: whichever block calls it.
+MODULE_BLIND_LABEL_ORDER = ('merged', 'nrca', 'nrcb', 'mirimage', 'nis')
+
+
+def label_token_phase(iteration_label):
+    """Do per-frame products of ``iteration_label`` carry the label token?
+
+    ``iteration_label`` as the writers take it: ``'m7'``, ``'_m7'``, or a
+    chunk-suffixed ``'m7_chunk03of08'``.  m12 (``m1``/``m2``) and the legacy
+    ``iterN`` labels do not.
+    """
+    if iteration_label in (None, ''):
+        return False
+    return _strip_chunk(str(iteration_label).lstrip('_')) in LABEL_TOKEN_PHASES
+
+
+def perframe_label_token(iteration_label, merge_label):
+    """The token a per-frame product of ``merge_label``'s pass carries.
+
+    ``'_lbl{merge_label}'`` at m3..m7 (:data:`LABEL_TOKEN_PHASES`), ``''``
+    otherwise and whenever ``merge_label`` is empty (a caller with no merge
+    label -- the legacy single-pass path -- writes the legacy name).
+
+    Raises ``ValueError`` for a label that is not lower-case alphanumeric: the
+    readers find the token's end by the next ``_`` or ``.``, so such a label
+    would write a name no reader can take apart.
+    """
+    if merge_label in (None, '') or not label_token_phase(iteration_label):
+        return ''
+    label = str(merge_label)
+    if not _MERGE_LABEL_RE.match(label):
+        raise ValueError(
+            f"merge label {label!r} cannot go in a per-frame name: it must be "
+            f"lower-case alphanumeric (nrca, nrcb, merged, mirimage, nis)")
+    return f'{LABEL_TOKEN_PREFIX}{label}'
+
+
+def perframe_label_of(path):
+    """The merge label a per-frame name carries, or ``None`` (legacy name)."""
+    m = _LABEL_TOKEN_RE.search(os.path.basename(str(path)))
+    return m.group(2) if m else None
+
+
+def strip_perframe_label(path):
+    """``path`` with its merge-label token removed (unchanged if it has none).
+
+    Turns a tokened name into the legacy spelling of the same frame, which is
+    the key the readers use to keep one spelling per frame.
+    """
+    d, b = os.path.split(str(path))
+    return os.path.join(d, _LABEL_TOKEN_RE.sub(r'\1', b))
+
+
+def is_perframe_catalog_name(path):
+    """Does ``path`` end like a per-frame CATALOG (legacy or tokened)?
+
+    ``..._daophot_<kind>.fits`` or ``..._daophot_<kind>_lbl<label>.fits``.
+    The tokened glob ``*_daophot_<kind>_lbl*.fits`` also matches the tokened
+    ``_residual`` / ``_model`` / ``_mergedcat_*`` images (``*`` spans past the
+    token), so a lister that globs it filters with this.
+    """
+    return bool(_PERFRAME_CATALOG_TAIL_RE.search(os.path.basename(str(path))))
+
+
+def choose_perframe_variants(paths, prefer, *, other_labels=False):
+    """Keep ONE spelling of every frame among labelled and legacy per-frame paths.
+
+    ``paths`` may hold, for the same frame, the legacy name, one or more
+    labelled names, and ``_chunkXXofYY`` pieces of any of them.  The frame is
+    the path with the label token and the chunk token removed.  For each frame
+    the first available of
+
+    1. the labels in ``prefer``, in order;
+    2. any other label, alphabetically -- only with ``other_labels=True``;
+    3. the legacy (untokened) name
+
+    is chosen, and ALL of that spelling's chunk files are returned, nothing of
+    the others.  A per-label reader passes ``prefer=(its label,)`` and leaves
+    ``other_labels`` False, so another pass's fit of a frame is never read; a
+    module-blind reader passes :data:`MODULE_BLIND_LABEL_ORDER` and
+    ``other_labels=True``.
+
+    Returns ``(chosen, counts)``: the chosen paths, sorted, and
+    ``{'frames': n, 'labelled': n, 'legacy': n, 'skipped': n, 'by_label':
+    {label: n}}`` counted in FRAMES.  ``skipped`` counts frames that had only
+    another label's files and ``other_labels`` was False.
+    """
+    prefer = tuple(prefer or ())
+    frames = {}
+    for p in paths:
+        key = _CHUNK_TOKEN_RE.sub('', strip_perframe_label(p))
+        label = perframe_label_of(p)
+        frames.setdefault(key, {}).setdefault(label, []).append(p)
+    chosen = []
+    counts = {'frames': len(frames), 'labelled': 0, 'legacy': 0,
+              'skipped': 0, 'by_label': {}}
+    for key in sorted(frames):
+        variants = frames[key]
+        order = [lab for lab in prefer if lab in variants]
+        if other_labels:
+            order += sorted(lab for lab in variants
+                            if lab is not None and lab not in prefer)
+        if None in variants:
+            order.append(None)
+        if not order:
+            counts['skipped'] += 1
+            continue
+        pick = order[0]
+        chosen.extend(variants[pick])
+        if pick is None:
+            counts['legacy'] += 1
+        else:
+            counts['labelled'] += 1
+            counts['by_label'][pick] = counts['by_label'].get(pick, 0) + 1
+    return sorted(chosen), counts
+
+
+def glob_perframe_catalogs(pattern, prefer=MODULE_BLIND_LABEL_ORDER, *,
+                           other_labels=True):
+    """Glob per-frame catalogs by their LEGACY pattern and keep one per frame.
+
+    ``pattern`` is a glob ending in ``_daophot_<kind>.fits`` -- the shape every
+    script has always used.  The merge-label-tokened spelling of the same
+    pattern (``..._daophot_<kind>_lbl*.fits``) is globbed as well and
+    :func:`choose_perframe_variants` keeps one spelling per frame.  The
+    defaults suit a MODULE-BLIND reader (an astrometry measurement that needs
+    one fit of every frame); a per-label reader passes ``prefer=(label,)``
+    and ``other_labels=False``.
+
+    Returns ``(paths, counts)`` as :func:`choose_perframe_variants` does.
+    """
+    import glob as _glob
+    pattern = str(pattern)
+    if not re.search(r'_daophot_[a-z]+\.fits$', pattern):
+        raise ValueError(
+            f"glob_perframe_catalogs needs a pattern ending in "
+            f"'_daophot_<kind>.fits', got {pattern!r}")
+    labelled = pattern[:-len('.fits')] + f'{LABEL_TOKEN_PREFIX}*.fits'
+    found = set(_glob.glob(pattern)) | set(_glob.glob(labelled))
+    # ``*`` in the labelled glob can span more than the token (``_lblnrcb
+    # _residual``); keep only catalogs, legacy or with the token last.
+    found = {p for p in found if is_perframe_catalog_name(p)}
+    return choose_perframe_variants(sorted(found), prefer,
+                                    other_labels=other_labels)
+
+
+def perframe_provenance_meta(merge_label, seed_catalog, resbg_path):
+    """Header keys naming the pass and the label-scoped inputs of one fit.
+
+    ``MERGELBL`` the merge label whose pass wrote the file, ``SEEDCAT`` the
+    basename of the previous-phase seed catalog, ``RESBG`` the basename of the
+    smoothed residual background subtracted before the fit; ``'none'`` where
+    the fit had none.  Basenames, not paths: the directory is the field's and
+    says nothing about which pass ran.  A basename longer than a FITS card
+    holds is written with the long-string (CONTINUE) convention, as the
+    existing ``FILENAME`` key already is.  The two file keys carry no card
+    comment: a 40-68 character basename plus a comment overflows one card and
+    astropy warns, once per frame, that it truncated the comment.
+    """
+    def _bn(p):
+        return os.path.basename(str(p)) if p not in (None, '') else 'none'
+    return {
+        'MERGELBL': (str(merge_label) if merge_label not in (None, '')
+                     else 'none', 'merge label of the fitting pass'),
+        'SEEDCAT': _bn(seed_catalog),
+        'RESBG': _bn(resbg_path),
+    }
+
+
+def perframe_variant_summary(counts, what, label):
+    """One log line saying how many frames fell back to the legacy name."""
+    by = ', '.join(f'{k}={v}' for k, v in sorted(counts['by_label'].items()))
+    line = (f"{what}: {counts['frames']} frame(s); {counts['labelled']} read "
+            f"from merge-label-tokened names ({by or 'none'}), "
+            f"{counts['legacy']} from the LEGACY untokened name")
+    if counts['legacy']:
+        line += (f" (written before the per-frame names carried the merge "
+                 f"label; such a file may hold another label's fit of the "
+                 f"frame -- refit this phase for label {label!r} to replace "
+                 f"it)")
+    if counts['skipped']:
+        line += (f"; {counts['skipped']} frame(s) carry only another label's "
+                 f"fit and are NOT read for {label!r}")
+    return line
+
+
 def _bgsub_token_from_flags(bgsub, resbgsub=False):
     """Filename token for the background-subtraction mode(s) in effect.
 

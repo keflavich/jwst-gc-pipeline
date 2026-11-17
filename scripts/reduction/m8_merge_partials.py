@@ -94,6 +94,24 @@ def _default_m7(catdir, module, obs=None):
     return plain
 
 
+def _annotate_cmd_default(paths):
+    """``oksep_pass`` / ``cmd_default`` on each table (#1283); skipped with ``M8_CMD_DEFAULT=0``.
+
+    A failure is reported and leaves that table as it was (the rewrite is
+    atomic), so it cannot stop the dedup step that precedes it in ``main``.
+    """
+    if os.environ.get('M8_CMD_DEFAULT', '1') == '0':
+        return
+    from astropy.io.registry import IORegistryError
+    from jwst_gc_pipeline.photometry.cmd_default import annotate_cmd_default
+    for path in paths:
+        try:
+            annotate_cmd_default(path)
+        except (OSError, KeyError, ValueError, IndexError, TypeError,
+                IORegistryError) as exc:
+            print(f"cmd_default flag FAILED ({path}): {exc}", file=sys.stderr)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -123,9 +141,33 @@ def main(argv=None):
                          'M8_SPIKE_FLAG=0 also disables')
     ap.add_argument('--link-radius-arcsec', type=float, default=0.10,
                     help='dedup link radius (arcsec, default 0.10)')
+    ap.add_argument('--dedup-winner-emag-ratio', type=float, default=None,
+                    metavar='RATIO',
+                    help='winner hysteresis for the dedup (#1278), the same '
+                         'option as cataloging --m8-dedup-winner-emag-ratio: '
+                         'a merged row keeps its primary row\'s own band '
+                         'measurement unless the other member\'s emag_ab is '
+                         'below RATIO times the primary\'s (e.g. 0.8).  '
+                         'Default: off.  Pass the value the cataloging run '
+                         'used so the two paths give the same table')
+    ap.add_argument('--dedup-band-resolve-mas', default=None, metavar='MAS',
+                    help='resolved-in-band guard for the dedup (#1278), the '
+                         'same option as cataloging --m8-dedup-band-resolve-mas:'
+                         ' a number (all bands) or BAND=MAS,... (e.g. '
+                         'f212n=60).  Default: off')
     ap.add_argument('--execute', action='store_true',
                     help='actually write the combined m8 (default: dry-run report)')
     args = ap.parse_args(argv)
+
+    from jwst_gc_pipeline.photometry.dedup_catalog import (
+        check_winner_emag_ratio, parse_band_resolve_mas)
+    try:
+        args.dedup_winner_emag_ratio = check_winner_emag_ratio(
+            args.dedup_winner_emag_ratio)
+        args.dedup_band_resolve_mas = parse_band_resolve_mas(
+            args.dedup_band_resolve_mas)
+    except ValueError as err:
+        ap.error(f'--dedup-*: {err}')
 
     if args.m7 is None:
         if not args.catdir:
@@ -194,7 +236,9 @@ def main(argv=None):
         from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
         dedup_path = out_path.replace('_m8.fits', '_m8_dedup.fits')
         dedup_merged_catalog(out_path, dedup_path,
-                             link_radius=args.link_radius_arcsec * u.arcsec)
+                             link_radius=args.link_radius_arcsec * u.arcsec,
+                             winner_emag_ratio=args.dedup_winner_emag_ratio,
+                             band_resolve_mas=args.dedup_band_resolve_mas)
         print(f"WROTE {dedup_path}  (de-duplicated; science-final)")
         if args.spike_flag and os.environ.get('M8_SPIKE_FLAG', '1') != '0':
             # Same flag columns cataloging._maybe_dedup_m8 adds (#1035).  The
@@ -203,6 +247,11 @@ def main(argv=None):
             from jwst_gc_pipeline.photometry.spike_flag import flag_m8_spike_artifacts
             basepath = os.path.dirname(os.path.dirname(os.path.abspath(dedup_path)))
             flag_m8_spike_artifacts(dedup_path, basepath)
+        # Default CMD selection as columns (#1283), after the spike flag, on
+        # the finished dedup table and the merged m8, as _maybe_dedup_m8 does.
+        _annotate_cmd_default([out_path, dedup_path])
+    else:
+        _annotate_cmd_default([out_path])
 
 
 if __name__ == '__main__':

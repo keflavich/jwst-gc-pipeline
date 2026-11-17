@@ -242,3 +242,51 @@ def test_get_psf_model_wiring(tmp_path, monkeypatch, instrument):
     monkeypatch.setenv(eh.EPSF_CORE_DIR_ENV, str(tmp_path))
     grid, _ = ccl.get_psf_model('F480M', '10678', '081', **kw)
     assert grid is not st and grid.meta['epsf_core'].endswith('epsf_core_nrcb5_f480m.fits')
+
+
+def test_windowed_core_evaluation_equals_the_full_stamp(monkeypatch):
+    """hybrid_stamp evaluates the core only in a box around the star (the core
+    is zero beyond its radius and the hybrid weights it by zero beyond R1); the
+    stamp must equal the one built from the core on every node (#1208)."""
+    st = _stpsf_grid()
+    core = _core(phase_ripple=0.01)
+    sampled = []
+    real_sample = core.sample
+
+    def spy(x, y, ux, uy):
+        sampled.append(np.size(ux))
+        return real_sample(x, y, ux, uy)
+    monkeypatch.setattr(core, 'sample', spy)
+    D = eh._stpsf_data_at(st, 700.0, 1100.0)
+    origin = (D.shape[1] - 1) / 2.0, (D.shape[0] - 1) / 2.0
+    win, sh_w = eh.hybrid_stamp(D, origin, OS, core, 700.0, 1100.0)
+    assert max(sampled) < 0.5 * D.size       # the box, not the stamp
+
+    def full(core_, x, y, ux, uy, dx, dy):
+        UX, UY = np.meshgrid(ux, uy)
+        return real_sample(x, y, UX - dx, UY - dy)
+    monkeypatch.setattr(eh, '_core_on_stamp', full)
+    ref, sh_r = eh.hybrid_stamp(D, origin, OS, core, 700.0, 1100.0)
+    assert np.array_equal(win, ref)
+    assert sh_w == sh_r
+
+
+@pytest.mark.parametrize('dx, dy', [(0.0, 0.0), (1.3, -1.1), (-1.3, -1.1), (-2.4, 1.7), (3.3, -2.1)])
+@pytest.mark.parametrize('oversampling', [2, (2, 3)])
+def test_core_box_covers_the_support_of_a_shifted_core(dx, dy, oversampling):
+    """``_core_on_stamp`` must equal ``core.sample`` on every node of the stamp
+    when the core is shifted by more than 1 px and is non-zero at its own edge
+    (a broad core), so the box's shift term and sign are pinned.  Through
+    ``hybrid_stamp`` alone the shift term is invisible: the blend weight is zero
+    beyond R1 = the core radius, so a box of half-width R1 is always enough
+    there (#1208)."""
+    core = _core(sigma=9.0)            # still ~0.4 of its peak at the radius
+    oy, ox = np.broadcast_to(np.asarray(oversampling, dtype=float), (2,))
+    nx, ny = 131, 133
+    ux = (np.arange(nx) - (nx - 1) / 2.0) / ox
+    uy = (np.arange(ny) - (ny - 1) / 2.0) / oy
+    UX, UY = np.meshgrid(ux, uy)
+    x, y = 700.0, 1100.0
+    full = core.sample(x, y, UX - dx, UY - dy)
+    assert full[np.hypot(UX - dx, UY - dy) > core.radius - 1].max() > 0   # non-zero at the edge
+    assert np.array_equal(eh._core_on_stamp(core, x, y, ux, uy, dx, dy), full)

@@ -90,7 +90,9 @@ def test_many_core_blend_old_limits_collapse(monkeypatch):
     r_sat = np.sqrt(sat.sum() / np.pi)
     orig = sd._fof_merge
     monkeypatch.setattr(sd, '_fof_merge',
-                        lambda centers, link, **kw: orig(centers, link=max(link, 0.6 * r_sat)))
+                        lambda centers, link, **kw: orig(
+                            centers, link=max(link, 0.6 * r_sat),
+                            return_radii=kw.get('return_radii', False)))
     centers, _ = _deblend(zf, sat, area_per_peak=None)
     assert len(centers) <= 2, centers
 
@@ -185,7 +187,8 @@ def test_two_stars_beside_a_large_core_merge_with_one_link(monkeypatch):
     monkeypatch.setattr(
         sd, '_fof_merge',
         lambda centers, link, radii=None, **kw: orig(
-            centers, link=max([link] + [0.6 * r for r in (radii or [])])))
+            centers, link=max([link] + [0.6 * r for r in (radii or [])]),
+            return_radii=kw.get('return_radii', False)))
     centers, _ = _deblend(zf, sat)
     assert len(_matched(centers, pair)) == 0, centers
     assert len(_matched(centers, [(62, 45)])) == 1, centers
