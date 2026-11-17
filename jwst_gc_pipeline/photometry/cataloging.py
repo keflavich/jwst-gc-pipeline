@@ -45,7 +45,10 @@ from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
     MULTIOBS_PROPOSALS, merged_catalog_obs_token, merged_catalog_module_token,
     vetted_obs_tokens,
-    residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
+    residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed,
+    perframe_label_token, label_token_phase, perframe_provenance_meta,
+    choose_perframe_variants, perframe_variant_summary,
+    MODULE_BLIND_LABEL_ORDER, LABEL_TOKEN_PREFIX)
 from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import (
@@ -5144,34 +5147,53 @@ def _resid_nan_satstar_applies(iteration_label):
     return iteration_label in _resid_nan_satstar_passes()
 
 
-def _perframe_product_stub(ctx, iter_):
+def _perframe_product_stub(ctx, iter_, label_=''):
     """Path stem of a manual pass's per-frame residual and model images
     (``{stub}_residual.fits``, ``{stub}_model.fits``); ``iter_`` is the
-    iteration token.  The PSF token is ``ctx.epsf_``, so a reader that builds
-    ``ctx`` the way the writer did finds the writer's files."""
+    iteration token and ``label_`` the merge-label token
+    (``naming.perframe_label_token``; ``''`` is the legacy name).  The PSF
+    token is ``ctx.epsf_``, so a reader that builds ``ctx`` the way the writer
+    did finds the writer's files."""
     return (f'{ctx.out_basepath}/{ctx.filtername}/pipeline/'
             f'{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
-            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic{label_}')
 
 
-def _final_phase_frame_products(ctx, frame_kwargs):
+def _final_phase_frame_products(ctx, frame_kwargs, merge_label=None):
     """``(model path, catalogue path)`` of the final real phase's products for
     the frame ``ctx`` prepares, for the m8 forced fill's neighbour subtraction.
 
     The phase is the frame kwargs' ``satstar_label`` (the phase whose satstar
     products the fill subtracts).  The model is the star-only image of
     ``_save_manual_pass``; the catalogue is the unvetted per-frame table that
-    ``save_photutils_results`` wrote, with the same tokens."""
-    iter_ = _iteration_token(frame_kwargs['satstar_label'])
+    ``save_photutils_results`` wrote, with the same tokens.
+
+    ``merge_label`` is the label of the mosaic being filled.  The pair that
+    label's pass wrote (``naming.perframe_label_token``) is returned when its
+    model exists, else the legacy (untokened) pair, which a run from before
+    the label token wrote.  Another label's fit of the frame is never read:
+    the per-label readers' rule (``naming.choose_perframe_variants``)."""
+    phase = frame_kwargs['satstar_label']
+    iter_ = _iteration_token(phase)
     options = frame_kwargs['options']
     obs_ = _L._obs_token_from_options(options)
-    catalog = (f'{ctx.out_basepath}/{ctx.filtername}/'
-               f'{ctx.filtername.lower()}_{ctx.module}{obs_}{ctx.visitid_}'
-               f'{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
-               f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic.fits')
-    return f'{_perframe_product_stub(ctx, iter_)}_model.fits', catalog
+
+    def _pair(label_):
+        catalog = (f'{ctx.out_basepath}/{ctx.filtername}/'
+                   f'{ctx.filtername.lower()}_{ctx.module}{obs_}{ctx.visitid_}'
+                   f'{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+                   f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic'
+                   f'{label_}.fits')
+        return f'{_perframe_product_stub(ctx, iter_, label_)}_model.fits', catalog
+
+    label_ = perframe_label_token(phase, merge_label)
+    if label_:
+        own = _pair(label_)
+        if os.path.exists(own[0]):
+            return own
+    return _pair('')
 
 
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
@@ -5180,9 +5202,18 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     residual is built against the pristine (pre-bg-subtraction) data minus the
     satstar model minus the source model, so the smoothed-bg / mergedcat steps
     see star-subtracted residuals with the extended background retained.
+
+    At m3..m7 all three names carry the pass's merge label
+    (``naming.perframe_label_token``, ``ctx.prov_merge_label``): the module
+    pass and the ``merged`` pass fit the same frame on label-scoped inputs, and
+    a detector-only name let the later one overwrite the earlier.  The catalog
+    header records the label and the label-scoped inputs (MERGELBL, SEEDCAT,
+    RESBG) at every phase.
     """
     iter_ = _iteration_token(iteration_label)
     bp = ctx.out_basepath
+    merge_label = getattr(ctx, 'prov_merge_label', None)
+    label_ = perframe_label_token(iteration_label, merge_label)
 
     # Model-subtracted footprint background (Jay Anderson 3x3 convention).  Built from
     # the SAME residual that is written below -- pristine data minus the satstar
@@ -5200,6 +5231,12 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     # by default, so its trees can hold catalogs from both regimes
     result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
                                'unaccepted SATURATED comps handed to daophot')
+    # provenance: which pass wrote this file and on which label-scoped inputs.
+    # Before these keys a surviving file could not say which of two fits it
+    # was (the m3..m7 cross-label overwrite).
+    result.meta.update(perframe_provenance_meta(
+        merge_label, getattr(ctx, 'prov_seed_catalog', None),
+        getattr(ctx, 'prov_resbg_path', None)))
     # --truly-lost-saturation-in-fit (#567) changes the fitted pixels under the
     # SAME per-frame product names, so the header is where the A and B arms of
     # the #418 comparison are told apart
@@ -5213,7 +5250,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
         exposure_=ctx.exposure_, visitid_=ctx.visitid_, vgroupid_=ctx.vgroupid_,
         basic_or_iterative='basic', options=options, epsf_=ctx.epsf_,
         group=ctx.group, psf=None, background_map=ctx.background_map,
-        iteration_label=iteration_label)
+        iteration_label=iteration_label, merge_label=merge_label)
 
     residual = _residual_for_bkg
     # [default OFF] report the accepted-satstar saturated footprint as not
@@ -5231,7 +5268,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
             print(f"[{iteration_label}] residual: {int(_nanm.sum())} DQ-SATURATED px "
                   f"under accepted satstar models set to NaN (not measured)",
                   flush=True)
-    stub = _perframe_product_stub(ctx, iter_)
+    stub = _perframe_product_stub(ctx, iter_, label_)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_residual.fits', residual)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_model.fits', modsky)
     return saved
@@ -5243,9 +5280,13 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                               bg_boxsizes=None, use_webbpsf=False, pupil='clear',
                               prev_seed_catalog=None, resbg_path=None,
                               satstar_flux_overrides=None,
-                              satstar_flux_drops=None,
+                              satstar_flux_drops=None, merge_label=None,
                               xepoch_seed_catalog=None):
     """Clean per-frame driver for the manual-iteration path.
+
+    ``merge_label``: the merge label (``--modules`` entry) whose pass this fit
+    belongs to.  It names the m3..m7 per-frame products and is recorded in the
+    catalog header (``_save_manual_pass``).  ``None`` writes legacy names.
 
     ``xepoch_seed_catalog`` (m7 only; path from
     :func:`xepoch_seed_catalog_path`) adds another epoch's vetted merged
@@ -5308,6 +5349,10 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         resbg_path=resbg_path, satstar_label=manual_phase,
         satstar_flux_overrides=satstar_flux_overrides,
         satstar_flux_drops=satstar_flux_drops)
+    # what _save_manual_pass names and stamps the products with
+    ctx.prov_merge_label = merge_label
+    ctx.prov_seed_catalog = prev_seed_catalog
+    ctx.prov_resbg_path = resbg_path
 
     # MIRI-only: enable the dpk<=0 overshoot blind-spot guard (group-fit
     # degeneracy near bright/saturated neighbours).  NIRCam unaffected.
@@ -7300,6 +7345,7 @@ def _run_one_frame_manual(args):
                 resbg_path=args['resbg_path'],
                 satstar_flux_overrides=args.get('satstar_flux_overrides'),
                 satstar_flux_drops=args.get('satstar_flux_drops'),
+                merge_label=args.get('merge_label'),
                 xepoch_seed_catalog=args.get('xepoch_seed_catalog'))
             return (filename, True, None)
         except _L.CutoutNoOverlap as ex:
@@ -9126,6 +9172,11 @@ def _perframe_catalog_re(merge_label, psf_token=None):
     the hybrid token from the environment, which is what the writer does.
     Only THIS run's PSF token is accepted: an ``_hybpsf`` catalog and a plain
     one of the same exposure are two measurements, like the grouped fit.
+
+    The m3..m7 merge-label token (``_daophot_basic_lbl{label}``,
+    ``naming.perframe_label_token``) is accepted for ANY label: the callers
+    either ask which detectors were fitted (``perframe_families_on_disk``) or
+    pick one spelling per frame themselves (``choose_perframe_variants``).
     """
     if psf_token is None:
         psf_token = hybrid_psf_token()
@@ -9134,7 +9185,21 @@ def _perframe_catalog_re(merge_label, psf_token=None):
     return re.compile(
         r'_exp\d{5}_(?:' + seg + r')?' + re.escape(psf_)
         + re.escape(str(merge_label))
-        + r'(?:_chunk\d+of\d+)?_daophot_basic\.fits$')
+        + r'(?:_chunk\d+of\d+)?_daophot_basic'
+        + r'(?:' + re.escape(LABEL_TOKEN_PREFIX) + r'[a-z0-9]+)?\.fits$')
+
+
+def _perframe_catalog_globs(base, merge_label):
+    """Globs for one stage's per-frame catalogs under ``base``
+    (``{dir}/{filt}_*visit*_vgroup*_exp*``): legacy and merge-label-tokened
+    names, unchunked and chunked.  The caller filters with
+    :func:`_perframe_catalog_re` and picks one spelling per frame."""
+    out = []
+    for chunk in ('', '_chunk*of*'):
+        for tail in ('', f'{LABEL_TOKEN_PREFIX}*'):
+            out.extend(glob.glob(
+                f"{base}_{merge_label}{chunk}_daophot_basic{tail}.fits"))
+    return sorted(set(out))
 
 
 class FinalizeModuleCoverageError(RuntimeError):
@@ -9236,9 +9301,8 @@ def perframe_families_on_disk(cut_bp, filt, merge_label, obs_token='',
     """
     want_obs = str(obs_token or '').lstrip('_')
     base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
-    fns = sorted(set(
-        glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
-        + glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
+    # any merge label's file says the detector was fitted
+    fns = _perframe_catalog_globs(base, merge_label)
     accept = _perframe_catalog_re(merge_label, psf_token)
     found = {}
     for fn in fns:
@@ -10259,9 +10323,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     _perframe_token = _perframe_obs_token(getattr(options, 'proposal_id', None),
                                           getattr(options, 'field', None))
     base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
-    fns = sorted(set(
-        glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
-        + glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
+    fns = _perframe_catalog_globs(base, merge_label)
     accept = _perframe_catalog_re(
         merge_label,
         ("_epsf" if getattr(options, "epsf", False) else "")
@@ -10272,6 +10334,18 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: ignoring "
               f"{len(rejected)} non-canonical per-frame catalog(s) (e.g. "
               f"{os.path.basename(rejected[0])})", flush=True)
+    # m3..m7: a frame can carry one catalog per merge label (the module pass
+    # and the merged pass) plus a legacy untokened one.  The measurement is
+    # MODULE-BLIND and needs one fit per frame, so keep exactly one, in a
+    # fixed label order that does not depend on which block calls -- every
+    # block then measures the same files and the frozen-stage reuse below
+    # still applies.
+    fns, _variant_counts = choose_perframe_variants(
+        fns, prefer=MODULE_BLIND_LABEL_ORDER, other_labels=True)
+    if _variant_counts['labelled']:
+        print(perframe_variant_summary(
+            _variant_counts, f"astrom checkpoint [{merge_label}] {filt}/{module}",
+            'any (module-blind)'), flush=True)
     fns = _drop_foreign_obs_duplicates(fns, _perframe_token, filt, merge_label,
                                        module, getattr(options, 'target', None),
                                        target_obs=_resolved_obsid(options))
@@ -10908,6 +10982,90 @@ def perframe_cross_label_ok(prev_seed, resbg_path,
     """
     return all(q is None for q in (prev_seed, resbg_path,
                                    satstar_flux_overrides, satstar_flux_drops))
+
+
+def _predicted_perframe_catalog(cut_bp, frame_arg, opts_phase, iteration_label,
+                                merge_label):
+    """The per-frame catalog path ``frame_arg``'s fit writes (manual path)."""
+    return _L._predict_tblfilename(
+        cut_bp, frame_arg['filtername'], frame_arg['module'], opts_phase,
+        frame_arg['visit_id'], frame_arg['vgroup_id'],
+        frame_arg['exposurenumber'], iteration_label=iteration_label,
+        method='daophot', basic_or_iterative='basic', merge_label=merge_label)
+
+
+def _refit_markers_without_labelled_product(todo, resumed_ok, frame_args,
+                                            cut_bp, opts_phase,
+                                            iteration_label, label, filt):
+    """Send back to ``todo`` every resumed m3..m7 frame whose labelled
+    catalog is not on disk.
+
+    A completion marker written before the per-frame names carried the merge
+    label is a receipt for a LEGACY-named product -- possibly overwritten since
+    by another label's pass.  Resuming on it would make this label's merge
+    fall back to that file.  Refitting costs one fit; the fallback would merge
+    another pass's measurement under this label.  m12 has no token and is
+    returned unchanged.
+    """
+    if not label_token_phase(iteration_label) or not resumed_ok:
+        return todo, resumed_ok
+    by_fn = {a['filename']: a for a in frame_args}
+    missing = [fn for fn in resumed_ok if fn in by_fn and not os.path.exists(
+        _predicted_perframe_catalog(cut_bp, by_fn[fn], opts_phase,
+                                    iteration_label, label))]
+    if not missing:
+        return todo, resumed_ok
+    gone = set(missing)
+    print(f"manual [{iteration_label}] {filt}/{label}: skip-if-done REFITTING "
+          f"{len(missing)} frame(s) whose completion marker has no "
+          f"merge-label-tokened catalog ({LABEL_TOKEN_PREFIX}{label}) on disk -- "
+          f"fitted before the per-frame names carried the label", flush=True)
+    return (list(todo) + [by_fn[fn] for fn in missing],
+            [fn for fn in resumed_ok if fn not in gone])
+
+
+class PerframeLabelCollisionError(RuntimeError):
+    """Two merge labels would write the same m3..m7 per-frame product."""
+
+
+def claim_perframe_outputs(owners, iteration_label, label, filt, paths):
+    """Record that ``label``'s pass writes ``paths``; refuse a cross-label clash.
+
+    ``owners`` is one dict per PHASE (output path -> label), shared by every
+    label of that phase.  At m3..m7 (``naming.label_token_phase``) a path that
+    another label already claimed raises :class:`PerframeLabelCollisionError`
+    before anything is fitted: the two passes fit that frame on different
+    label-scoped inputs, so one write would silently replace the other -- the
+    defect the merge-label token fixes, and the one this guard keeps fixed if a
+    name ever loses the token again.  At m12 the labels share names by design
+    (one fit serves every label, #841), so nothing is checked or recorded.
+
+    The within-label guard in ``run_manual_pipeline`` (two FRAMES onto one
+    name) is separate; this one compares LABELS.  It sees only the labels this
+    process runs: a fan-out shard runs every ``--modules`` label in turn, so a
+    whole-field run is covered, but labels split across separate jobs are not.
+    """
+    if not label_token_phase(iteration_label):
+        return
+    clash = []
+    for p in paths:
+        prev = owners.get(p)
+        if prev is not None and prev != label:
+            clash.append((p, prev))
+    if clash:
+        detail = '\n'.join(f"    {os.path.basename(p)}  (already {prev}'s)"
+                           for p, prev in clash[:20])
+        raise PerframeLabelCollisionError(
+            f"manual [{iteration_label}] {filt}/{label}: {len(clash)} per-frame "
+            f"output path(s) are also written by another merge label's pass in "
+            f"this phase.  The passes fit on different label-scoped inputs (seed, "
+            f"residual background, satstar overrides), so the later write would "
+            f"replace the earlier one and each label's merge would read "
+            f"whichever finished last.  The per-frame name must carry the merge "
+            f"label (naming.perframe_label_token).  Aborting before any fit:\n"
+            + detail + ('\n    ...' if len(clash) > 20 else ''))
+    for p in paths:
+        owners[p] = label
 
 
 def perframe_marker_path(marker_dir, filename, detector, filt, phase,
@@ -11667,7 +11825,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
                 bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
                 nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
-                frame_products=_final_phase_frame_products,
+                frame_products=functools.partial(
+                    _final_phase_frame_products, merge_label=module),
                 nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
             # Partial fill writes one band only -> dedup waits for the merge
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
@@ -11748,6 +11907,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         # background map.  Background subtraction in the fit begins at iter5 (m5).
         resbgsub = phase in ('m5', 'm6', 'm7')
         merge_label = 'm2' if phase == 'm12' else phase
+        # output path -> merge label, for every label of this phase
+        # (claim_perframe_outputs: the cross-label collision guard)
+        _phase_output_owner = {}
         opts_phase = copy.copy(options)
         opts_phase.iteration_label = merge_label
         opts_phase.seed_catalog = ''
@@ -12060,6 +12222,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         'resbg_path': resbg_path,
                         'satstar_flux_overrides': satstar_overrides.get((module, filt)),
                         'satstar_flux_drops': satstar_drops.get((module, filt)),
+                        # the pass's label: names the m3..m7 per-frame
+                        # products (naming.perframe_label_token)
+                        'merge_label': module,
                         'xepoch_seed_catalog': xepoch_seed,
                     })
 
@@ -12080,6 +12245,14 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         f"COLLISION -- {len(_collisions)} (visit,vgroup,exp,detector) "
                         f"keys map to >1 input frame; outputs would silently "
                         f"overwrite each other.  Aborting:\n{_msg}")
+                # ...and across LABELS: the module pass and the merged pass of
+                # one frame must not write one path at m3..m7.  Checked on the
+                # full (pre-shard) frame list, before any fit.
+                claim_perframe_outputs(
+                    _phase_output_owner, merge_label, module, filt,
+                    [_predicted_perframe_catalog(cut_bp, a, opts_phase,
+                                                 merge_label, module)
+                     for a in frame_args])
 
                 max_workers = max(1, int(getattr(options, 'parallel_workers', 1) or 1))
                 _is_cutout = bool(getattr(options, 'cutout_region', ''))
@@ -12174,6 +12347,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             frame_args, _marker_dir, filt, phase, module,
                             seed_inputs=_seed_inputs,
                             cross_label=_cross_label)
+                        if _resume:
+                            _todo, _ok = _refit_markers_without_labelled_product(
+                                _todo, _ok, frame_args, cut_bp, opts_phase,
+                                merge_label, module, filt)
                         if _resume and not _cross_label:
                             print(f"manual [{phase}] {filt}/{module}: cross-label "
                                   f"resume OFF -- this phase's fit takes "
@@ -13003,7 +13180,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
                         bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
                         nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
-                        frame_products=_final_phase_frame_products,
+                        frame_products=functools.partial(
+                            _final_phase_frame_products, merge_label=module),
                         nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
                     _stamp_catalog_provenance(

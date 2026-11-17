@@ -74,7 +74,7 @@ fails CI if a new file pairs a NN match with a median/mean — do not write ad-h
 | `*_destreak*.fits` / `*_align.fits` (per-exposure working copy) | **Yes — GWCS** | `fix_alignment()` → `jwst.tweakreg.utils.adjust_wcs` | **Yes** (`RAOFFSET` header guard) |
 | `*_crf.fits` (CR-flagged per-exposure, from Image3) | inherits the corrected GWCS | (produced by Image3 from the corrected input) | n/a |
 | `*_i2d.fits` (resampled mosaic — **final image deliverable**) | inherits | resample of the corrected exposures | (pristine) |
-| per-frame catalogs (`*_daophot_basic.fits`) | use the corrected crf GWCS | (read crf GWCS) | n/a |
+| per-frame catalogs (`*_daophot_basic.fits`; m3..m7 `*_daophot_basic_lbl<label>.fits`) | use the corrected crf GWCS | (read crf GWCS) | n/a |
 | merged catalog | **Yes — table-space** | `shift_individual_catalog()`: `final = centroid − RAOFFSET_meta + dra_table` | re-derivable from any offsets table |
 | merged catalog, m3+ merges (opt-in, `ASTROM_MERGE_M2_REGISTRATION=1`) | **Yes — catalog-only relative registration** | `m2_registration.py::apply_m2_registration`: each per-frame catalog + its m2-recorded vs-consensus offset (sub-floor, certified, baked offset unchanged since m2) | re-derivable from the m2 record; frame unchanged (median ~0) |
 

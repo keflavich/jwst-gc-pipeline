@@ -82,7 +82,8 @@ __all__ = [
     'BULK_VISITS_MIXED', 'BULK_VISITS_DISAGREE',
     'reference_frame_matches_refcat',
     'exposure_key', 'duplicate_exposure_catalogs', 'refcat_for_frame',
-    'default_catalog_glob', 'default_frame_glob', 'REFCAT_PATTERNS',
+    'default_catalog_glob', 'default_catalog_paths', 'default_frame_glob',
+    'REFCAT_PATTERNS',
     'applied_bulk_mas', 'verify_tolerance_mas',
 ]
 
@@ -615,6 +616,27 @@ def default_catalog_glob(basepath, filtername, mtag='_m1'):
     filt = str(filtername).upper()
     return (f'{basepath}/{filt}/{filt.lower()}_*_visit*_vgroup*_exp?????'
             f'{mtag}_daophot_basic.fits')
+
+
+def default_catalog_paths(basepath, filtername, mtag='_m1'):
+    """The per-frame catalogs step 0 reads by default, ONE per frame.
+
+    :func:`default_catalog_glob` plus the m3..m7 merge-label-tokened spelling
+    of the same frames (``..._daophot_basic_lbl<label>.fits``,
+    ``naming.perframe_label_token``).  A frame fitted by both the module pass
+    and the ``merged`` pass has two tokened catalogs, and one written before
+    the token may also have a legacy one; the tie is module-blind, so
+    ``naming.MODULE_BLIND_LABEL_ORDER`` picks one, then the legacy name.
+    Without that choice :func:`duplicate_exposure_catalogs` would refuse the
+    set.  ``_m1``/``_m2`` never carry the token, so their result is the glob's.
+
+    Returns ``(paths, counts)`` (``naming.choose_perframe_variants``).
+    """
+    from ..photometry.naming import (
+        MODULE_BLIND_LABEL_ORDER, glob_perframe_catalogs)
+    return glob_perframe_catalogs(
+        default_catalog_glob(basepath, filtername, mtag),
+        MODULE_BLIND_LABEL_ORDER, other_labels=True)
 
 
 def applied_bulk_mas(frame_paths, dec_deg):
