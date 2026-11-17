@@ -16,13 +16,22 @@ from jwst_gc_pipeline.photometry import spike_flag
 
 
 @pytest.fixture
-def m8(tmp_path, monkeypatch):
+def dedup_kw():
+    """Keyword arguments of each ``dedup_merged_catalog`` call."""
+    return []
+
+
+@pytest.fixture
+def m8(tmp_path, monkeypatch, dedup_kw):
     cat = tmp_path / 'catalogs'
     cat.mkdir()
     path = cat / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8.fits'
     path.write_bytes(b'm8')
 
-    def fake_dedup(src, dst, **kw):
+    # strict signature: a keyword the hook stops passing, or a new one, fails
+    def fake_dedup(src, dst, *, winner_emag_ratio, band_resolve_mas):
+        dedup_kw.append({'winner_emag_ratio': winner_emag_ratio,
+                         'band_resolve_mas': band_resolve_mas})
         with open(dst, 'wb') as fh:
             fh.write(b'dedup')
     monkeypatch.setattr(dedup_catalog, 'dedup_merged_catalog', fake_dedup)
@@ -40,6 +49,25 @@ def test_flag_runs_by_default(m8):
     out = cataloging._maybe_dedup_m8(path, SimpleNamespace(), label='t')
     assert out.endswith('_m8_dedup.fits') and os.path.exists(out)
     assert calls == [(out, os.path.dirname(os.path.dirname(path)))]
+
+
+def test_dedup_gets_no_guards_by_default(m8, dedup_kw):
+    path, _ = m8
+    cataloging._maybe_dedup_m8(path, SimpleNamespace(), label='t')
+    assert dedup_kw == [{'winner_emag_ratio': None, 'band_resolve_mas': None}]
+
+
+def test_dedup_options_reach_the_dedup(m8, dedup_kw):
+    path, _ = m8
+    opts = SimpleNamespace(m8_dedup_winner_emag_ratio=0.8,
+                           m8_dedup_band_resolve_mas='f212n=60,f200w=50')
+    cataloging._maybe_dedup_m8(path, opts, label='t')
+    assert dedup_kw == [{'winner_emag_ratio': 0.8,
+                         'band_resolve_mas': {'f212n': 60.0, 'f200w': 50.0}}]
+    dedup_kw.clear()
+    cataloging._maybe_dedup_m8(
+        path, SimpleNamespace(m8_dedup_band_resolve_mas='60'), label='t')
+    assert dedup_kw == [{'winner_emag_ratio': None, 'band_resolve_mas': 60.0}]
 
 
 def test_option_disables_flag(m8):

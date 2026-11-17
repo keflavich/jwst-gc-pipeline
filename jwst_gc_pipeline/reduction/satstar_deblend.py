@@ -17,13 +17,27 @@ one seed PER STAR.  Dev history + validation under ``scripts/satstar_deblend/``.
 """
 import numpy as np
 from scipy import ndimage
+from scipy.optimize import minimize, nnls
 from scipy.spatial import cKDTree
 
 try:
     from skimage.feature import peak_local_max
     _HAVE_SKIMAGE = True
-except Exception:
+except ImportError:
     _HAVE_SKIMAGE = False
+
+
+def _require_skimage():
+    """Raise ``ImportError`` when scikit-image is missing (#1196).
+
+    The secondary peak search needs ``peak_local_max``; without it a blob would
+    come back as its core centres only, which reads as "no blends".
+    """
+    if not _HAVE_SKIMAGE:
+        raise ImportError(
+            "the ZEROFRAME satstar deblend needs scikit-image "
+            "(skimage.feature.peak_local_max); install it or run without "
+            "--deblend-satstars")
 
 
 def robust_zf_ceiling(zeroframe, phys_max=1e6):
@@ -43,6 +57,144 @@ def robust_zf_ceiling(zeroframe, phys_max=1e6):
     if p999 > 0 and p9999 <= p999 * 1.05:
         return p999 * 0.98
     return np.inf
+
+
+#: PSF-prediction veto (#1195).  Fewer fit pixels than this leave the amplitude
+#: unanchored, so the veto falls back to the plain peak search.
+PSF_VETO_MIN_FIT_PX = 30
+#: Components above this saturated area, or models above this many stars, use
+#: the plain peak search: the NNLS design matrix grows with both.
+PSF_VETO_MAX_AREA = 5000
+PSF_VETO_MAX_MODEL = 40
+#: Fit pixels at or above this fraction of the ZEROFRAME ceiling are left out
+#: (near-clip non-linearity).
+PSF_VETO_CLIP_FRAC = 0.9
+#: The model positions of the accepted stars are refined by up to this many
+#: pixels (a saturated core's centroid is good to a few tenths of a pixel, which
+#: leaves a dipole in the residual of a bright star), for at most this many stars.
+PSF_VETO_REFINE_PX = 1.0
+PSF_VETO_MAX_REFINE = 8
+
+
+def _refine_centres(psf_stamp, centers, fit_y, fit_x, data, origin):
+    """``centers`` (crop coordinates) moved, one star at a time, to the position
+    within ``PSF_VETO_REFINE_PX`` that minimises the residual of the
+    non-negative least-squares fit on the fit pixels."""
+    y0, x0 = origin
+    nfit = len(data)
+    ones = np.ones(nfit)
+
+    def stamp(cy, cx):
+        img = np.asarray(psf_stamp(fit_y + y0, fit_x + x0, cy + y0, cx + x0),
+                         dtype=float)
+        return np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+
+    cols = [stamp(cy, cx) for (cy, cx) in centers]
+
+    def misfit(k, pos):
+        if max(abs(pos[0] - centers[k][0]),
+               abs(pos[1] - centers[k][1])) > PSF_VETO_REFINE_PX:
+            return np.inf
+        trial = cols[:k] + [stamp(pos[0], pos[1])] + cols[k + 1:]
+        a = np.column_stack(trial + [ones, -ones])
+        coef, rnorm = nnls(a, data)
+        return rnorm
+
+    out = list(centers)
+    for k in range(len(out)):
+        res = minimize(lambda p: misfit(k, p), out[k], method='Nelder-Mead',
+                       options=dict(xatol=0.02, fatol=1e-6 * float(np.sum(data ** 2)),
+                                    maxiter=60, initial_simplex=None))
+        if np.all(np.isfinite(res.x)) and res.fun < misfit(k, out[k]):
+            out[k] = (float(res.x[0]), float(res.x[1]))
+            cols[k] = stamp(*out[k])
+    return out
+
+
+def _psf_veto_peaks(psf_stamp, psf_margin, zf, zf_filled, bg, invalid,
+                    other, claimed, det_mask, fit, centers0, extra_centers,
+                    thresh, sigma, min_sep, n_peaks, origin):
+    """Secondary peaks that a PSF model of the accepted stars does not predict.
+
+    The ring and spike beads of one bright star are local maxima of the
+    smoothed ZEROFRAME, so a plain peak search reads them as companions.  Here
+    the accepted stars (``centers0``, crop coordinates; ``extra_centers`` are
+    modelled but never returned) are fitted with PSF stamps by non-negative
+    least squares on ``fit`` pixels, plus a free constant.  A peak of the
+    smoothed residual counts as a star when it exceeds both ``thresh`` and
+    ``psf_margin`` times the smoothed model at that position (an allowance for
+    the mismatch between the model PSF and the detector's).  The strongest such
+    peak joins the model, the amplitudes are refitted, and the search repeats.
+
+    Returns ``(peaks, n_vetoed)``: the accepted peaks (crop coordinates) and
+    the number of residual peaks above ``thresh`` that the margin rejected in
+    the last pass.  Returns a status string when the fit cannot run or the
+    stamp is degenerate (NaN, zero or negative), so the caller keeps the plain
+    peak search.
+    """
+    ny, nx = zf.shape
+    Y, X = np.mgrid[0:ny, 0:nx]
+    y0, x0 = origin
+    data = (zf - bg)[fit]
+    resid_search = det_mask & ~other & ~claimed
+
+    def image(cy, cx):
+        img = np.asarray(psf_stamp(Y + y0, X + x0, cy + y0, cx + x0), dtype=float)
+        return np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+
+    centers = list(centers0) + list(extra_centers)
+    if len(centers) > PSF_VETO_MAX_MODEL:
+        return 'fallback_model_size'
+    # one handler for every stamp / solver failure, so a stamp error falls back
+    # to the plain search whatever the number of accepted stars
+    try:
+        if len(centers0) <= PSF_VETO_MAX_REFINE:
+            centers = _refine_centres(psf_stamp, list(centers0), Y[fit], X[fit],
+                                      data, origin) + list(extra_centers)
+        imgs = [image(cy, cx) for (cy, cx) in centers]
+        peaks = []
+        n_vetoed = 0
+        while True:
+            cols = np.column_stack([im[fit] for im in imgs]
+                                   + [np.ones(int(fit.sum())),
+                                      -np.ones(int(fit.sum()))])
+            coef, _ = nnls(cols, data)
+            amps = coef[:len(imgs)]
+            # An all-NaN, all-zero or negative stamp leaves every amplitude at
+            # zero: the "model" is empty and the search would run on the raw
+            # residual, so report it as not applied.
+            if not np.all(np.isfinite(amps)) or not amps.sum() > 0:
+                return 'fallback_fit_failed'
+            const = coef[-2] - coef[-1]
+            model = sum(a * im for a, im in zip(amps, imgs))
+            resid = zf_filled - bg - const - model
+            # inside the invalid core zf_filled is a nearest-ring copy, not
+            # data; model minus that copy would make false peaks on its boundary
+            resid = np.where(invalid | ~np.isfinite(resid), 0.0, resid)
+            resid_sm = ndimage.gaussian_filter(resid, sigma)
+            model_sm = ndimage.gaussian_filter(model, sigma)
+            n_vetoed = 0
+            best = None
+            if len(peaks) < n_peaks and len(centers) < PSF_VETO_MAX_MODEL:
+                pk = peak_local_max(resid_sm, min_distance=min_sep,
+                                    threshold_abs=thresh,
+                                    labels=resid_search.astype(int),
+                                    num_peaks=n_peaks)
+                for (py, px) in pk:
+                    limit = max(thresh, psf_margin * max(model_sm[py, px], 0.0))
+                    if resid_sm[py, px] > limit:
+                        if best is None or resid_sm[py, px] > resid_sm[best]:
+                            best = (int(py), int(px))
+                    else:
+                        n_vetoed += 1
+            if best is None:
+                return peaks, n_vetoed
+            peaks.append((float(best[0]), float(best[1])))
+            centers.append(best)
+            imgs.append(image(*best))
+    except (RuntimeError, ValueError):
+        # np.linalg.LinAlgError is a ValueError
+        return 'fallback_fit_failed'
 
 
 def _is_compact(zf_sm, yy, xx, fwhm_pix, conc_min):
@@ -65,14 +217,21 @@ def _is_compact(zf_sm, yy, xx, fwhm_pix, conc_min):
     return peak >= conc_min * abs(med) if med != 0 else True
 
 
-def _fof_merge(centers, link, radii=None, radius_frac=0.6):
+def _fof_merge(centers, link, radii=None, radius_frac=0.6, return_radii=False):
     """Friends-of-friends merge of (y,x) centres → group means.
 
     Two centres link when they are within ``link`` px, or, given ``radii``
     (the radius of the ZF-saturated core each centre was taken from, 0 for a
     peak), within ``radius_frac * max(r_i, r_j)`` px.
+
+    With ``return_radii`` the result is ``(means, group_radii)``, where
+    ``group_radii[k]`` is the largest member radius of group ``k`` (0 without
+    ``radii``), in the order of ``means``.
     """
     if len(centers) <= 1:
+        if return_radii:
+            r1 = [0.0] * len(centers) if radii is None else [float(x) for x in radii]
+            return centers, r1
         return centers
     pts = np.asarray(centers, dtype=float)
     r = np.zeros(len(pts)) if radii is None else np.asarray(radii, dtype=float)
@@ -90,7 +249,10 @@ def _fof_merge(centers, link, radii=None, radius_frac=0.6):
     groups = {}
     for i in range(len(pts)):
         groups.setdefault(find(i), []).append(i)
-    return [tuple(pts[idx].mean(axis=0)) for idx in groups.values()]
+    means = [tuple(pts[idx].mean(axis=0)) for idx in groups.values()]
+    if return_radii:
+        return means, [float(r[idx].max()) for idx in groups.values()]
+    return means
 
 
 def _neighbour_claim(blob, other, fwhm_pix, pad):
@@ -119,7 +281,7 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
                            prom_nsigma=4.0, dao_nsigma=2.5, seed_conc_min=2.5,
                            max_stars=6, pad=8, confirm_xy=None,
                            enable_secondary_peaks=True, verbose=False,
-                           area_per_peak=50.0):
+                           area_per_peak=50.0, psf_stamp=None, psf_margin=0.25):
     """Return a list of (y, x) star centres inside one saturated blob.
 
     Parameters
@@ -145,7 +307,21 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
         The peak limit grows to one per ``area_per_peak`` saturated px of the
         component when that is larger than ``max_stars``.  ``None`` or 0 keeps
         the fixed ``max_stars`` limit.
+    psf_stamp : callable or None
+        ``psf_stamp(yy, xx, yc, xc)`` returns the unit-flux PSF of a star at
+        detector position (``yc``, ``xc``) on the detector-pixel arrays
+        ``yy``, ``xx``.  Given one, secondary peaks come from a residual
+        search against a PSF model of the accepted stars (see
+        ``_psf_veto_peaks``), which drops the ring and spike beads of a single
+        bright star (#1195).  ``None`` keeps the plain peak search.
+    psf_margin : float
+        Fraction of the model at a residual peak that the peak must exceed; 0
+        or less also keeps the plain peak search.
+
+    Raises ``ImportError`` when scikit-image is missing (see
+    ``_require_skimage``).
     """
+    _require_skimage()
     area = int((sources[sl] == label_id).sum())
     r_sat = max(1.0, np.sqrt(area / np.pi))
     y0 = max(0, sl[0].start - pad); y1 = min(data.shape[0], sl[0].stop + pad)
@@ -237,8 +413,46 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     if area_per_peak:
         n_peaks = max(n_peaks, int(area / float(area_per_peak)))
     peak_centers = []
-    if _HAVE_SKIMAGE:
-        det_mask = blob_dil & np.isfinite(zf_sm)
+    psf_veto = 'off'
+    n_vetoed = 0
+    det_mask = blob_dil & np.isfinite(zf_sm)
+    if _HAVE_SKIMAGE and psf_stamp is not None and psf_margin > 0:
+        psf_veto = 'fallback_area' if area > PSF_VETO_MAX_AREA else 'applied'
+    if psf_veto == 'applied':
+        # Peaks of the smoothed ZEROFRAME that the PSF model of the accepted
+        # stars predicts (rings, spikes) are not stars.  Without a saturated
+        # core the brightest peak is the blob's own star and seeds the model.
+        init = [(cy - y0, cx - x0) for (cy, cx) in core_centers]
+        first = []
+        if not init:
+            pk0 = peak_local_max(zf_sm, min_distance=min_sep, threshold_abs=thresh,
+                                 labels=(det_mask & ~other).astype(int), num_peaks=1)
+            first = [(float(py), float(px)) for (py, px) in pk0]
+            init = first
+        neighbours = []
+        if other.any():
+            lab_o, n_o = ndimage.label((sources[y0:y1, x0:x1] > 0) & ~blob)
+            if n_o:
+                neighbours = [tuple(c) for c in ndimage.center_of_mass(
+                    lab_o > 0, lab_o, np.arange(n_o) + 1)]
+        fit = (blob_dil & np.isfinite(zf) & ~invalid & ~other
+               & (zf < PSF_VETO_CLIP_FRAC * sat_ceiling))
+        if not init:
+            psf_veto = 'fallback_no_peak'
+        elif int(fit.sum()) < PSF_VETO_MIN_FIT_PX:
+            psf_veto = 'fallback_few_px'
+        else:
+            res = _psf_veto_peaks(
+                psf_stamp, psf_margin, zf, zf_filled, bg, invalid, other,
+                claimed, det_mask, fit, init, neighbours, thresh, sigma,
+                min_sep, n_peaks, (y0, x0))
+            if isinstance(res, str):
+                psf_veto = res
+            else:
+                peaks, n_vetoed = res
+                for (py, px) in first + peaks:
+                    peak_centers.append((py + y0, px + x0))
+    if _HAVE_SKIMAGE and psf_veto not in ('applied',):
         pk = peak_local_max(zf_sm, min_distance=min_sep, threshold_abs=thresh,
                             labels=det_mask.astype(int), num_peaks=n_peaks)
         for (py, px) in pk:
@@ -335,25 +549,32 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     # centres -> 1 seed).  Peaks inside a core's claimed region are already
     # absorbed above, and unconfirmed secondary peaks must pass the
     # compactness test.
-    centers = _fof_merge(centers, link=min_sep, radii=center_r)
+    # ``order_key`` follows the merged centres: the largest core radius of each
+    # group (a ZF-saturated core has r >= sqrt(3/pi), a peak 0), so that the
+    # caller can fit the larger cores first (#1094).
+    centers, order_key = _fof_merge(centers, link=min_sep, radii=center_r,
+                                    return_radii=True)
 
     if not centers:
         # ultimate fallback: bbox centre (current production behaviour)
         cy = 0.5 * (sl[0].start + sl[0].stop - 1)
         cx = 0.5 * (sl[1].start + sl[1].stop - 1)
         centers = [(cy, cx)]
+        order_key = [0.0]
 
     if verbose:
         print(f"  L{label_id}: area={area} r_sat={r_sat:.1f} -> {len(centers)} star(s)",
               flush=True)
     return centers, dict(r_sat=r_sat, bg=bg, mad=mad, area=area,
-                         crop=(y0, y1, x0, x1), zf_sm=zf_sm, blob_dil=blob_dil)
+                         crop=(y0, y1, x0, x1), zf_sm=zf_sm, blob_dil=blob_dil,
+                         psf_veto=psf_veto, n_vetoed=n_vetoed,
+                         order_key=order_key)
 
 
 def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
                                    zeroframe, data, fwhm_pix,
                                    daophot_xy=None, confirm_xy=None,
-                                   min_area=4, **deblend_kwargs):
+                                   min_area=4, stats=None, **deblend_kwargs):
     """Expand per-connected-component satstar seeds into per-STAR seeds.
 
     Drop-in replacement for the one-record-per-``coms``-entry loop in
@@ -361,7 +582,14 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
     already consumes::
 
         {'com': (cy, cx), 'label': component_label, 'forced': False,
-         'sat_area': component_saturated_area}
+         'sat_area': component_saturated_area, 'order_key': core_radius}
+
+    ``order_key`` (deblended records only) is the radius in px of the
+    ZF-saturated core the star was taken from, 0 for a star taken from an
+    unsaturated peak.  Every star of a component carries the component's
+    ``sat_area``, so ``order_key`` is the only brightness proxy that tells the
+    members apart; ``get_saturated_stars`` sorts on it when
+    ``SATSTAR_DEBLEND_ORDER`` is set.  It does not change ``sat_area``.
 
     A component that is too small (``< min_area`` saturated pixels), has a
     non-finite centroid, or deblends to a single star yields exactly ONE record at
@@ -373,7 +601,19 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
 
     Parameters mirror ``deblend_blob_zeroframe``.  ``zeroframe`` is the ZEROFRAME
     (frame zero) array from the matching ``_ramp.fits`` (raw DN).
+
+    ``stats``, when a dict, is filled with ``n_components`` (components the
+    deblender was run on), ``n_split`` (of those, the ones that returned more
+    than one star), ``n_failed`` (components whose deblend raised and kept the
+    refined centroid, with the first error in ``first_error``), ``psf_veto``
+    (components per PSF-veto status) and ``n_vetoed`` (residual peaks above the
+    noise threshold that the PSF margin rejected, summed over the components).
+
+    Raises ``ImportError`` when scikit-image is missing: the secondary peak
+    search needs it, and without it every component would come back as its
+    core centres only, which reads as "no blends" in the catalogue.
     """
+    _require_skimage()
     slices = ndimage.find_objects(sources)
     ceiling = robust_zf_ceiling(zeroframe)
     records = []
@@ -386,16 +626,36 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
             records.append({'com': com, 'label': label_id, 'forced': False,
                             'sat_area': area})
             continue
+        if stats is not None:
+            stats['n_components'] = stats.get('n_components', 0) + 1
         try:
-            centers, _ = deblend_blob_zeroframe(
+            centers, info = deblend_blob_zeroframe(
                 zeroframe, data, sources, label_id, sl, fwhm_pix,
                 daophot_xy=daophot_xy, confirm_xy=confirm_xy,
                 sat_ceiling=ceiling, **deblend_kwargs)
-        except Exception:
+            if stats is not None:
+                counts = stats.setdefault('psf_veto', {})
+                counts[info['psf_veto']] = counts.get(info['psf_veto'], 0) + 1
+                stats['n_vetoed'] = stats.get('n_vetoed', 0) + info['n_vetoed']
+        except (ValueError, IndexError) as exc:  # LinAlgError is a ValueError
+            # the component keeps its refined centroid, as before, but the
+            # failure is counted and printed instead of passing silently
             centers = None
+            print(f"satstar deblend: component {label_id} failed "
+                  f"({type(exc).__name__}: {exc}); keeping its centroid",
+                  flush=True)
+            if stats is not None:
+                stats['n_failed'] = stats.get('n_failed', 0) + 1
+                stats.setdefault('first_error', f"{type(exc).__name__}: {exc}")
         if not centers:
             centers = [com]
-        for c in centers:
+            keys = [0.0]
+        else:
+            keys = info['order_key']
+            if stats is not None and len(centers) > 1:
+                stats['n_split'] = stats.get('n_split', 0) + 1
+        for c, key in zip(centers, keys):
             records.append({'com': (float(c[0]), float(c[1])), 'label': label_id,
-                            'forced': False, 'sat_area': area})
+                            'forced': False, 'sat_area': area,
+                            'order_key': float(key)})
     return records

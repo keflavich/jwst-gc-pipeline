@@ -30,6 +30,8 @@ These tests pin:
   entry.
 """
 import inspect
+import os
+import time
 import types
 
 import numpy as np
@@ -168,12 +170,14 @@ def test_without_data_i2d_falls_back_to_all_rows(tmp_path, capsys):
     assert 'cannot be told apart' in capsys.readouterr().out
 
 
-def _write_run(pdir, obs, x_acc, x_rej, stale_arcsec=0.5, phase='m6'):
+def _write_run(pdir, obs, x_acc, x_rej, stale_arcsec=0.5, phase='m6',
+               variant='destreak', expo='00001'):
     """One frame plus its ``phase`` accepted and rejected satstar files (none
     for an empty ``x_rej``); the stored sky positions are deliberately STALE
-    by ``stale_arcsec`` in Dec."""
+    by ``stale_arcsec`` in Dec.  ``variant`` is the frame variant (``align`` or
+    ``destreak``) and ``expo`` the exposure number."""
     w = _wcs()
-    frame = pdir / f'jw10678{obs}001_02101_00001_nrcalong_destreak_o{obs}_crf.fits'
+    frame = pdir / f'jw10678{obs}001_02101_{expo}_nrcalong_{variant}_o{obs}_crf.fits'
     if not frame.exists():
         hdu = fits.ImageHDU(np.zeros(SHAPE, dtype='float32'), name='SCI')
         hdu.header.update(w.to_header())
@@ -213,6 +217,50 @@ def test_cofit_positions_read_one_phase_per_exposure(tmp_path, phase, want):
     runs = C._satstar_cofit_positions(str(pdir), proposal_id='10678',
                                       field='001', phase=phase)
     assert _xs(w, runs) == want
+
+
+def _two_variant_runs(pdir, expo, align_rej, destreak_rej):
+    """One exposure fit on both frame variants (align written last): accepted
+    positions 130 (align) / 100 (destreak); rejected as given."""
+    w = _write_run(pdir, '001', x_acc=[100.0], x_rej=destreak_rej,
+                   variant='destreak', expo=expo)
+    _write_run(pdir, '001', x_acc=[130.0], x_rej=align_rej, variant='align',
+               expo=expo)
+    for path in pdir.glob(f'*{expo}*_satstar_*.fits'):
+        age = 10 if '_align_' in path.name else 300
+        os.utime(path, (time.time() - age, time.time() - age))
+    return w
+
+
+def test_cofit_positions_accepted_follow_the_read_variant(tmp_path):
+    # #1194: the newer align fit must not decide the co-fit pairs of a merge
+    # that reads the destreak frames
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    w = _two_variant_runs(pdir, '00001', align_rej=[], destreak_rej=[])
+    got = {v: _xs(w, C._satstar_cofit_positions(
+        str(pdir), proposal_id='10678', field='001', phase='m6',
+        frame_variants=frozenset({f'{v}_o001_crf'})))
+        for v in ('destreak', 'align')}
+    assert got == {'destreak': [100.0], 'align': [130.0]}
+    assert _xs(w, C._satstar_cofit_positions(
+        str(pdir), proposal_id='10678', field='001', phase='m6')) == [130.0]
+
+
+def test_cofit_positions_rejected_orphans_follow_the_read_variant(tmp_path):
+    # an exposure with rejected files only: the orphan branch picks the variant
+    pdir = tmp_path / 'pipeline'
+    pdir.mkdir()
+    w = _two_variant_runs(pdir, '00001', align_rej=[140.0], destreak_rej=[111.0])
+    for path in pdir.glob('*_satstar_catalog.fits'):
+        path.unlink()
+    got = {v: _xs(w, C._satstar_cofit_positions(
+        str(pdir), proposal_id='10678', field='001', phase='m6',
+        frame_variants=frozenset({f'{v}_o001_crf'})))
+        for v in ('destreak', 'align')}
+    assert got == {'destreak': [111.0], 'align': [140.0]}
+    assert _xs(w, C._satstar_cofit_positions(
+        str(pdir), proposal_id='10678', field='001', phase='m6')) == [140.0]
 
 
 def test_cofit_positions_pair_accepted_and_rejected_on_the_current_wcs(tmp_path):
