@@ -59,9 +59,10 @@ def _offset(dra_mas, ddec_mas, ok=True, swept=False):
                 window_arcsec=3.0, dra_err=0.0008, ddec_err=0.0008)
 
 
-def _region_map(worst_mas, clean, n_flagged, n_uncovered=0):
+def _region_map(worst_mas, clean, n_flagged, n_uncovered=0, ref_too_sparse=False):
     return dict(clean=clean, measurable=True, n_cells=25, n_measured=25,
                 n_flagged=n_flagged, n_uncovered=n_uncovered,
+                ref_too_sparse=ref_too_sparse,
                 uncovered_cells=[{'by': 'tight-pairs'}] * n_uncovered,
                 worst_off_mas=worst_mas, worst_sig_off_mas=worst_mas,
                 n_pairs=4000, cells=[],
@@ -69,7 +70,8 @@ def _region_map(worst_mas, clean, n_flagged, n_uncovered=0):
 
 
 def _tie(monkeypatch, bulk_mas, worst_mas, clean=False, n_flagged=6,
-         region_measurable=True, grid_clean=True, n_uncovered=0):
+         region_measurable=True, grid_clean=True, n_uncovered=0,
+         ref_too_sparse=False):
     """Run the REAL decision over canned estimator output."""
     dra, ddec = bulk_mas
     monkeypatch.setattr(vc, 'measure_offset',
@@ -78,7 +80,7 @@ def _tie(monkeypatch, bulk_mas, worst_mas, clean=False, n_flagged=6,
                         lambda *a, **k: dict(clean=grid_clean, n_total=4,
                                              worst_off_mas=worst_mas, cells=[]))
     if region_measurable:
-        rm = _region_map(worst_mas, clean, n_flagged, n_uncovered)
+        rm = _region_map(worst_mas, clean, n_flagged, n_uncovered, ref_too_sparse)
     else:
         rm = dict(clean=False, measurable=False, n_cells=0, n_measured=0,
                   n_flagged=0, worst_off_mas=float('nan'), cells=[])
@@ -168,6 +170,24 @@ def test_a_coverage_only_dirty_map_is_still_refused(monkeypatch):
     assert r['per_tile_bulk_dominant_exempt'] is False, (
         'a coverage-dirty map was exempted on a residual-arm ratio'
     )
+    assert r['apply_ok'] is False
+
+
+def test_a_map_refused_for_a_sparse_reference_is_not_exempted(monkeypatch):
+    """Issue #1191: a map that is unclean only because the reference was too
+    sparse to test coverage carries no residual verdict to overrule.  At the
+    o135 F212N numbers the bulk-dominance ratio would exempt it; like an
+    uncovered cell, ``ref_too_sparse`` must keep it blocking.  The same inputs
+    without the flag are applied, which pins that the flag is what refuses."""
+    ok = _tie(monkeypatch, (-61.66, -9.91), 25.29, clean=False, n_flagged=6)
+    assert ok['per_tile_bulk_dominant_exempt'] is True
+    assert ok['apply_ok'] is True
+    r = _tie(monkeypatch, (-61.66, -9.91), 25.29, clean=False, n_flagged=6,
+             ref_too_sparse=True)
+    assert r['region_bulk_dominance_ratio'] < REGION_BULK_DOMINANCE_RATIO
+    assert r['per_tile_bulk_dominant_exempt'] is False
+    assert r['region_map']['ref_too_sparse'] is True
+    assert r['region_map']['status'] == 'blocking'
     assert r['apply_ok'] is False
 
 

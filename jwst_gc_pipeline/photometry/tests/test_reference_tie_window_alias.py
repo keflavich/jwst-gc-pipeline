@@ -19,16 +19,34 @@ changes is the DIAGNOSIS, not any field's verdict: every swept reference tie in
 the archive is w51's and already carried ``apply_ok: false``.
 """
 import numpy as np
+import pytest
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
+from jwst_gc_pipeline.photometry import astrometry_offsets as ao
 from jwst_gc_pipeline.photometry.visit_consensus import measure_reference_tie
 
 
+@pytest.fixture(autouse=True)
+def _confirmation_path_without_the_significance_gate(monkeypatch):
+    """These tests pin the window-confirmation machinery, which a peak reaches
+    only after ``ok`` is set.  Since issue #1232 the significance gate rejects
+    a footprint-ridge alias at the wide windows before confirmation runs (see
+    ``test_window_edge_alias_fails_the_significance_gate``), so the gate is
+    switched off here to keep exercising the probes."""
+    monkeypatch.setattr(ao, "SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC", np.inf)
+
+
 def _clumpy_field(ra0, dec0, width_arcsec, seed, n_clump=300, per_clump=6,
-                  sigma_arcsec=1.5):
+                  sigma_arcsec=0.5):
     """A clustered star field -- the regime that makes the window-edge ridge
-    sharp enough to clear the contrast floor (see test_sweep_window_alias)."""
+    sharp enough to clear the contrast floor (see test_sweep_window_alias).
+
+    The clumps are 0.5" wide (1.5" before issue #1232).  The window-scaled bin is
+    now capped at 0.1", and a ridge as smooth as a 1.5" clump spreads over so
+    many fine bins that its contrast falls below the floor; the narrower clumps
+    keep the alias sharp enough to clear it, which is the regime these tests
+    guard."""
     rng = np.random.RandomState(seed)
     cra = ra0 + (rng.rand(n_clump) - 0.5) * width_arcsec / 3600.0
     cdec = dec0 + (rng.rand(n_clump) - 0.5) * width_arcsec / 3600.0

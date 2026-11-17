@@ -77,6 +77,7 @@ import os
 import warnings
 
 import numpy as np
+import yaml
 from astropy.io import fits
 from astropy import wcs as astropy_wcs
 
@@ -230,7 +231,10 @@ def gwcs_from_file(filename, use_cache=True):
             # so nothing in the returned transform maps the file we close.
             with _dm.open(filename) as model:
                 gw = getattr(model.meta, 'wcs', None)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+            yaml.YAMLError) as exc:
+        # YAMLError: a text-corrupted ASDF block (an unclosed flow mapping)
+        # fails in the YAML parser, which is not a ValueError.
         raise GwcsReadError(
             f"{filename} has an ASDF extension but its GWCS could not be "
             f"read ({type(exc).__name__}: {exc}). Refusing to fall back to "

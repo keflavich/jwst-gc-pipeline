@@ -2753,11 +2753,28 @@ JOINT_CATALOG_KINDS = ("catalog_joint", "catalog_joint_provenance",
 
 # The per-tile table each joint-catalog tile ships as, beside the joint table.
 # m8 is the tile's full cross-band merge (m7) with every band force-filled at
-# every source.  It is unfiltered: the joint build reads the quality-cut m7
-# table instead (o040: 62,933 of m8's 196,672 rows).  It sits in the same
-# roll-corrected snapshot directory as the tile the joint build read, so the
-# two products carry the same correction.
+# every source.  It is unfiltered: a build with tile_kind "m7_oksep" (the
+# default) reads the quality-cut m7 table instead (o040: 62,933 of m8's 196,672
+# rows).  It sits in the same roll-corrected snapshot directory as the tile the
+# joint build read, so the two products carry the same correction.
 TILE_CATALOG_ITERATION = "resbgsub_m8"
+
+# A build with tile_kind "m8_dedup" (#1283) reads every row of the
+# de-duplicated m8 table, with the default CMD selection as its `cmd_default`
+# column.  The table shipped beside the joint catalogue is then that same file,
+# so the per-tile product is the joint build's own input.
+TILE_CATALOG_ITERATION_M8_DEDUP = "resbgsub_m8_dedup"
+
+
+def tile_catalog_iteration(prov):
+    """The per-tile table iteration a build's ``prov.json`` shipped from.
+
+    ``tile_kind`` is recorded by ``treasury_joint_catalog``; a build without
+    it predates the option and read the m7 quality-cut tiles.
+    """
+    if (prov or {}).get("tile_kind") == "m8_dedup":
+        return TILE_CATALOG_ITERATION_M8_DEDUP
+    return TILE_CATALOG_ITERATION
 
 
 class JointCatalogGateError(RuntimeError):
@@ -3201,6 +3218,7 @@ def check_joint_catalog(build_dir):
         # and what the README's joint-catalog section needs to describe the
         # dedup that produced this table.
         "dedup_radius_arcsec": prov.get("dedup_radius_arcsec"),
+        "tile_kind": prov.get("tile_kind"),
         "roll_tables": roll_tables,
         "roll_value_check": "per-observation values match current table",
     }
@@ -3226,7 +3244,9 @@ def discover_tile_catalogs(build_dir):
 
     For every tile in the build's ``prov.json`` ``tiles``, returns
     ``(observation, path)`` for
-    ``<tile dir>/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o<obs>.fits``,
+    ``<tile dir>/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o<obs>.fits``
+    (``..._resbgsub_m8_dedup_o<obs>.fits`` for a build with ``tile_kind``
+    ``m8_dedup``),
     where ``<tile dir>`` is the directory the joint build read that tile from
     (the roll-corrected snapshot).  Raises ``JointCatalogGateError`` -- before
     anything is written -- if a tile has no m8 table there, or if the m8 table
@@ -3239,6 +3259,7 @@ def discover_tile_catalogs(build_dir):
     build_dir = Path(build_dir)
     prov_path = sorted(build_dir.glob("*_joint_nircam.prov.json"))[0]
     prov = json.loads(prov_path.read_text())
+    iteration = tile_catalog_iteration(prov)
     found, problems = [], []
     for obsid, t in sorted((prov.get("tiles") or {}).items()):
         tile_path = t.get("path")
@@ -3247,7 +3268,7 @@ def discover_tile_catalogs(build_dir):
             continue
         obs = obsid if str(obsid).startswith("o") else f"o{obsid}"
         src = (Path(tile_path).parent
-               / f"{CAT_BASE}_{TILE_CATALOG_ITERATION}_{obs}.fits")
+               / f"{CAT_BASE}_{iteration}_{obs}.fits")
         if not src.is_file():
             problems.append(f"tile {obsid}: no m8 table at {src}")
             continue
@@ -3377,6 +3398,7 @@ def stage_joint_catalog(field, version, release_root, build_dir=None,
         if src is fits_src:
             item["joint_catalog"] = summary
         new_items.append(item)
+    iteration = tile_catalog_iteration(summary)
     for obs, src in tile_catalogs:
         dest_rel = assign_dest({"category": "catalog", "src": str(src)}, field)
         dest = field_dir / dest_rel
@@ -3385,7 +3407,7 @@ def stage_joint_catalog(field, version, release_root, build_dir=None,
         rel = dest.relative_to(GLOBUS_COLLECTION_ROOT)
         new_items.append({
             "category": "catalog", "kind": "catalog_tile", "filter": None,
-            "iteration": TILE_CATALOG_ITERATION, "observation": obs,
+            "iteration": iteration, "observation": obs,
             "src": str(src), "dest": str(dest_rel),
             "size_bytes": dest.stat().st_size, "sha256": sha256sum(dest),
             "version": version,
@@ -3806,7 +3828,25 @@ def write_readme(field_dir, field, version, items, mode, built_at=None,
                 f"per-tile row counts).")
         _tiles = sorted(it.get("observation") or "" for it in joint_catalog_items
                         if it.get("kind") == "catalog_tile")
-        if _tiles:
+        if _tiles and _jsum.get("tile_kind") == "m8_dedup":
+            joint_catalog_lines.append(
+                f"- Per-tile tables: `{CAT_BASE}_{TILE_CATALOG_ITERATION_M8_DEDUP}_o<obs>.fits`, "
+                f"one per tile ({len(_tiles)}: {_tiles[0]}-{_tiles[-1]}).  Each is "
+                "the de-duplicated m8 table the joint catalog was built from: "
+                "the tile's cross-band merge with every band force-filled, all "
+                "rows, roll-corrected with the same table as the joint build "
+                "read.  The default colour-magnitude selection is the boolean "
+                "column `cmd_default` (`sep_<band>` below 0.1\" in more than "
+                "one non-wide band AND `n_filt_independent >= 2`; the test is "
+                "named in the `CMDDEF` header card), and `oksep_pass` holds "
+                "the separation test alone.  Forced-fill values are not "
+                "independent detections: `forced_filled_<band>`, "
+                "`forced_snr_<band>` and `is_upper_limit_<band>` say which "
+                "measurements came from the forced fit (issue #1284).  Tiles "
+                "overlap, so a star near a tile edge can appear in two "
+                "per-tile tables; the joint catalog collapses those "
+                "duplicates.")
+        elif _tiles:
             joint_catalog_lines.append(
                 f"- Per-tile tables: `{CAT_BASE}_{TILE_CATALOG_ITERATION}_o<obs>.fits`, "
                 f"one per tile ({len(_tiles)}: {_tiles[0]}-{_tiles[-1]}).  Each is "

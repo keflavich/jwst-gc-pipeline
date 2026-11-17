@@ -255,8 +255,10 @@ from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     assert_no_foreign_observation_overwrite, foreign_observation_conflict,
 )
+from jwst_gc_pipeline.mast_names import filtername_from_header
 from jwst_gc_pipeline.photometry.epsf_hybrid import (
-    hybrid_psf_token, maybe_apply_epsf_core, psf_provenance_meta)
+    EPSF_CORE_DIR_ENV, expected_psf_signature, hybrid_psf_token, maybe_apply_epsf_core,
+    psf_provenance_meta)
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -689,8 +691,16 @@ def fwhm_table_path(instrument=None):
 _BAD_DQ_FLAGS_NIRCAM = ('DO_NOT_USE', 'SATURATED')
 _BAD_DQ_FLAGS_MIRI = ('DO_NOT_USE', 'SATURATED', 'NON_SCIENCE', 'PERSISTENCE')
 
-def _bad_dq_bitmask(instrument):
+def _bad_dq_bitmask(instrument, *, keep_recovered_saturation=False):
+    """Bitmask of DQ flags dropped from photometry for ``instrument``.
+
+    ``keep_recovered_saturation`` omits SATURATED (the any-group flag) so that
+    pixels recovered by the ramp fit stay fittable; the truly-lost core is then
+    masked through ``truly_lost_saturated_mask`` and DO_NOT_USE instead (#567).
+    """
     flags = _BAD_DQ_FLAGS_MIRI if str(instrument).upper() == 'MIRI' else _BAD_DQ_FLAGS_NIRCAM
+    if keep_recovered_saturation:
+        flags = tuple(f for f in flags if f != 'SATURATED')
     bm = 0
     for f in flags:
         bm |= int(dqflags.pixel[f])
@@ -945,6 +955,8 @@ def catalog_zoom_diagnostic(data, modsky, zoomcut, stars):
 # and _L.<name> access from cataloging.py) keep working unchanged.
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     refresh_satstar_skycoords)
+from jwst_gc_pipeline.photometry.satstar_position_qa import log_satstar_position_qa
+from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.column_utils import (
     _XY_COLUMN_CANDIDATES, _get_source_xy, _column_to_float_array,
     _best_available_xy, _has_any_xy_columns, _skycoord_radec_arrays,
@@ -1460,10 +1472,47 @@ def _protect_mask(x, y, protect_xy, protect_radius_pix):
     return prot
 
 
+def _seeded_companion_mask(tbl, x, y, ix, iy, in_frame, *, seed_xy,
+                           seed_radius_pix, lost_dist_map, max_sat_dist_pix):
+    """Fits exempt from the near-saturation drop as seeded companions.
+
+    A fit qualifies when it lies within ``seed_radius_pix`` of a seed
+    position (the i2d / cross-band seed catalog the pass was seeded from),
+    its nearest SATURATED pixel that the fit still treats as lost
+    (``lost_dist_map``) is more than ``max_sat_dist_pix`` away, and it has a
+    finite ``flux_fit > 0`` and a finite ``qfit``.  The SATURATED pixels
+    closer than that are then all valid-rate pixels the frame preparation
+    gave back to the fit (``_handoff_restore_pixels``), i.e. the late-group
+    footprint of a handed-off bright neighbour, not the fit's own core.
+
+    gc-treasury F480M (stars 2, 3 and 6 of the residual-pox list): i2d-seeded
+    companions 4-5 px from a ~2e4 hand-off primary were fitted and then dropped
+    because that primary's restored footprint reaches within 1 px of them; the
+    nearest still-lost SATURATED pixel is 3-22 px away.  A table without a
+    ``qfit`` column exempts nothing.
+    """
+    comp = _protect_mask(x, y, seed_xy, seed_radius_pix)
+    if not comp.any():
+        return comp
+    lost = np.zeros(len(x), dtype=float)
+    lost[in_frame] = lost_dist_map[iy[in_frame], ix[in_frame]]
+    comp &= lost > float(max_sat_dist_pix)
+    flux = np.asarray(tbl['flux_fit'], dtype=float)
+    comp &= np.isfinite(flux) & (flux > 0)
+    if 'qfit' in tbl.colnames:
+        comp &= np.isfinite(np.asarray(tbl['qfit'], dtype=float))
+    else:
+        comp[:] = False
+    return comp
+
+
 def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                             label, max_log_rows=50,
                             protect_xy=None, protect_radius_pix=0.0,
-                            handoff_xy=None, handoff_radius_pix=0.0):
+                            handoff_xy=None, handoff_radius_pix=0.0,
+                            companion_seed_xy=None,
+                            companion_seed_radius_pix=0.0,
+                            companion_restored_mask=None):
     """Drop fits from ``phot_obj.results`` whose center is within
     ``max_sat_dist_pix`` pixels of any SATURATED-DQ pixel and keep the
     PSFPhotometry object's state consistent.
@@ -1490,6 +1539,16 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         star's own fitted position is exempt; a fit farther away (a spike or
         wing detection) is still vetoed.  ``None`` (the default) leaves the
         behaviour unchanged.
+    companion_seed_xy, companion_seed_radius_pix : array-like (N, 2), float
+        Frame-pixel seed positions (env ``SATPROX_SEEDED_COMPANION``).  A fit
+        within ``companion_seed_radius_pix`` of one is exempt when it also
+        passes ``_seeded_companion_mask`` against ``companion_restored_mask``.
+        ``None`` (the default) leaves the behaviour unchanged.
+    companion_restored_mask : 2-D bool array, optional
+        SATURATED pixels the frame preparation gave back to the fit
+        (``_handoff_restore_pixels``).  Only the SATURATED pixels NOT in it
+        count as lost for the companion exemption; ``None`` counts every
+        SATURATED pixel as lost, so nothing is exempt.
     """
     if dq is None:
         return 0
@@ -1500,6 +1559,25 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
     # distance_transform_edt: distance to nearest True in the input mask.
     # We want distance to nearest saturated pixel, so feed ~sat_mask.
     sat_dist_map = ndimage.distance_transform_edt(~sat_mask)
+    use_companion = (companion_seed_xy is not None
+                     and len(companion_seed_xy) > 0
+                     and companion_seed_radius_pix > 0
+                     and companion_restored_mask is not None)
+    lost_dist_map = None
+    if use_companion:
+        restored = np.asarray(companion_restored_mask, dtype=bool)
+        if restored.shape != sat_mask.shape:
+            raise ValueError(
+                f"companion_restored_mask shape {restored.shape} != DQ shape "
+                f"{sat_mask.shape}")
+        lost = sat_mask & ~restored
+        if lost.any():
+            lost_dist_map = ndimage.distance_transform_edt(~lost)
+        else:
+            # every SATURATED pixel was restored: no lost pixel anywhere.
+            # distance_transform_edt of an all-True array is not a distance
+            # (it measures to a point outside the corner), so spell it out.
+            lost_dist_map = np.full(sat_mask.shape, np.inf)
 
     res = phot_obj.results
     if res is None or len(res) == 0:
@@ -1536,6 +1614,17 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                   f"fit(s) at satstar implied-peak-gate rejects "
                   f"(r={handoff_radius_pix:.2f}px; the gate hands these "
                   f"stars to daophot)", flush=True)
+    if drop.any() and use_companion:
+        comp = _seeded_companion_mask(
+            res, x, y, ix, iy, in_frame, seed_xy=companion_seed_xy,
+            seed_radius_pix=companion_seed_radius_pix,
+            lost_dist_map=lost_dist_map, max_sat_dist_pix=max_sat_dist_pix)
+        n_comp = int(np.sum(drop & comp))
+        if n_comp:
+            drop = drop & ~comp
+            print(f"Saturation-proximity filter ({label}): kept {n_comp} "
+                  f"seeded companion fit(s) > {max_sat_dist_pix:.1f}px from "
+                  f"every SATURATED pixel not restored to the fit", flush=True)
     n_drop = int(np.sum(drop))
     if n_drop == 0:
         return 0
@@ -1604,6 +1693,12 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                 sub_drop &= ~_protect_mask(sx, sy, protect_xy, protect_radius_pix)
             if sub_drop.any() and handoff_xy is not None and handoff_radius_pix > 0:
                 sub_drop &= ~_protect_mask(sx, sy, handoff_xy, handoff_radius_pix)
+            if sub_drop.any() and use_companion:
+                sub_drop &= ~_seeded_companion_mask(
+                    sub, sx, sy, s_ix, s_iy, s_in, seed_xy=companion_seed_xy,
+                    seed_radius_pix=companion_seed_radius_pix,
+                    lost_dist_map=lost_dist_map,
+                    max_sat_dist_pix=max_sat_dist_pix)
             sub_keep = ~sub_drop
             if sub_drop.any():
                 fr.results = sub[sub_keep]
@@ -1965,6 +2060,21 @@ def annotate_and_filter_by_local_snr(detection_table, noise_map, snr_threshold=5
     return filtered, stats
 
 
+def _satstar_psf_signature(filename, environ=None):
+    """``EPSFSHA`` a satstar catalog of ``filename`` carries under the current
+    ``PSF_EPSF_CORE_DIR`` (``expected_psf_signature`` for the frame's detector
+    and filter); ``''`` for STPSF and for a non-NIRCam frame.  The frame header
+    is read only when the variable is set."""
+    env = os.environ if environ is None else environ
+    if not env.get(EPSF_CORE_DIR_ENV, ''):
+        return ''
+    header = fits.getheader(filename, 0)
+    if str(header.get('INSTRUME', '')).upper() != 'NIRCAM':
+        return ''
+    return expected_psf_signature(
+        filtername_from_header(header), header['DETECTOR'], environ=env)
+
+
 @satstar_optin_scoped
 def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merged=False, overwrite=False,
                                  outside_star_pixels=None, outside_star_fit_box=512,
@@ -2008,7 +2118,18 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             filename, deblend_with_zeroframe=deblend_with_zeroframe)
         if recovery_signature is not None else None)
 
+    # The ePSF core the satstar fit uses (PSF_EPSF_CORE_DIR, #1208): '' for an
+    # STPSF run, which is also how an unstamped catalog reads, so STPSF caches
+    # stay valid.  Read from the frame header only when a core directory is
+    # set.
+    psf_signature = _satstar_psf_signature(filename)
+
     def _cache_ok(tbl):
+        # The PSF check comes first: the legacy ``recovery_signature is None``
+        # path below accepts every catalog, and must not accept one fitted with
+        # a different PSF.
+        if str(tbl.meta.get('EPSFSHA', '')) != psf_signature:
+            return False
         # A cached satstar catalog is valid only if it was built with the SAME
         # saturated-core recovery config as this run.  --satstar-*-recover change
         # the FIT (they de-saturate the core before the wing fit), so reusing a
@@ -2028,7 +2149,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         return (f"recovery config {tbl.meta.get('SATRECOV', '')!r} != "
                 f"{recovery_signature!r} or fit switches "
                 f"{str(tbl.meta.get('SATFITSW', ''))!r} != "
-                f"{fit_switch_signature!r}")
+                f"{fit_switch_signature!r} or PSF core "
+                f"{str(tbl.meta.get('EPSFSHA', ''))!r} != {psf_signature!r}")
 
     def _on_current_frame(tbl, cache_name):
         """Re-project a cache HIT onto the frame's current GWCS.
@@ -2036,7 +2158,12 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         The cache is keyed on the recovery/deblend config only, so it survives
         an offsets-table correction and a frame regeneration -- after which its
         stored ``skycoord_fit`` no longer matches its own pixel centroid.  The
-        FIT is still valid, so re-project rather than refit (issue #193)."""
+        FIT is still valid, so re-project rather than refit (issue #193).
+
+        The cache key carries no code version either, so a catalog written
+        before #949 is also brought to the detector-frame column vintage
+        here (idempotent; a current catalog passes through)."""
+        tbl = finalize_satstar_columns(tbl)
         tbl, shift = refresh_satstar_skycoords(tbl, frame_path=filename,
                                                catalog_path=cache_name)
         if np.isfinite(shift[0]) and np.hypot(*shift) > 5.0:
@@ -2044,6 +2171,9 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                   f"predates the frame's current WCS; re-projected its "
                   f"{len(tbl)} sources by {shift[0]:+.1f}/{shift[1]:+.1f} mas",
                   flush=True)
+        # After the re-projection, so the anchor is on the current frame (#951).
+        log_satstar_position_qa(tbl, frame_path=filename,
+                                label=os.path.basename(cache_name))
         return tbl
 
     extended_filename = filename.replace(
@@ -2119,7 +2249,10 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             # whether its own inputs match without rerunning the fitter.
             _satstar_cache.stamp_content_key(_fresh, _content_key)
     if os.path.exists(satstar_filename):
-        return Table.read(satstar_filename)
+        tbl = Table.read(satstar_filename)
+        log_satstar_position_qa(tbl, frame_path=filename,
+                                label=os.path.basename(satstar_filename))
+        return tbl
     return None
 
 
@@ -2391,9 +2524,10 @@ def load_data(filename):
     fh = fits.open(filename)
     im1 = fh
     # Single-group (G1-only) NIRCam pixels -> SATURATED|DO_NOT_USE + NaN, from
-    # the sibling _ramp.fits, in memory (crf written before the reduction-side
-    # hook carry a ~0.75x rate there).  No-op for mosaics / non-NIRCam;
-    # G1ONLY_SAT_DQ=0 disables.  See reduction/g1only_dq.py.
+    # the sibling _ramp.fits, in memory, on frames whose ramp fit gave them
+    # G1/TGROUP (0.75x for BRIGHT2); the default G1ONLY_SAT_DQ=auto measures
+    # that per frame and skips unbiased frames.  No-op for mosaics /
+    # non-NIRCam; G1ONLY_SAT_DQ=0 disables.  See reduction/g1only_dq.py.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1only_dq.apply_to_hdul(im1, filename, label='load_data')
     data = im1['SCI'].data
@@ -4808,6 +4942,37 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "fit covariance only lowers S/N, and the singleton gate "
                          "vetted out bright close-pair members (o105 F480M "
                          "full grouped chain: 144 rows with S/N >= 20, qfit < 0.4).")
+    parser.add_option("--manual-ext-group-qfit", dest="manual_ext_group_qfit",
+                    action='store_true',
+                    default=MANUAL_DEFAULTS['manual_ext_group_qfit'],
+                    help="Group-aware qfit (#1245).  The per-frame pass writes "
+                         "qfit_group for the members of a jointly fitted group "
+                         "(qfit with the member's flux replaced by the light in "
+                         "its fit box, partners included) and the extended-"
+                         "emission vetting reads it in place of qfit for the "
+                         "keep tiers and the previous-phase keep, so the fainter "
+                         "member of a close pair is no longer judged by a qfit "
+                         "that the brighter member's residual inflates.  The "
+                         "low_fit_quality column stays on the member's own "
+                         "qfit.  Needs per-frame catalogs written with this "
+                         "option; without the column the vetting uses qfit.  "
+                         "The qfit-confident bypass (kept regardless of S/N) "
+                         "also reads it, so an admitted grouped member skips "
+                         "the local S/N floor.  Default off.")
+    parser.add_option("--no-manual-ext-group-qfit", dest="manual_ext_group_qfit",
+                    action='store_false',
+                    default=MANUAL_DEFAULTS['manual_ext_group_qfit'],
+                    help="Turn --manual-ext-group-qfit off (the default).")
+    parser.add_option("--manual-ext-group-qfit-min-ratio",
+                    dest="manual_ext_group_qfit_min_ratio",
+                    type='float',
+                    default=MANUAL_DEFAULTS['manual_ext_group_qfit_min_ratio'],
+                    help="A grouped member fainter than this fraction of the "
+                         "brightest member of its group keeps its own qfit in "
+                         "qfit_group (default 0.1; 0 = no guard).  At 0.1 a "
+                         "spurious faint member within ~1 FWHM of a bright "
+                         "star can pass the flat qfit gate (qfit_group is "
+                         "0.13x its qfit); try 0.3 first.")
     parser.add_option("--manual-ext-hysteresis-qfit-max", dest="manual_ext_hysteresis_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_hysteresis_qfit_max'],
                     help="Previous-phase keep of the m3..m7 vetting (NIRCam): a "
@@ -5076,6 +5241,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "(e.g. W51 F480M, peak ~355 vs true saturation >1e4).  "
                           "-1 (default) = per-filter auto (NIRCam table; MIRI/unlisted "
                           "-> mask all); 0 = mask all SATURATED; >0 = explicit floor."))
+    parser.add_option("--truly-lost-saturation-in-fit",
+                    dest="truly_lost_saturation_in_fit",
+                    action="store_true", default=False,
+                    help=("Restrict the manual-path fit mask and the near-saturation "
+                          "veto to truly-lost saturation (SATURATED & DO_NOT_USE) "
+                          "instead of the any-group SATURATED flag, so pixels "
+                          "recovered by the ramp fit stay fittable (#418, #567).  "
+                          "Default off: the fit mask and the veto use every "
+                          "SATURATED pixel, as before.  Applies to the "
+                          "manual/cataloging path only; the legacy crowdsource "
+                          "step, the injection-recovery tests and the "
+                          "cross-exposure coverage mask keep the raw flag.  "
+                          "Recorded per frame as catalog header TLSATFIT.  The "
+                          "two arms write the same product names and "
+                          "--skip-if-done markers do not record the arm: run "
+                          "this arm in its own basepath."),
+                    )
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=MANUAL_DEFAULTS['manual_group_min_sep_fwhm'],
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
@@ -5291,6 +5473,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
+    parser.add_option('--manual-crossband-seed-min-frac', type=float,
+                      dest='manual_crossband_seed_min_frac', default=MANUAL_DEFAULTS['manual_crossband_seed_min_frac'],
+                      help=('Seed health (#981): the m7 cross-band seed is flagged as '
+                            'collapsed when any band has fewer than this fraction of '
+                            'its good m6 detections inside a kept cluster (bands '
+                            'mis-registered by more than the match radius).  '
+                            'Default %default.'),
+                      metavar='manual_crossband_seed_min_frac')
+    parser.add_option('--manual-crossband-seed-collapse-action', type='choice',
+                      choices=['warn', 'raise'],
+                      dest='manual_crossband_seed_collapse_action', default=MANUAL_DEFAULTS['manual_crossband_seed_collapse_action'],
+                      help=("What a collapsed m7 cross-band seed does: 'warn' prints "
+                            "a WARNING and continues; 'raise' stops the run "
+                            'before the m7 compute is spent.  Default %default.'),
+                      metavar='manual_crossband_seed_collapse_action')
     parser.add_option('--manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
                       action='store_true',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
@@ -5415,6 +5612,25 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'merges split a single star into two reference rows; the '
                             'dedup collapses complementary-coverage pairs while '
                             'preserving resolved binaries.'))
+    parser.add_option('--m8-dedup-winner-emag-ratio',
+                      dest='m8_dedup_winner_emag_ratio',
+                      default=None, type='float',
+                      help=('Winner hysteresis for the m8 dedup (#1278): a '
+                            'merged row keeps its primary row\'s own measurement '
+                            'of a band unless the other member\'s emag_ab is '
+                            'below RATIO times the primary\'s (e.g. 0.8).  '
+                            'Default: off, the lowest-emag member always wins.'),
+                      metavar='RATIO')
+    parser.add_option('--m8-dedup-band-resolve-mas',
+                      dest='m8_dedup_band_resolve_mas',
+                      default=None,
+                      help=('Resolved-in-band guard for the m8 dedup (#1278): two '
+                            'rows that a band detects independently at '
+                            'skycoord_<band> positions further apart than this '
+                            'are not merged whatever their magnitudes.  A number '
+                            '(all bands) or BAND=MAS,... (e.g. f212n=60).  '
+                            'Default: off.'),
+                      metavar='MAS')
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')
@@ -5667,7 +5883,55 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'order, so the m8 catalog is identical to the serial '
                             'path (#1230).  Each process adds one prepared '
                             'frame to the memory in use.'))
+    parser.add_option('--forced-fill-bkg-scatter', dest='forced_fill_bkg_scatter',
+                      default=False, action='store_true',
+                      help=('Add each m8 forced-fill source\'s local background '
+                            'scatter (1.4826 MAD of the frame data in a 2.5-4.5 '
+                            'FWHM annulus, inner radius at least 4 pixels, with '
+                            'median ERR^2 subtracted) to the per-pixel crf ERR '
+                            'in quadrature, so forced_snr, flux_ulim, emag_ab '
+                            'and the detection cut rest on the larger error.  '
+                            'Writes forced_bkg_sigma_<filter> (per pixel) and '
+                            'forced_bkg_nframes_<filter>.  Default off: the crf '
+                            'ERR holds no term for background structure and '
+                            'the m8 limits on bright extended emission are '
+                            'deeper than the local noise (#1120).'))
+    parser.add_option('--forced-fill-nbrsub', dest='forced_fill_nbrsub',
+                      default=False, action='store_true',
+                      help=('Fit each m8 forced-fill frame with its own m7 '
+                            'star-only model removed, and add back the m7 '
+                            'sources within 40 mas of a target, so the other '
+                            'stars of the band stop contributing to the fit.  '
+                            'Needs the m7 per-frame model and catalogue; a '
+                            'frame without both is fitted unsubtracted and '
+                            'left out of the combine of any target that has '
+                            'a subtracted frame; a target with none is not '
+                            'promoted.  Writes forced_nbrsub_<filter> and '
+                            'forced_near_m7_sep_<filter>.  Default off '
+                            '(#1284).'))
+    parser.add_option('--forced-fill-nrand', dest='forced_fill_nrand',
+                      default=0, type='int',
+                      help=('Fit N random blank positions per band in the m8 '
+                            'forced fill and scale every target\'s error by '
+                            'the 16-84 percentile half-width of their '
+                            'flux/error (at least 1), so forced_snr, '
+                            'flux_ulim and the detection cut rest on the '
+                            'measured scatter.  Writes forced_err_scale_ and '
+                            'forced_snr_raw_<filter>.  Default 0 = off; needs '
+                            '--forced-fill-nbrsub (warns without it) '
+                            '(#1284).'))
     (options, args) = parser.parse_args()
+
+    # The m8 dedup runs at the end of the m8 phase, inside a handler that logs
+    # a failure and carries on; a malformed option would cost the dedup product
+    # only after the whole fill.  Reject it here instead (#1278).
+    from jwst_gc_pipeline.photometry.dedup_catalog import (
+        check_winner_emag_ratio, parse_band_resolve_mas)
+    try:
+        check_winner_emag_ratio(options.m8_dedup_winner_emag_ratio)
+        parse_band_resolve_mas(options.m8_dedup_band_resolve_mas)
+    except ValueError as _dedup_err:
+        parser.error(f"--m8-dedup-*: {_dedup_err}")
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the
     # instrument must be stated explicitly.  Set the process-global env override

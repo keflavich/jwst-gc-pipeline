@@ -139,8 +139,11 @@ def _tile_view_from_region(region):
         'tile_tol_mas': _finite(region.get('tol_mas')),
         # Regions that hold sources but not the matched pairs the field rate
         # predicts (a region displaced beyond the match radius).  They are
-        # outside `cells`/`n_cells`, and they alone can make `clean` False with
-        # nothing flagged, so they are published beside `tiles_ok`.
+        # outside `cells`/`n_cells`, and they can make `clean` False with
+        # nothing flagged -- as can a reference too sparse to test coverage
+        # (`ref_too_sparse`, issue #1191), which has no uncovered cell to count
+        # and is then named in `tile_reason` -- so they are published beside
+        # `tiles_ok`.
         'tiles_uncovered': region.get('n_uncovered'),
         'tile_reason': region.get('reason'),
         'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
@@ -734,7 +737,13 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
     if not os.path.isdir(ckdir):
         return {}
     out = {}
-    for path in sorted(glob.glob(os.path.join(ckdir, 'checkpoint_m2_*_latest.json'))):
+    # Current records only (issue #827): an untokened pre-migration file is
+    # dropped where a tokened one covers the same filter, instead of being shown
+    # beside it as a second verdict.  Imported here, not at module level, because
+    # astrometry_checkpoint itself imports this module lazily.
+    from ..photometry.astrometry_checkpoint import current_records
+    m2_paths = sorted(p for k, p in current_records(ckdir).items() if k[0] == 'm2')
+    for path in m2_paths:
         # Records are keyed on the observation (issue #281), so two of them can
         # describe the same filter.  `out[filt]` is last-wins, which silently
         # discards one observation's verdict -- key on the token as well.

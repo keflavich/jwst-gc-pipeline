@@ -490,3 +490,30 @@ def test_remove_saturated_stars_stamps_the_switch_signature(tmp_path,
     SSF.remove_saturated_stars(fn, recovery_signature='off',
                                fit_switch_signature='')
     assert 'SATFITSW' not in Table.read(cat).meta
+
+
+def test_signature_keys_the_deblend_psf_margin(tmp_path, monkeypatch):
+    """SATSTAR_DEBLEND_PSF_MARGIN changes which peaks the deblend keeps (#1195),
+    so it keys the cache when the deblend runs, and only then: the deblend reads
+    the ZEROFRAME, so a frame without a sibling ``_ramp.fits`` never runs it and
+    keeps its key."""
+    (tmp_path / 'noramp').mkdir()
+    fn = _frame(tmp_path, with_ramp=True)
+    no_ramp = _frame(tmp_path / 'noramp', with_ramp=False)
+    base = satstar_fit_switch_signature(fn, deblend_with_zeroframe=True)
+    assert 'dv' not in base
+    monkeypatch.setenv('SATSTAR_DEBLEND_PSF_MARGIN', '0.25')
+    # not asked for: no deblend, no key
+    assert satstar_fit_switch_signature(fn) == base
+    assert satstar_fit_switch_signature(
+        fn, deblend_with_zeroframe=True) == base + '_dv0.25'
+    monkeypatch.setenv('SATSTAR_DEBLEND_PSF_MARGIN', '0.1')
+    assert satstar_fit_switch_signature(
+        fn, deblend_with_zeroframe=True) == base + '_dv0.1'
+    # no ramp: the deblend cannot run, so the key is the margin-off key
+    assert satstar_fit_switch_signature(
+        no_ramp, deblend_with_zeroframe=True) == satstar_fit_switch_signature(
+        no_ramp)
+    monkeypatch.setenv('SATSTAR_DEBLEND_PSF_MARGIN', '0')
+    assert satstar_fit_switch_signature(
+        fn, deblend_with_zeroframe=True) == base

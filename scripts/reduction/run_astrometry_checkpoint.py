@@ -78,6 +78,20 @@ def main(argv=None):
     p.add_argument("--catalog", action="append", default=[],
                    help="FILTER=path vetted merged catalog (crossfilter mode)")
     p.add_argument("--crossfilter", action="store_true")
+    p.add_argument("--module", default="", type=str.lower,
+                   choices=("", "merged", "nrca", "nrcb"),
+                   help="crossfilter mode: merge module the record is keyed on "
+                        "(merged/nrca/nrcb).  The m7 gate grades each module's "
+                        "latest record, so a manual re-run supersedes the "
+                        "production record only when it carries the same "
+                        "module; without it the record is a module-less "
+                        "legacy one (issue #1212)")
+    p.add_argument("--anchor-bright-c", type=float, default=None, metavar="C",
+                   help="crossfilter mode: tie the anchor to the reference on "
+                        "its brightest K = clamp(C * n_ref_in_footprint, 5000, "
+                        "n_reliable) stars, with the K/2 tie required to "
+                        "agree (issue #1212).  Default: off, whole reliable "
+                        "sample.  CROSSFILTER_ANCHOR_BRIGHT_C sets it too")
     p.add_argument("--refcat", default=None,
                    help="gaia+virac2 seed refcat FITS (build_gaia_virac2_refcat_byquery)")
     p.add_argument("--basepath", default=None)
@@ -137,6 +151,13 @@ def main(argv=None):
                    help="drop the dense references the exposures resolve into "
                         "a binary or group from the reference tie (issue #957).")
     args = p.parse_args(argv)
+    if not args.crossfilter:
+        # these only reach run_crossfilter_checkpoint; elsewhere they would be
+        # silently ignored and the run graded as if they had not been given
+        for flag, given in (("--module", bool(args.module)),
+                            ("--anchor-bright-c", args.anchor_bright_c is not None)):
+            if given:
+                p.error(f"{flag} only applies with --crossfilter")
 
     if args.seed and args.pool:
         # --pool exists because "module-family rows cannot express a
@@ -203,7 +224,8 @@ def main(argv=None):
         record = run_crossfilter_checkpoint(
             catalogs, refcat=refcat, basepath=args.basepath,
             record_dir=args.record_dir, context="cli",
-            obs_token=consensus_obs_token(args.proposal_id, args.obsid))
+            obs_token=consensus_obs_token(args.proposal_id, args.obsid),
+            module=args.module, anchor_bright_c=args.anchor_bright_c)
         print(json.dumps(dict(passed=record["passed"],
                               anchor=record.get("anchor_filter"),
                               failures=record.get("failures", [])), indent=2))

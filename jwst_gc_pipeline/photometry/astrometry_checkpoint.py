@@ -64,6 +64,7 @@ from astropy import units as u
 from astropy.table import Table
 
 from .reference_blends import blended_reference_mask
+from .exposure_trail import assess_visit_trails
 from .satstar_consensus import consensus_with_satstars
 from .visit_consensus import (
     EXPOSURE_CONSENSUS_TOL_MAS, DETECTOR_ANTISYMMETRY_MIN_MAS,
@@ -3305,6 +3306,96 @@ def parse_record_name(basename):
             'obs': obs, 'proposal': proposal, 'module': module}
 
 
+def record_is_tokenised(info):
+    """True when a parsed record name carries an observation or proposal token.
+
+    ngc6334's shared-tree token (``_j7213``) counts alongside an obs token: both
+    name the run that wrote the record.
+    """
+    return bool(info['obs'] or info['proposal'])
+
+
+def record_supersession_key(info):
+    """The identity under which a tokened record supersedes an untokened one.
+
+    An untokened record cannot say which observation it belonged to, so the only
+    safe reading is that a tokened record for the same stage, filter and merge
+    module replaces it.
+    """
+    return (info['stage'], info['filt'], info.get('module'))
+
+
+def prefer_tokenised(found, info_of=None):
+    """Drop an UNTOKENED record when a tokened sibling exists (issue #827).
+
+    Obs tokens were added partway through, so a field carries both
+    ``checkpoint_m3_F187N_latest.json`` (written before, and never overwritten
+    again once the tokened name took over) and
+    ``checkpoint_m3_F187N_o007_latest.json``.  Both end in ``_latest.json``, so
+    a glob reads both, and a superseded record from an earlier campaign then
+    answers for the field no matter what the current run measured.
+
+    ``found`` is any list; ``info_of`` maps an item to its
+    :func:`parse_record_name` dict (default: the item's second element, the
+    ``(path, info, record)`` shape the release gate uses).  Tokened wins over
+    untokened regardless of mtime: a freshly rerun untokened record from an old
+    checkout must not beat a tokened one.
+    """
+    info_of = info_of or (lambda item: item[1])
+    tokenised = {record_supersession_key(info_of(x)) for x in found
+                 if record_is_tokenised(info_of(x))}
+    return [x for x in found
+            if record_is_tokenised(info_of(x))
+            or record_supersession_key(info_of(x)) not in tokenised]
+
+
+def record_mtime(path):
+    """mtime of a record, following a symlink but surviving a dangling one.
+
+    ``os.path.getmtime`` raises ``FileNotFoundError`` on a symlink whose target
+    is gone; release trees carry symlinks, so a broken one in a checkpoint
+    directory must not take a listing down.  A dangling link reports its own
+    mtime.
+    """
+    try:
+        return os.path.getmtime(path)
+    except FileNotFoundError:
+        return os.lstat(path).st_mtime
+
+
+def current_records(record_dir, include_history=False):
+    """``{(stage, filt, module, obs, proposal): path}`` of the CURRENT records.
+
+    Lists ``checkpoint_*_latest.json`` under ``record_dir`` (the timestamped
+    history siblings as well when ``include_history``), parses each name with
+    :func:`parse_record_name`, skips names that are not checkpoint records and
+    drops every untokened record that a tokened one supersedes
+    (:func:`prefer_tokenised`).  Where several files share one key, which only
+    happens with ``include_history``, the newest mtime wins (the later name on
+    a tie).
+
+    This is the one reader the secondary tools should use instead of a bare
+    ``glob('checkpoint_*_latest.json')``, which also matches the pre-migration
+    untokened names.
+    """
+    pattern = 'checkpoint_*.json' if include_history else 'checkpoint_*_latest.json'
+    found = []
+    for path in sorted(glob.glob(os.path.join(str(record_dir), pattern))):
+        info = parse_record_name(os.path.basename(path))
+        if info is not None:
+            found.append((path, info))
+    out = {}
+    for path, info in prefer_tokenised(found):
+        key = (info['stage'], info['filt'], info['module'],
+               info['obs'], info['proposal'])
+        # Equal mtimes (a copy that dropped them) fall to the later name, which
+        # for timestamped siblings is the newer record.
+        if key not in out or ((record_mtime(path), path)
+                              > (record_mtime(out[key]), out[key])):
+            out[key] = path
+    return out
+
+
 def _filter_is_obs_ambiguous(record_dir, filtername):
     """True when more than one observation of this field images ``filtername``.
 
@@ -4041,11 +4132,17 @@ def _spatial_gate_detail(tie):
         tol = reg.get("tol_mas")
         tol_str = (f", tol={tol:.1f} mas [{reg.get('tol_source')}]"
                   if tol is not None and np.isfinite(tol) else "")
+        # Cells whose coverage test the reference count made untestable
+        # (issue #1191); named only when there are some, so records that
+        # never needed the bound read as before.
+        n_refb = reg.get("n_ref_bound_untestable") or 0
+        refb_str = (f", {n_refb} too thin in the reference to test"
+                    if n_refb else "")
         return (f"same-star region map clean={reg.get('clean')} "
                 f"status={rm.get('status')} "
                 f"({reg.get('n_cells')} cells, {reg.get('n_flagged')} flagged, "
                 f"{reg.get('n_uncovered')} uncovered, "
-                f"{reg.get('n_skipped')} unchecked{tol_str})")
+                f"{reg.get('n_skipped')} unchecked{refb_str}{tol_str})")
     return f"per-tile histogram grid clean={(tie.get('per_tile') or {}).get('clean')}"
 
 
@@ -4430,6 +4527,28 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             unverified.append(f"{vctx}: consensus build failed: {ex}")
             continue
 
+        # Trailed-exposure reading (#733).  RECORD ONLY: it names the exposures
+        # whose stars are smeared against their siblings in the visit's
+        # `trail` block and in one line below, and gates nothing -- the
+        # thresholds are provisional until they have been read over the fields
+        # on disk.  A frozen stage does not reopen the pixels; the m2 record
+        # holds the reading.
+        trail = assess_visit_trails(tables) if correcting else None
+        if trail is not None:
+            if trail["n_measured"] < trail["n_frames"]:
+                # An unmeasurable visit must not look like a clean one.
+                print(f"ASTROM CHECKPOINT [{stage}] trail reading (advisory): "
+                      f"{vctx}: {trail['n_measured']} of {trail['n_frames']} "
+                      f"frames measured, so the sibling comparison is "
+                      f"{'absent' if not trail['n_measured'] else 'partial'}",
+                      flush=True)
+            for t_exp in trail["exposures"]:
+                if t_exp["verdict"] in ("flagged", "reviewed"):
+                    print(f"ASTROM CHECKPOINT [{stage}] TRAILED EXPOSURE "
+                          f"(advisory, nothing is gated on it): {vctx} exposure "
+                          f"{t_exp['exposure']} {t_exp['stems']}: "
+                          f"{t_exp['verdict']} -- {t_exp['reason']}", flush=True)
+
         # ---- per-exposure vs consensus ------------------------------------
         # At a frozen stage the per-exposure gate is a MOVEMENT check vs the m2
         # baseline (see _m2_exposure_baseline), NOT an absolute vs-consensus
@@ -4546,6 +4665,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             ("dra", "ddec", "off", "npairs", "contrast", "ok",
                              "swept", "window_arcsec", "dra_err", "ddec_err",
                              "n_peak", "window_edge_fraction",
+                             "peak_significance", "min_peak_significance",
+                             "bin_arcsec",
                              "window_consistent", "alias_rejected")})
             exp_records.append(rec)
             if exp.get("unverified"):
@@ -5119,6 +5240,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 reported=bool(det_antisym["detected"] and det_extra),
                 keys=[list(k) for k in sorted(det_antisym["keys"])],
                 examples=[_jsonable(x) for x in det_antisym["examples"]]),
+            trail=trail,
             exposures=exp_records,
             reference_tie=_jsonable(ref_tie),
             # Present only when the raw frozen-stage delta exceeded tolerance:
@@ -5239,6 +5361,101 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
 # the cross-filter (m7) checkpoint
 # ---------------------------------------------------------------------------
 
+#: Opt-in switch (issue #1212) for tying the cross-filter ANCHOR to the reference
+#: on its brightest stars only.  Unset (the default) leaves the anchor tie on
+#: the whole reliable sample, record and verdict unchanged.  The value is the
+#: factor ``c`` in ``K = clamp(c * n_ref_in_footprint, ANCHOR_TIE_MIN_K, n)``.
+#: Whether the restricted tie should become the gate's definition of a
+#: coherent anchor tie for every field is a maintainer decision (Q23 in the
+#: proposal notes), so the switch is explicit rather than a new default.
+ANCHOR_BRIGHT_C_ENV = "CROSSFILTER_ANCHOR_BRIGHT_C"
+#: Floor on K, so a sparse reference footprint cannot reduce the anchor sample
+#: to a handful of stars.
+ANCHOR_TIE_MIN_K = 5000
+#: The ties at K and K/2 must agree to this (mas, on-sky quadrature) for the
+#: restricted anchor tie to stand: a tie that appears at one K only fails.
+ANCHOR_TIE_AGREE_TOL_MAS = 5.0
+
+
+def anchor_bright_factor(value=None):
+    """Resolve the brightest-K factor ``c``: ``value``, else the environment.
+
+    ``None`` means the switch is off.  A non-positive or unparseable setting
+    raises ``ValueError`` rather than silently disabling a gate the operator
+    meant to change.
+    """
+    raw = value if value is not None else os.environ.get(ANCHOR_BRIGHT_C_ENV, "").strip()
+    if raw is None or raw == "":
+        return None
+    try:
+        c = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{ANCHOR_BRIGHT_C_ENV}={raw!r} is not a number")
+    if not (c > 0) or not np.isfinite(c):
+        raise ValueError(f"{ANCHOR_BRIGHT_C_ENV}={raw!r} must be positive and finite")
+    return c
+
+
+def _n_ref_in_footprint(ref_coords, coords):
+    """Reference rows inside the RA/Dec bounding box of ``coords``."""
+    ra = np.asarray(coords.ra.deg, dtype=float)
+    dec = np.asarray(coords.dec.deg, dtype=float)
+    good = np.isfinite(ra) & np.isfinite(dec)
+    if not good.any():
+        return 0
+    ra0 = float(np.median(ra[good]))
+    wrap = lambda r: (np.asarray(r, dtype=float) - ra0 + 180.0) % 360.0 - 180.0
+    dra = wrap(ra[good])
+    rra = wrap(ref_coords.ra.deg)
+    rdec = np.asarray(ref_coords.dec.deg, dtype=float)
+    inside = ((rra >= dra.min()) & (rra <= dra.max())
+              & (rdec >= dec[good].min()) & (rdec <= dec[good].max()))
+    return int(inside.sum())
+
+
+def _anchor_tie_sample(tbl, keep, coords, ref_coords, c):
+    """Brightness-ordered anchor sample for the reference tie (issue #1212).
+
+    ``keep`` is the reliable-star mask of ``tbl`` and ``coords`` the matching
+    coordinates (``catalog_coords(tbl)[keep]``).  Returns ``(order, info)``:
+    ``order`` indexes ``coords``, brightest first, and ``info`` is the
+    auditable ``anchor_sample`` record.  The full catalogue ties to VIRAC2
+    badly when most of its faint stars have no Ks-selected counterpart: the
+    pairs are then mostly chance pairs and the histogram contrast falls under
+    the floor although the frame is registered.  K follows the number of
+    reference rows the footprint holds, which is the number of true pairs the
+    anchor can have at most.
+    """
+    n = int(len(coords))
+    info = dict(n_reliable=n, n_used=n, K=n, c=float(c), n_ref_in_footprint=None,
+                rule="unrestricted")
+    # The first of flux, flux_fit, mag that has a finite value among the
+    # reliable stars: a column that exists but is all NaN (a fit that failed
+    # everywhere) must not hide a usable one behind it.  Masked entries read as
+    # NaN, not as the data underneath the mask.
+    brightness = None
+    for name, sign in (("flux", 1.0), ("flux_fit", 1.0), ("mag", -1.0)):
+        if name not in tbl.colnames:
+            continue
+        col = np.ma.filled(np.ma.asarray(tbl[name]).astype(float), np.nan)[keep]
+        if np.isfinite(col).any():
+            brightness = sign * col
+            info["column"] = name
+            break
+    if brightness is None:
+        info["rule"] = "unrestricted: no finite flux, flux_fit or mag among the reliable stars"
+        return np.arange(n), info
+    brightness = np.where(np.isfinite(brightness), brightness, -np.inf)
+    order = np.argsort(-brightness, kind="stable")
+    n_ref = _n_ref_in_footprint(ref_coords, catalog_coords(tbl))
+    k = int(min(max(round(c * n_ref), ANCHOR_TIE_MIN_K), n))
+    info.update(n_ref_in_footprint=n_ref, K=k, n_used=k,
+                rule=(f"brightest K = clamp(c * n_ref_in_footprint, "
+                      f"{ANCHOR_TIE_MIN_K}, n_reliable)"
+                      if k < n else "unrestricted: K >= n_reliable"))
+    return order, info
+
+
 def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                record_dir=None, context="",
                                tol_mas=CROSSFILTER_TOL_MAS,
@@ -5247,7 +5464,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                cell_min_stars=LOCAL_CELL_MIN_STARS,
                                field_cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
                                field_min_stars=CROSSFILTER_FIELD_MIN_STARS,
-                               obs_token="", module=""):
+                               obs_token="", module="", anchor_bright_c=None):
     """Cross-filter astrometry agreement at the cross-band merge.
 
     The filter closest in wavelength to VIRAC2 Ks anchors the absolute frame
@@ -5271,6 +5488,15 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     made each call replace the previous module's ``_latest`` record (issue
     #1254: a cloudef nrcb FAIL was overwritten by the merged PASS).
 
+    ``anchor_bright_c`` (default off; the ``CROSSFILTER_ANCHOR_BRIGHT_C``
+    environment variable sets it when the argument is ``None``) ties the anchor
+    to the reference on its brightest K reliable stars instead of all of them,
+    K = clamp(c * n_ref_in_footprint, 5000, n_reliable), and requires the tie at
+    K/2 to be coherent and to agree with the tie at K to within 5 mas (issue
+    #1212).  The per-filter-vs-anchor checks keep the full reliable sample.  The
+    record then carries ``anchor_sample`` and ``anchor_reference_tie_half``;
+    with the switch off the record carries neither.
+
     Raises ``CrossFilterAstrometryError`` on any failure (override only via
     ``ALLOW_CROSSFILTER_ASTROM_FAIL=1``).
     """
@@ -5286,14 +5512,26 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     anchor_keep = select_reliable_stars(anchor_tbl)
     anchor_coords = catalog_coords(anchor_tbl)[anchor_keep]
 
+    bright_c = anchor_bright_factor(anchor_bright_c)
     anchor_tie = None
+    anchor_tie_half = None
+    anchor_sample = None
     if refcat is not None:
-        anchor_tie = measure_reference_tie(
-            anchor_coords, refcat["all"], refcat["sparse"],
-            filtername=anchor_filter, ref_mag=refcat.get("mag"),
-            dense=refcat.get("dense", True),
-            **_sigma_cut_kwargs(refcat),
-            context=f"{context} anchor {anchor_filter}")
+        tie_coords = anchor_coords
+        if bright_c is not None:
+            order, anchor_sample = _anchor_tie_sample(
+                anchor_tbl, anchor_keep, anchor_coords, refcat["all"], bright_c)
+            tie_coords = anchor_coords[order[:anchor_sample["K"]]]
+
+        def _anchor_tie(coords, label):
+            return measure_reference_tie(
+                coords, refcat["all"], refcat["sparse"],
+                filtername=anchor_filter, ref_mag=refcat.get("mag"),
+                dense=refcat.get("dense", True),
+                **_sigma_cut_kwargs(refcat),
+                context=f"{context} anchor {anchor_filter}{label}")
+
+        anchor_tie = _anchor_tie(tie_coords, "")
 
     filters = []
     failures = []
@@ -5329,6 +5567,30 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
             else:
                 detail = "per-tile reference map not clean"
             failures.append(f"anchor {anchor_filter}: {detail}")
+        elif anchor_sample is not None and anchor_sample["K"] < anchor_sample["n_reliable"]:
+            # The tie at K passed every check above.  It must not be a feature
+            # of one sample size: repeat it on the brightest K/2 and require
+            # the two to agree (issue #1212).
+            half = max(anchor_sample["K"] // 2, 1)
+            anchor_tie_half = _anchor_tie(
+                anchor_coords[order[:half]], " (K/2)")
+            anchor_sample["K_half"] = half
+            vs_half = anchor_tie_half.get("vs_full")
+            if not vs_half or not vs_half.get("ok"):
+                failures.append(
+                    f"anchor {anchor_filter}: tie on the brightest K={anchor_sample['K']} "
+                    f"stars is coherent but the tie on the brightest {half} is not")
+            else:
+                sep = float(np.hypot(
+                    anchor_tie["dra_mas"] - anchor_tie_half["dra_mas"],
+                    anchor_tie["ddec_mas"] - anchor_tie_half["ddec_mas"]))
+                anchor_sample["k_vs_half_sep_mas"] = sep
+                anchor_sample["agree_tol_mas"] = ANCHOR_TIE_AGREE_TOL_MAS
+                if not (sep <= ANCHOR_TIE_AGREE_TOL_MAS):
+                    failures.append(
+                        f"anchor {anchor_filter}: ties on the brightest {half} and "
+                        f"{anchor_sample['K']} stars disagree by {sep:.2f} mas "
+                        f"(> {ANCHOR_TIE_AGREE_TOL_MAS} mas)")
 
     for filt, tbl in sorted(catalogs_by_filter.items()):
         if filt == anchor_filter:
@@ -5502,6 +5764,9 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                   local_cell_min_stars=cell_min_stars,
                                   field_cell_arcsec=field_cell_arcsec,
                                   field_min_stars=field_min_stars))
+    if anchor_sample is not None:
+        record["anchor_sample"] = _jsonable(anchor_sample)
+        record["anchor_reference_tie_half"] = _jsonable(anchor_tie_half)
     if record_dir:
         # Tokened for the same reason the m2 records are (issue #281): brick's
         # 1182 and 2221 m7 runs write into one `astrometry_checkpoints/`, and

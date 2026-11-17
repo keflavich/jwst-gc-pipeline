@@ -504,6 +504,7 @@ def _perframe(basepath, exp, label, tag, phase='m4'):
     os.makedirs(os.path.dirname(fn), exist_ok=True)
     t = Table({'flux_fit': [1.0]})
     t.meta['FILENAME'] = f'/x/{tag}_exp{exp:05d}_crf.fits'
+    t.meta['pixscale'] = 0.063   # the per-frame writer stamps it (#1238)
     t.write(fn)
     return fn
 

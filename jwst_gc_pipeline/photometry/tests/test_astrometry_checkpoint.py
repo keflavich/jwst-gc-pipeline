@@ -2663,3 +2663,366 @@ def test_the_dispersion_of_three_members_is_the_widest_pair(tmp_path):
                dict(dra_onsky_mas=0.0, ddec_onsky_mas=10.0),
                dict(dra_onsky_mas=-10.0, ddec_onsky_mas=0.0)]
     assert _max_pairwise_separation(members) == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------------------
+# brightest-K anchor tie (issue #1212)
+# ---------------------------------------------------------------------------
+
+def _anchor_tie_catalogs(shift_mas=0.0, n_bright=600, n_faint=4800,
+                         n_ref_extra=200, extent=60.0, seed=3,
+                         west_shift_mas=0.0):
+    """An anchor with a bright population the reference also holds and a faint
+    population (``n_faint`` / ``n_bright`` = 8x) it has no counterpart for, as
+    VIRAC2 (Ks-selected) is to a JWST F200W catalogue.  The second filter is
+    the same detections, so the per-filter checks pass whatever the anchor's
+    registration.  ``shift_mas`` moves the anchor and the second filter off
+    the reference frame together."""
+    rng = np.random.default_rng(seed)
+
+    def _xy(n):
+        return rng.uniform(0, extent, n), rng.uniform(0, extent, n)
+
+    bx, by = _xy(n_bright)
+    fx, fy = _xy(n_faint)
+    ex, ey = _xy(n_ref_extra)
+
+    def _sky(x, y, dra_mas=0.0):
+        n = len(x)
+        dra_mas = np.broadcast_to(dra_mas, n)
+        return SkyCoord(
+            ra=(RA0 + x / 3600.0 / COSD
+                + (dra_mas + rng.normal(0, 1.0, n)) / 3.6e6 / COSD) * u.deg,
+            dec=(DEC0 + y / 3600.0 + rng.normal(0, 1.0, n) / 3.6e6) * u.deg,
+            frame="icrs")
+
+    x = np.concatenate([bx, fx])
+    y = np.concatenate([by, fy])
+    flux = np.concatenate([rng.uniform(1e4, 1e5, n_bright),
+                           rng.uniform(1e2, 1e3, n_faint)])
+
+    def _tbl(sel):
+        t = Table()
+        dra = shift_mas + np.where(x[sel] < extent / 2, west_shift_mas, 0.0)
+        t["skycoord"] = _sky(x[sel], y[sel], dra)
+        t["flux"] = flux[sel]
+        t["flux_err"] = flux[sel] / 100.0
+        t["qfit"] = rng.uniform(0.01, 0.05, int(np.count_nonzero(sel)))
+        return t
+
+    ref = _sky(np.concatenate([bx, ex]), np.concatenate([by, ey]), 0.0)
+    refcat = dict(all=ref, sparse=ref[::10], mag=None, dense=True)
+    # The second filter holds the bright detections only, which keeps the
+    # per-filter sweep cheap; the anchor carries the faint population.
+    everything = np.ones(len(x), dtype=bool)
+    bright = np.arange(len(x)) < n_bright
+    return {"F212N": _tbl(everything), "F405N": _tbl(bright)}, refcat
+
+
+@pytest.fixture(params=[30.0, 60.0, 150.0])
+def west_shift_mas(request):
+    return request.param
+
+
+@pytest.fixture
+def small_anchor_k(monkeypatch):
+    monkeypatch.setattr(_ac, "ANCHOR_TIE_MIN_K", 300)
+    monkeypatch.delenv("ALLOW_CROSSFILTER_ASTROM_FAIL", raising=False)
+    monkeypatch.delenv("ASTROM_CHECKPOINT_WARN_ONLY", raising=False)
+    monkeypatch.setenv("ASTROM_CHECKPOINT_ENFORCE", "stage")
+    monkeypatch.delenv(_ac.ANCHOR_BRIGHT_C_ENV, raising=False)
+
+
+def _anchor_tie_run(cats, refcat, tmp_path, **kw):
+    return run_crossfilter_checkpoint(cats, refcat=refcat, record_dir=str(tmp_path),
+                                      cell_min_stars=15, context="test", **kw)
+
+
+def test_anchor_tie_full_sample_is_diluted_by_faint_stars(tmp_path, small_anchor_k):
+    """Without the switch the anchor ties on all reliable stars: 4800 faint
+    stars with no reference counterpart bury the 600 true pairs."""
+    cats, refcat = _anchor_tie_catalogs()
+    with pytest.raises(CrossFilterAstrometryError) as exc:
+        _anchor_tie_run(cats, refcat, tmp_path)
+    assert "anchor F212N" in str(exc.value)
+
+
+def test_anchor_tie_brightest_k_passes_and_is_recorded(tmp_path, small_anchor_k):
+    cats, refcat = _anchor_tie_catalogs()
+    rec = _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert rec["passed"], rec["failures"]
+    sample = rec["anchor_sample"]
+    assert sample["n_reliable"] == 5400
+    assert sample["n_ref_in_footprint"] == 800
+    assert sample["K"] == sample["n_used"] == 800
+    assert sample["K_half"] == 400
+    assert sample["k_vs_half_sep_mas"] <= sample["agree_tol_mas"]
+    assert rec["anchor_reference_tie_half"]["vs_full"]["ok"]
+
+
+def test_anchor_tie_switch_off_leaves_the_record_unchanged(
+        tmp_path, small_anchor_k, monkeypatch):
+    # release enforcement records a failure instead of raising it, so the
+    # record can be inspected whatever this small field's tie reads
+    monkeypatch.setenv("ASTROM_CHECKPOINT_ENFORCE", "release")
+    cats, refcat = _anchor_tie_catalogs(n_faint=0)
+    rec = _anchor_tie_run(cats, refcat, tmp_path)
+    assert "anchor_sample" not in rec
+    assert "anchor_reference_tie_half" not in rec
+
+
+def test_anchor_tie_env_switch(tmp_path, small_anchor_k, monkeypatch):
+    monkeypatch.setenv(_ac.ANCHOR_BRIGHT_C_ENV, "1.0")
+    cats, refcat = _anchor_tie_catalogs()
+    rec = _anchor_tie_run(cats, refcat, tmp_path)
+    assert rec["anchor_sample"]["K"] == 800
+
+
+def test_anchor_tie_brightest_k_reports_a_bulk_shift(tmp_path, small_anchor_k):
+    """The restriction changes the sample, not what the tie measures: a 12 mas
+    bulk shift of the anchor reads as a 12 mas correction (the sign is the
+    correction to add), not as ~0."""
+    cats, refcat = _anchor_tie_catalogs(shift_mas=12.0)
+    rec = _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert rec["anchor_reference_tie"]["dra_mas"] == pytest.approx(-12.0, abs=3.0)
+
+
+def test_anchor_tie_brightest_k_fails_when_the_bright_stars_have_no_reference(
+        tmp_path, small_anchor_k):
+    """If even the bright stars carry no coherent tie the restricted anchor
+    fails with the tie's own message."""
+    cats, refcat = _anchor_tie_catalogs()
+    rng = np.random.default_rng(11)
+    ref = refcat["all"]
+    n = len(ref)
+    scrambled = SkyCoord(ra=(RA0 + rng.uniform(0, 60, n) / 3600.0 / COSD) * u.deg,
+                         dec=(DEC0 + rng.uniform(0, 60, n) / 3600.0) * u.deg,
+                         frame="icrs")
+    refcat = dict(refcat, all=scrambled, sparse=scrambled[::10])
+    with pytest.raises(CrossFilterAstrometryError) as exc:
+        _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert "anchor F212N" in str(exc.value)
+
+
+def test_anchor_tie_k_and_half_disagreement_fails(tmp_path, small_anchor_k, monkeypatch):
+    """A tie that reads differently on K and K/2 fails."""
+    cats, refcat = _anchor_tie_catalogs()
+    real = _ac.measure_reference_tie
+    calls = []
+
+    def _fake(coords, *a, **kw):
+        tie = real(coords, *a, **kw)
+        calls.append(len(coords))
+        if len(calls) == 2:
+            tie = dict(tie, dra_mas=tie["dra_mas"] + 9.0)
+        return tie
+
+    monkeypatch.setattr(_ac, "measure_reference_tie", _fake)
+    with pytest.raises(CrossFilterAstrometryError) as exc:
+        _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert calls == [800, 400]
+    assert "disagree" in str(exc.value)
+
+
+def test_anchor_tie_sample_helper_orders_by_flux_and_clamps(small_anchor_k):
+    cats, refcat = _anchor_tie_catalogs()
+    tbl = cats["F212N"]
+    keep = np.ones(len(tbl), dtype=bool)
+    coords = SkyCoord(tbl["skycoord"]).icrs
+    order, info = _ac._anchor_tie_sample(tbl, keep, coords, refcat["all"], 1.0)
+    assert info["K"] == 800 and info["n_ref_in_footprint"] == 800
+    assert np.all(np.diff(np.asarray(tbl["flux"])[order][:800]) <= 0)
+    # K never exceeds the sample and never drops under the floor
+    _, big = _ac._anchor_tie_sample(tbl, keep, coords, refcat["all"], 100.0)
+    assert big["K"] == len(tbl)
+    _, tiny = _ac._anchor_tie_sample(tbl, keep, coords, refcat["all"], 0.01)
+    assert tiny["K"] == _ac.ANCHOR_TIE_MIN_K
+
+
+def test_anchor_bright_factor_validation(monkeypatch):
+    monkeypatch.delenv(_ac.ANCHOR_BRIGHT_C_ENV, raising=False)
+    assert _ac.anchor_bright_factor() is None
+    assert _ac.anchor_bright_factor(2.0) == 2.0
+    monkeypatch.setenv(_ac.ANCHOR_BRIGHT_C_ENV, "  ")
+    assert _ac.anchor_bright_factor() is None
+    for bad in ("abc", "0", "-1", "nan"):
+        monkeypatch.setenv(_ac.ANCHOR_BRIGHT_C_ENV, bad)
+        with pytest.raises(ValueError):
+            _ac.anchor_bright_factor()
+
+
+def _load_cli():
+    import importlib.util
+    import pathlib
+    path = (pathlib.Path(__file__).resolve().parents[3]
+            / "scripts" / "reduction" / "run_astrometry_checkpoint.py")
+    spec = importlib.util.spec_from_file_location("run_astrometry_checkpoint", path)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    return cli
+
+
+def test_run_astrometry_checkpoint_cli_passes_module(tmp_path, monkeypatch):
+    """``--module`` reaches the record name, so a manual crossfilter re-run
+    supersedes the module-keyed production record (issue #1212).  A
+    capitalised module is normalised, so it cannot become its own record."""
+    cli = _load_cli()
+    seen = {}
+
+    def _fake(catalogs, **kw):
+        seen.update(kw)
+        return dict(passed=True, anchor_filter="F212N", failures=[])
+
+    monkeypatch.setattr(cli, "run_crossfilter_checkpoint", _fake)
+    cats, _ = _anchor_tie_catalogs(n_faint=50)
+    paths = []
+    for f, t in cats.items():
+        fn = tmp_path / f"{f}.fits"
+        Table({"skycoord_ra": t["skycoord"].ra.deg, "skycoord_dec": t["skycoord"].dec.deg}).write(fn)
+        paths.append(f"{f}={fn}")
+    monkeypatch.setattr(cli, "Table", type("T", (), {"read": staticmethod(lambda p: Table())}))
+    argv = ["--crossfilter", "--module", "NRCb", "--anchor-bright-c", "1.5",
+            "--proposal-id", "2221", "--obsid", "46"]
+    for spec_ in paths:
+        argv += ["--catalog", spec_]
+    assert cli.main(argv) == 0
+    assert seen["module"] == "nrcb"
+    assert seen["anchor_bright_c"] == 1.5
+
+
+@pytest.mark.parametrize("argv", [
+    ["--crossfilter", "--module", "nrcc"],       # not a merge module
+    ["--module", "nrcb"],                        # ignored without --crossfilter
+    ["--anchor-bright-c", "1.0"],                # ignored without --crossfilter
+])
+def test_run_astrometry_checkpoint_cli_refuses_misused_crossfilter_flags(argv):
+    cli = _load_cli()
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2
+
+
+def test_anchor_tie_pass_does_not_certify_spatial_uniformity(
+        tmp_path, small_anchor_k, west_shift_mas):
+    """The K-vs-K/2 agreement test compares nested subsets of the same bright
+    stars, so a shift of one half of the footprint passes; the pass certifies
+    the bright stars' registration in aggregate, as the doc says.  Pinned so a
+    change that adds spatial coverage (or loses the aggregate pass) is seen."""
+    cats, refcat = _anchor_tie_catalogs(west_shift_mas=west_shift_mas)
+    rec = _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert rec["passed"], rec["failures"]
+    assert rec["anchor_sample"]["k_vs_half_sep_mas"] <= rec["anchor_sample"]["agree_tol_mas"]
+
+
+def test_anchor_tie_half_that_is_not_coherent_fails(
+        tmp_path, small_anchor_k, monkeypatch):
+    """A tie coherent at K but not on the brightest K/2 fails closed."""
+    cats, refcat = _anchor_tie_catalogs()
+    real = _ac.measure_reference_tie
+    calls = []
+
+    def _fake(coords, *a, **kw):
+        tie = real(coords, *a, **kw)
+        calls.append(len(coords))
+        if len(calls) == 2:
+            tie = dict(tie, vs_full=dict(tie["vs_full"], ok=False))
+        return tie
+
+    monkeypatch.setattr(_ac, "measure_reference_tie", _fake)
+    with pytest.raises(CrossFilterAstrometryError) as exc:
+        _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert calls == [800, 400]
+    assert "is not" in str(exc.value) and "anchor F212N" in str(exc.value)
+
+
+def test_anchor_tie_half_sample_is_the_brightest_half_of_k(
+        tmp_path, small_anchor_k, monkeypatch):
+    """The K/2 tie is on the brightest K/2 stars, not on some other half."""
+    cats, refcat = _anchor_tie_catalogs()
+    real = _ac.measure_reference_tie
+    samples = []
+
+    def _spy(coords, *a, **kw):
+        samples.append(coords)
+        return real(coords, *a, **kw)
+
+    monkeypatch.setattr(_ac, "measure_reference_tie", _spy)
+    rec = _anchor_tie_run(cats, refcat, tmp_path, anchor_bright_c=1.0)
+    assert rec["passed"], rec["failures"]
+    full, half = samples[0], samples[1]
+    assert len(full) == 800 and len(half) == 400
+    # the half is the leading half of K, which is flux-ordered brightest first
+    assert np.array_equal(half.ra.deg, full.ra.deg[:400])
+    # and K is the brightest 800 of the catalogue: every bright (flux > 1e4)
+    # star is in it, no faint (flux < 1e3) one is
+    tbl = cats["F212N"]
+    ra_all = SkyCoord(tbl["skycoord"]).icrs.ra.deg
+    bright_ra = ra_all[np.asarray(tbl["flux"]) > 5e3]
+    assert np.isin(bright_ra, full.ra.deg).all()
+    assert np.isin(half.ra.deg, bright_ra).all()
+
+
+def _tiny_anchor(**cols):
+    n = len(next(iter(cols.values())))
+    t = Table(cols)
+    coords = SkyCoord(ra=(RA0 + np.arange(n) * 1e-4) * u.deg,
+                      dec=np.full(n, DEC0) * u.deg, frame="icrs")
+    t["skycoord"] = coords
+    return t, np.ones(n, dtype=bool), coords, coords
+
+
+def test_anchor_tie_sample_orders_by_mag_brightest_first():
+    tbl, keep, coords, ref = _tiny_anchor(mag=np.array([18.0, 14.0, 16.0, 12.0]))
+    order, info = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [3, 1, 2, 0]
+    assert info["column"] == "mag"
+
+
+def test_anchor_tie_sample_ranks_nan_brightness_last():
+    tbl, keep, coords, ref = _tiny_anchor(flux=np.array([5.0, np.nan, 9.0, 1.0]))
+    order, _ = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [2, 0, 3, 1]
+
+
+def test_anchor_tie_sample_skips_an_all_nan_flux_column():
+    """A flux column that is NaN everywhere must not hide a usable flux_fit."""
+    tbl, keep, coords, ref = _tiny_anchor(
+        flux=np.full(4, np.nan), flux_fit=np.array([3.0, 8.0, 1.0, 5.0]))
+    order, info = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert info["column"] == "flux_fit"
+    assert list(order) == [1, 3, 0, 2]
+
+
+def test_anchor_tie_sample_reads_a_masked_entry_as_missing():
+    """A masked flux of 100 (the raw data under the mask) is not the brightest."""
+    from astropy.table import MaskedColumn
+    flux = MaskedColumn([5.0, 100.0, 9.0, 1.0], mask=[False, True, False, False])
+    tbl, keep, coords, ref = _tiny_anchor(flux=flux)
+    order, _ = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [2, 0, 3, 1]
+
+
+def test_anchor_tie_sample_without_finite_brightness_is_unrestricted():
+    tbl, keep, coords, ref = _tiny_anchor(flux=np.full(4, np.nan))
+    order, info = _ac._anchor_tie_sample(tbl, keep, coords, ref, 1.0)
+    assert list(order) == [0, 1, 2, 3]
+    assert info["K"] == 4 and info["rule"].startswith("unrestricted")
+
+
+def test_anchor_bright_factor_argument_beats_environment(monkeypatch):
+    monkeypatch.setenv(_ac.ANCHOR_BRIGHT_C_ENV, "3")
+    assert _ac.anchor_bright_factor(2.0) == 2.0
+    assert _ac.anchor_bright_factor() == 3.0
+
+
+def test_n_ref_in_footprint_counts_across_the_ra_wrap():
+    """A field straddling RA = 0/360 deg counts the same references as the
+    same field away from the wrap."""
+    def _field(ra0):
+        x = np.linspace(-20.0, 20.0, 9) / 3600.0
+        cat = SkyCoord(ra=(ra0 + x) * u.deg, dec=np.full(9, DEC0) * u.deg)
+        ref = SkyCoord(ra=(ra0 + np.array([-30.0, -10.0, 0.0, 10.0, 30.0]) / 3600.0) * u.deg,
+                       dec=np.full(5, DEC0) * u.deg)
+        return _ac._n_ref_in_footprint(ref, cat)
+    assert _field(0.0) == _field(180.0) == 3
+    assert _field(359.9999) == 3

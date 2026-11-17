@@ -45,6 +45,7 @@ def _sample_table(n=5):
     t['flux_err'] = rng.uniform(1, 500, n).astype(np.float64)
     t['flux_fit_raw'] = t['flux_fit'].copy()
     t['qfit'] = rng.uniform(1e-3, 6, n).astype(np.float64)
+    t['qfit_group'] = t['qfit'] * rng.uniform(0.4, 1.0, n)
     t['cfit'] = rng.uniform(-0.3, 0.3, n).astype(np.float64)
     t['reduced_chi2'] = rng.uniform(0.3, 2500, n).astype(np.float64)
     t['model_data_peak_ratio'] = rng.uniform(0.1, 3, n).astype(np.float64)
