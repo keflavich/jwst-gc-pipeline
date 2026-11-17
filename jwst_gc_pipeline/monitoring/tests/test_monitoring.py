@@ -87,6 +87,28 @@ def test_log_signatures_ignore_benign_zero_source_lines(tmp_path):
     assert not any(sev in ('error', 'warn') for sev, _, _ in got['lines'])
 
 
+def test_log_signatures_ignore_satstar_position_qa_line(tmp_path):
+    """The informational 'Satstar position QA:' line (#951) must scan as info."""
+    from jwst_gc_pipeline.photometry.satstar_position_qa import (
+        format_satstar_position_qa)
+    lines = [
+        format_satstar_position_qa(
+            {'available': True, 'n': 100, 'n_finite_anchor': 98,
+             'median_mas': 8.5, 'p16_mas': 4.2, 'p84_mas': 14.9,
+             'frac_gt_200mas': 0.0001, 'frac_locked': 0.6,
+             'lock_suspect': True, 'frac_gt_halfpix': 0.147,
+             'median_by_seed_kind': {'peak': 7.6, 'dqsat': 15.2}},
+            label='x_satstar_catalog.fits'),
+        format_satstar_position_qa({'available': False}),
+    ]
+    log = tmp_path / 'catalog_x_1_0.out'
+    log.write_text('CATALOG start: brick\n' + '\n'.join(lines)
+                   + '\nCATALOG done: filter=F212N rc=0\n')
+    got = jobs.scan_log(str(log))
+    assert got['worst'] == 'info'
+    assert not any(sev in ('error', 'warn') for sev, _, _ in got['lines'])
+
+
 def test_log_signatures_catch_psf_build_failure(tmp_path):
     """The F150W2 PSF failure that killed the m4/ngc6397 probes must be an error."""
     log = tmp_path / 'catalog_y_2_0.out'

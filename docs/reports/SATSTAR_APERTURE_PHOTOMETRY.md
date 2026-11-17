@@ -34,8 +34,10 @@ For each star (`skycoord_fit` from the consolidated satstar catalog):
    of radii defined in **arcsec** (converted to each mosaic's pixel grid):
    `0.10 0.15 0.20 0.30 0.40 0.50 0.70 1.00″`, primary = **0.30″**.
 3. Convert MJy/sr → **Jy** with the mosaic pixel solid angle
-   (`ww.proj_plane_pixel_area()`), the same conversion `merge_catalogs` uses for
-   `flux_fit`; magnitudes via the SVO Vega `ZeroPoint` and `ABMAG_OFFSET = 8.90`.
+   (`ww.proj_plane_pixel_area()`). `merge_catalogs` converts `flux_fit` with each
+   exposure's own detector area rescaled to the reference area in `PIXAREF`
+   (#1238), so the two differ by the detector's pixel-area offset from the mosaic's
+   (up to 34 mmag on NIRCam short-wave); magnitudes via the SVO Vega `ZeroPoint` and `ABMAG_OFFSET = 8.90`.
 
 **Columns added to the catalog** (by default): `aper_flux_jy` (raw, NOT
 aperture-corrected; a **lower limit** where the core is masked or coverage is

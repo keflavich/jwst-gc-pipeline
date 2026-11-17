@@ -75,6 +75,7 @@ Usage:
 import argparse
 import contextlib
 import os
+import re
 import signal
 import threading
 import time
@@ -530,21 +531,37 @@ def check_reference_coverage(n_usable, radius_deg, context="",
     return density
 
 
-def refcat_filename(epoch_tag, obs_token=None):
-    """``gaia_virac2_refcat_epoch<tag>[_o<obs>].fits``.
+def refcat_filename(epoch_tag, obs_token=None, proposal_token=None):
+    """``gaia_virac2_refcat_epoch<tag>[_j<proposal>][_o<obs>].fits``.
 
     The token is what ``astrometry_utils.pick_refcat`` matches on to give each
     observation its OWN catalog in a shared field directory; without one it
     falls back to the alphabetically last file for every observation alike.
     ``o`` is not doubled if the caller already passed ``o037``, and the number
     is zero-padded to three digits so ``37`` and ``037`` name one file.
+
+    ``proposal_token`` stamps ``_j<proposal>`` (the spelling the shared-tree
+    catalog names use) for a directory that holds the refcats of several
+    proposals, as ngc6334 does for 7213 and 6778.  It precedes the
+    observation token, as in ``merged_catalog_module_token``.
     """
-    if obs_token in (None, ''):
-        return f'gaia_virac2_refcat_epoch{epoch_tag}.fits'
-    token = str(obs_token).lstrip('oO')
-    if token.isdigit():
-        token = f'{int(token):03d}'
-    return f'gaia_virac2_refcat_epoch{epoch_tag}_o{token}.fits'
+    jtok = ''
+    if proposal_token not in (None, ''):
+        pid = str(proposal_token).lstrip('jJ')
+        # the selector (astrometry_utils._REFCAT_J_TOKEN) only reads a 4-5
+        # digit id; any other spelling would build a file it ignores
+        if not re.fullmatch(r'\d{4,5}', pid):
+            raise ValueError(
+                f"--proposal-token {proposal_token!r}: expected a 4-5 digit "
+                f"proposal id such as 6778 or 10678")
+        jtok = '_j' + pid
+    otok = ''
+    if obs_token not in (None, ''):
+        token = str(obs_token).lstrip('oO')
+        if token.isdigit():
+            token = f'{int(token):03d}'
+        otok = f'_o{token}'
+    return f'gaia_virac2_refcat_epoch{epoch_tag}{jtok}{otok}.fits'
 
 
 def build_refcat_table(gaia_table, gaia_src, virac_table, epoch, radius,
@@ -704,6 +721,13 @@ def main():
                          'observation, which for tiles arcminutes apart is the '
                          'wrong sky (gc2211 o023 took a -9.28" correction that '
                          'way).')
+    ap.add_argument('--proposal-token', default=None, metavar='PPPP',
+                    help='proposal id to stamp into the filename '
+                         '(gaia_virac2_refcat_epoch<tag>_j<PPPP>.fits).  '
+                         'REQUIRED for a directory shared by several '
+                         'proposals (ngc6334: 7213 and 6778), where an '
+                         'untokened catalog goes to whichever proposal sorts '
+                         'it last.')
     ap.add_argument('--gaia-backends', default=None, metavar='LIST',
                     help="Gaia backends in the order to try, e.g. "
                          "'vizier,esa-tap' (the default), 'esa-tap', or 'none' "
@@ -732,7 +756,7 @@ def main():
                          'that.')
     args = ap.parse_args()
     tag = args.out_epoch_tag or f'{args.epoch:.2f}'
-    out = f'{args.base}/catalogs/{refcat_filename(tag, args.obs_token)}'
+    out = f'{args.base}/catalogs/{refcat_filename(tag, args.obs_token, args.proposal_token)}'
 
     # Gaia FIRST but never fatal: a failure here costs a non-gating cross-check,
     # while a failure of query_virac2 below costs the reference itself.
