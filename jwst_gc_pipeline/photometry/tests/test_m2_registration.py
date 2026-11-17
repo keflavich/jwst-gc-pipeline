@@ -70,6 +70,22 @@ def _visit():
     return ra, dec, [_exposure(ra, dec, e, *SUBTOL[e]) for e in sorted(SUBTOL)]
 
 
+def test_the_per_exposure_record_carries_the_peak_significance_keys(tmp_path):
+    """A noise peak above 15 arcsec reads a contrast of 5-9 and is refused only
+    by ``peak_significance`` (issue #1232), so the record that replaces the old
+    contrast-only monitoring has to carry it, the floor it was held to and the
+    bin the contrast was read at."""
+    _, _, tables = _visit()
+    record = run_visit_checkpoint(tables, "m2", filtername="F212N",
+                                  record_dir=str(tmp_path), context="test")
+    exps = record["visits"][0]["exposures"]
+    assert exps and all("contrast" in e for e in exps)
+    for e in exps:
+        for k in ("peak_significance", "min_peak_significance", "bin_arcsec"):
+            assert k in e, (k, sorted(e))
+        assert e["bin_arcsec"] > 0
+
+
 def test_registration_from_the_real_m2_record_removes_subtolerance_offsets(tmp_path):
     ra, dec, tables = _visit()
     record = run_visit_checkpoint(tables, "m2", filtername="F212N",
