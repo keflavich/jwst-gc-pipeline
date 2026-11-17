@@ -910,3 +910,85 @@ def test_every_preexisting_proposal_maps_exactly_as_before():
                    ('1266', 'miri'), ('3571', 'miri'),
                    ('7213', 'miri'),
                    ('9257', 'nircam'), ('9257', 'niriss')}, sorted(new)
+
+
+# --------------------------------------------------------------------------
+# The tiles: map (#715) -- GC_<n> target per observation of program 10678.
+# --------------------------------------------------------------------------
+
+def _treasury_obs():
+    return F.BY_NAME['gc-treasury'].observation('10678')
+
+
+def test_treasury_tiles_map_is_loaded():
+    tiles = _treasury_obs().tiles
+    assert tiles['135'] == 'GC_135'
+    assert F.tile_target('gc-treasury', '10678', '135') == 'GC_135'
+    assert F.tile_target('gc-treasury', '10678', 135) == 'GC_135'
+
+
+def test_the_tile_for_a_renumbered_observation_is_not_read_off_n():
+    """MAST files GC_99 under observation 199 (fetched 2026-11-13), so
+    ``GC_<n>`` does not equal observation ``n`` for every tile."""
+    assert F.tile_target('gc-treasury', '10678', '199') == 'GC_99'
+    assert F.tile_target('gc-treasury', '10678', '099') is None
+
+
+def test_tile_names_are_unique_and_padded():
+    tiles = _treasury_obs().tiles
+    assert tiles
+    assert all(F.is_obsid(key) and len(key) == 3 for key in tiles)
+    assert len(set(tiles.values())) == len(tiles)
+
+
+def test_tile_lookup_round_trips():
+    assert F.tile_obsid('gc-treasury', '10678', 'GC_20') == '020'
+    for obsid, name in _treasury_obs().tiles.items():
+        assert F.tile_obsid('gc-treasury', '10678', name) == obsid
+    assert F.tile_obsid('gc-treasury', '10678', 'GC_9999') is None
+    assert F.tile_obsid('gc-treasury', '10678', 'nope') is None
+    assert F.tile_obsid('not-a-field', '10678', 'GC_20') is None
+    assert F.tile_target('gc-treasury', '4242', '020') is None
+    assert F.tile_target('brick', '2221', '001') is None
+
+
+def test_every_registered_treasury_catalog_has_a_tile():
+    obs = _treasury_obs()
+    assert set(obs.reference_catalogs) <= set(obs.tiles)
+
+
+def test_tiles_key_does_not_alter_wildcard_ownership():
+    assert F.claims_every_observation('gc-treasury')
+    assert F.target_for_obsid('10678', '140') == 'gc-treasury'
+    assert F.tile_target('gc-treasury', '10678', '140') is None
+
+
+def _tiles_raw(tiles, obsids):
+    return {'roots': {'blue': '/b'},
+            'fields': {'x': {'root': 'blue', 'observations': {'10678': {
+                'obsids': {'nircam': obsids}, 'tiles': tiles}}}}}
+
+
+@pytest.mark.parametrize('tiles, obsids, match', [
+    ({20: 'GC_20'}, '*', 'quoted observation'),
+    ({'20': 'GC_20'}, '*', 'quoted observation'),
+    ({'020': ''}, '*', 'target name'),
+    ({'020': 'GC_20', '021': 'GC_20'}, '*', 'belongs to one observation'),
+    ({'021': 'GC_21'}, ['020'], 'does not contain'),
+    (['020'], '*', 'mapping'),
+])
+def test_a_malformed_tiles_block_is_rejected(tmp_path, tiles, obsids, match):
+    with pytest.raises(F.FieldRegistryError, match=match):
+        _reload_from(tmp_path, _tiles_raw(tiles, obsids))
+
+
+def test_a_well_formed_tiles_block_loads_against_a_list_or_the_wildcard(
+        tmp_path):
+    _, loaded = _reload_from(tmp_path, _tiles_raw({'020': 'GC_20'}, ['020']))
+    assert loaded[0].observation('10678').tiles == {'020': 'GC_20'}
+    _, loaded = _reload_from(tmp_path, _tiles_raw({'999': 'GC_9'}, '*'))
+    assert loaded[0].observation('10678').tiles == {'999': 'GC_9'}
+
+
+def test_an_obs_built_by_hand_has_no_tiles():
+    assert F.Obs(proposal='4242').tiles == {}
