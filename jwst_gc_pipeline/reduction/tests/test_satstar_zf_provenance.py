@@ -386,6 +386,30 @@ def test_remove_saturated_stars_stamps_catalog_and_images(
                                      and bool(np.isfinite(prov['R'])))
 
 
+def test_deblend_stats_are_stamped_only_when_the_deblend_ran():
+    """#1196: DBLNCMP / DBLNSPL / DBLFAIL / DBLNVET record the deblend counts,
+    as bare integers in a table's meta and as (value, comment) cards in a
+    FITS header."""
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        stamp_deblend_stats)
+    keys = ('DBLNCMP', 'DBLNSPL', 'DBLFAIL', 'DBLNVET')
+    meta = {}
+    stamp_deblend_stats(meta, None)
+    assert meta == {}
+    stamp_deblend_stats(meta, {'n_components': 12, 'n_split': 3,
+                               'n_failed': 1, 'n_vetoed': 7,
+                               'psf_veto': {'applied': 12}})
+    assert [meta[k] for k in keys] == [12, 3, 1, 7]
+    assert all(type(meta[k]) is int for k in keys)
+    meta = {}
+    stamp_deblend_stats(meta, {})
+    assert [meta[k] for k in keys] == [0, 0, 0, 0]
+    hdr = fits.Header()
+    stamp_deblend_stats(hdr, {'n_components': 12, 'n_vetoed': 7})
+    assert (hdr['DBLNCMP'], hdr['DBLNVET']) == (12, 7)
+    assert hdr.comments['DBLNVET']
+
+
 def test_remove_saturated_stars_resets_a_stale_provenance(tmp_path,
                                                           monkeypatch):
     """A provenance left by a previous frame must not leak into this one when
