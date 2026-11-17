@@ -174,6 +174,9 @@ def m7_seed_reason(lost, seed_dist, files, data, filt, r_match):
     ``companion_cut``  in the m6 vetted catalog, left out of the m7 band seed
                        by the own-band companion cut (a brighter cross-band or
                        own-band seed source within COMPFWHM FWHM)
+    ``seed_dedup``     in the m6 vetted catalog, left out of the m7 band seed
+                       by the sub-FWHM seed dedup (#1206; within DEDUPFWH FWHM
+                       of a seed position; needs the seed header's DEDUPFWH > 0)
     ``own_band_off``   no band seed (own-band off): m7 is seeded by the
                        cross-band seed alone, which does not hold the star
     ``other``          none of the above
@@ -191,6 +194,7 @@ def m7_seed_reason(lost, seed_dist, files, data, filt, r_match):
         return out
     bs = Table.read(files['m7_band_seed'])
     compfwhm = float(bs.meta.get('COMPFWHM', 0.0))
+    dedupfwhm = float(bs.meta.get('DEDUPFWH', 0.0))
     origin = np.asarray(bs['seed_origin']).astype(str)
     bsc = SkyCoord(bs['skycoord'])
     own = Table.read(files['resbgsub_m6']['vetted'])
@@ -212,6 +216,8 @@ def m7_seed_reason(lost, seed_dist, files, data, filt, r_match):
         sep = sc[k].separation(pool).to_value(u.arcsec)
         if np.any((sep > 0.005) & (sep < compfwhm * fw) & (pf > of[io[k]])):
             out[r] = 'companion_cut'
+        elif dedupfwhm > 0 and sc[k].separation(bsc).to_value(u.arcsec).min() < dedupfwhm * fw:
+            out[r] = 'seed_dedup'
     return out
 
 
