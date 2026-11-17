@@ -405,6 +405,7 @@ still run after m6.
 | `--manual-ext-snr-floor-per-frame` (opt-out: sets `manual_ext_snr_floor_propagated=False`) | not set (floor on flux_err_prop) | not set | not set | not set |
 | `--manual-ext-snr-high-keep` | 20.0 | 20 | 20 | 20 |
 | `--manual-ext-qfit-high-keep-max` | 0.4 | 0.4 | 0.4 | 0.4 |
+| `--manual-ext-group-qfit` (#1245; `--manual-ext-group-qfit-min-ratio` 0.1) | off | off | off | (unused) |
 | `--manual-ext-hysteresis-qfit-max` (0 = off) | 0.6 | 0.6 (m3–m7) | 0.6 (m3–m7) | (off: MIRI vets on prominence) |
 | `--manual-ext-hysteresis-snr-min` | 10.0 | 10 | 10 | |
 | `--manual-ext-hysteresis-satstar-guard-fwhm` (0 = no guard) | 4.5 | 4.5 | 4.5 | |
@@ -633,6 +634,44 @@ The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy
 `iter2/iter3/iter4`, `_daoiterative` products, so the two paths coexist in one
 tree.
 
+### Group-aware qfit (`--manual-ext-group-qfit`, #1245, default off)
+
+In a grouped fit the brighter member takes most of the blended flux, so the
+fainter member's qfit (sum|resid in its 5x5 box| / its own flux) rises to about
+twice its ungrouped value and fails the vetting. With the switch on, the
+per-frame pass writes `qfit_group = qfit * flux / (flux + S)`, where `S` is the
+fitted PSF light of the group partners (clipped at zero, partners within 12 px)
+inside the member's own fit box, and the merge averages it to `qfit_group_avg`
+(released as `qfit_group_{filter}`). `_filter_extended_emission` then uses
+`min(qfit_group, qfit)` for the keep tiers, the `qfit_confident` bypass and the
+previous-phase keep; `low_fit_quality` and the prominence exempt stay on the
+member's own qfit. A singleton, a member below `--manual-ext-group-qfit-min-ratio`
+(0.1) times the brightest member of its group, a row with flag bit 8 or a
+non-finite `flux_err`, and an overshoot-refit row keep `qfit`.
+
+Limits:
+
+- **Per-frame catalogs must be regenerated** with the switch on. A catalog with
+  no `qfit_group` column is vetted on `qfit` (logged: "requested but the catalog
+  has no qfit_group column"). The merge keys on the first frame: if it lacks the
+  column the merged catalog has none, and a partial column is averaged over the
+  frames that carry it; both are logged as warnings.
+- **`min_ratio` 0.1 is unvalidated and admits spurious faint members.** For a
+  partner within about 1 FWHM the faint member's qfit is multiplied by 0.13 /
+  0.18 / 0.31 / 0.45 / 0.60 at flux ratio 0.10 / 0.15 / 0.30 / 0.55 / 1.0
+  (Gaussian PSF, FWHM 2.5 px). Against the flat `qfit_max` 0.2 a member with
+  an own qfit up to about 1.5 passes at ratio 0.10, and up to about 0.65 at
+  ratio 0.30, so a PSF-ring fit beside a bright star can be kept. Try 0.3
+  first.
+- **The `qfit_confident` bypass skips the local S/N floor.** It keeps any row
+  with `qf <= qfit_max` regardless of S/N, and with the switch on `qf` is the
+  group-aware value, so a grouped faint member admitted this way is never
+  tested against `--manual-ext-local-snr-min`.
+- **MIRI**: the hard overshoot cap rescales `flux_fit` without rescaling
+  `qfit`, so for a capped row `qfit * flux` is no longer the residual sum and
+  the row is treated as an ordinary member. The option is aimed at NIRCam.
+- Validation (o105 30" cutout m2-m7 replay, flux-ratio bins) has not been run.
+
 ## Flags (defaults)
 
 The `--manual-*` flag names are retained for back-compatibility; the path they
@@ -658,6 +697,7 @@ control is the default.
 | `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + per-frame S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
 | `--manual-sky-clean-local-arcsec` | 3.0 | sky-clean tier, LOCAL reference: a source is also clean when its annulus floor is ≤ `--manual-sky-clean-local-max-err` i2d ERR above the 5th percentile of its 3″ tile (smooth bright plateau = clean; filament, PSF-scale emission structure or crowding = not); OR-ed with the global dark-sky test; 0 = global only; needs the i2d ERR plane (skipped with a log line without it) |
 | `--manual-sky-clean-local-max-err` | 2.0 | sky-clean tier, LOCAL reference threshold in i2d ERR (≈ 2.4σ of pixel scatter in the Brick dark cloud, where ERR ≈ 1.2× the scatter); the global test's `--manual-sky-clean-max-sky-snr` is in dark-sky σ |
+| `--manual-ext-group-qfit` / `--manual-ext-group-qfit-min-ratio` | off / 0.1 | group-aware qfit for the members of a jointly fitted group (#1245), see "Group-aware qfit" above; unvalidated, 0.3 is the first ratio to try |
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
 | `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |
 

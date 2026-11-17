@@ -115,6 +115,12 @@ Fit quality (photutils PSF-fit outputs, averaged over exposures)
   qfit_{filter}
       Sum of the absolute fit residuals divided by the fit flux. 0 for a
       source the PSF model fits perfectly; larger is worse.
+  qfit_group_{filter}
+      Only in catalogs made with the group-aware qfit option (#1245); absent
+      otherwise. qfit with the source's flux replaced by the flux in its fit
+      box including its group partners, so the fainter member of a close pair
+      is not penalised for the brighter member's residual. Equals qfit for a
+      source with no group partner. Not validated on data.
   cfit_{filter}
       Fit residual (data - model) in the central pixel divided by the fit
       flux. Large positive: sharper than the PSF (cosmic ray, hot pixel).
