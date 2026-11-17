@@ -61,7 +61,7 @@ Under the field's directory (`fields.yaml` says where each field lives):
 | | |
 |---|---|
 | `<FILTER>/pipeline/*-merged_i2d.fits` | the mosaic for one filter |
-| `<FILTER>/*_m*_daophot_basic.fits` | per-exposure catalogs, one per fitting pass (the later passes carry a `resbgsub` token, the earlier ones do not) |
+| `<FILTER>/*_m*_daophot_basic.fits`, `<FILTER>/*_m*_daophot_basic_lbl<label>.fits` | per-exposure catalogs, one per fitting pass (the later passes carry a `resbgsub` token, the earlier ones do not); from m3 to m7 each merge label (`nrca`, `nrcb`, `merged`) fits the frame separately and its catalog name ends in `_lbl<label>` |
 | `catalogs/basic_merged_indivexp_photometry_tables_merged.fits` | the multi-wavelength catalog |
 
 A deeper catalog exists:

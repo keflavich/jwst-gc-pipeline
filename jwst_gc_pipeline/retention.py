@@ -15,11 +15,13 @@ restarted per-frame worker can rebuild the next phase's detection image from
 disk.  Everything else a phase writes is consumed inside that phase:
 
 * ``*_{label}_daophot_{kind}_{residual,model}.fits`` -- the per-frame fit
-  products.  Read by ``build_mergedcat_residuals`` for the SAME label (the
+  products (``{label}`` is the phase, ``m7``; from m3 to m7 the merge label of
+  the fitting pass follows ``_daophot_{kind}`` as ``_lbl<merge>``, e.g.
+  ``..._m7_daophot_basic_lblnrcb_residual.fits``).  Read by ``build_mergedcat_residuals`` for the SAME label (the
   hard-crash guard in ``crowdsource_catalogs_long.py``: a missing one would
   punch a hole in the mosaic) and by the iter2 qfilt-bg path.  Nothing reads a
   label's pair once the next label has run.
-* ``*_{label}_daophot_{kind}_mergedcat_{residual,model}.fits`` -- rendered only
+* ``*_{label}_daophot_{kind}[_lbl<merge>]_mergedcat_{residual,model}.fits`` -- rendered only
   so they can be resampled into ``*_mergedcat_residual_i2d.fits``.  Once that
   i2d exists they support nothing.
 
@@ -135,18 +137,24 @@ def _is_protected_name(path):
 # --------------------------------------------------------------------------
 # Filename grammar.  The per-frame stem is
 #   jw<prop>-o<field>_t001_<inst>_<pupil>-<filt>-<detector><visit><vgroup>
-#   <exp><desat><bgsub><epsf><blur><group>_<label>_daophot_<kind>[_mergedcat]
-#   _<residual|model>.fits
+#   <exp><desat><bgsub><epsf><blur><group>_<label>_daophot_<kind>[_lbl<merge>]
+#   [_mergedcat]_<residual|model>.fits
 # so the label always sits immediately before ``_daophot_``.  ``[a-z]+`` cannot
 # span the underscore in ``basic_mergedcat``, which is what keeps the raw and
 # mergedcat patterns from matching each other; they are still ordered
-# mergedcat-first so a future kind name cannot blur them.
+# mergedcat-first so a future kind name cannot blur them.  ``_lbl<merge>`` is
+# the m3..m7 merge-label token (``photometry.naming.perframe_label_token``):
+# the module pass and the ``merged`` pass of one frame write separate files
+# there.  The rules key on the STAGE label, so a tokened product is retired
+# exactly when its legacy spelling would be.
 # --------------------------------------------------------------------------
 _LABEL = r'(?P<label>m\d+|iter\d+)'
+_MERGE_TOKEN = r'(?:_lbl[a-z0-9]+)?'
 PERFRAME_MERGEDCAT_RE = re.compile(
-    _LABEL + r'_daophot_[a-z]+_mergedcat_(residual|model)\.fits$')
+    _LABEL + r'_daophot_[a-z]+' + _MERGE_TOKEN
+    + r'_mergedcat_(residual|model)\.fits$')
 PERFRAME_RAW_RE = re.compile(
-    _LABEL + r'_daophot_[a-z]+_(residual|model)\.fits$')
+    _LABEL + r'_daophot_[a-z]+' + _MERGE_TOKEN + r'_(residual|model)\.fits$')
 
 CORE_DUMP_RE = re.compile(r'(^core\.[^/]*$|\.core$)')
 
