@@ -50,7 +50,10 @@ is NOT by itself evidence that a row is a limit.  Gate on
 
 Calibration is taken from the band's own firm detections in the merged table
 (``conv = median(flux_jy / flux)``; Vega zero-point likewise), so m8 fluxes are
-on exactly the same system as m7 -- no zero-point / pixel-area re-derivation.
+on exactly the same system as m7 -- no zero-point re-derivation.  Each frame's
+fitted flux is first multiplied by that frame's own ``PIXAR_SR`` (relative to
+the conversion), so a detector's pixel area enters once, whatever area the m7
+table used (#1238).
 
 This runs after the m7 cross-band merge for every multifilter run (see
 ``run_manual_pipeline``), producing ``..._merged_resbgsub_m8.fits``.
@@ -63,6 +66,7 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 
 from jwst_gc_pipeline.photometry import frame_pool
+from jwst_gc_pipeline.photometry.frame_pixel_area import frame_area_sr
 from jwst_gc_pipeline.photometry.naming import frame_identity
 from jwst_gc_pipeline.photometry.psf_fitting import forced_psf_photometry
 
@@ -168,7 +172,8 @@ def _satstar_partner_guard(tbl, filt, ref, targets,
 
 
 def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
-                      frame_arg_builder, fit_shape):
+                      frame_arg_builder, fit_shape, conv_jy=None,
+                      frame_area_sr=None):
     """Prepare one frame and force-fit every target that lands on it.
 
     Returns ``(loc, flux, var)`` for the fits with a finite flux and a positive
@@ -176,6 +181,12 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
     the frame contributes nothing: no target lands on it, or its preparation
     raised one of the exceptions a missing or malformed frame raises (printed
     with its traceback).  Anything else propagates.
+
+    With ``frame_area_sr`` (a callable ``filename -> PIXAR_SR`` in sr) and
+    ``conv_jy``, the fitted flux and error are multiplied by
+    ``PIXAR_SR * 1e6 / conv_jy``.  Their later product with ``conv_jy`` is then
+    the frame's flux in Jy with its own detector's pixel area (#1238), whatever
+    area the m7 conversion used.
     """
     # A dropped frame here silently weakens the inverse-variance combine
     # (no-silent-frame-drops rule): catch only the exceptions frame prep
@@ -209,6 +220,10 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
         error=ctx.err, mask=ctx.mask, fit_shape=fit_shape, nonnegative=False)
     f = np.asarray(res['flux_fit'], dtype=float)
     e = np.asarray(res['flux_err'], dtype=float)
+    if frame_area_sr is not None and conv_jy is not None:
+        scale = float(frame_area_sr(filename)) * 1e6 / conv_jy
+        f = f * scale
+        e = e * scale
     ok = np.isfinite(f) & np.isfinite(e) & (e > 0)
     return np.where(inb)[0][ok], f[ok], e[ok] ** 2
 
@@ -216,7 +231,7 @@ def _forced_fit_frame(filename, filt, ra, dec, *, prepare_frame,
 def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
                      nsigma=3.0, fit_shape=(5, 5),
                      satstar_partner_guard=0.5 * u.arcsec, verbose=True,
-                     n_procs=1):
+                     n_procs=1, frame_area_sr=None):
     """Force-fit ``filt`` at the reference position of every source that is a
     non-detection (and not saturated) in ``filt``, combine across ``frames``,
     and write the results back into ``tbl`` in place.
@@ -237,6 +252,11 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     zero), get their bound from ``flux_ulim_{filt}``/``mag_*_ulim_{filt}``
     instead, and are flagged ``is_upper_limit_{filt}=True`` so a consumer does
     not have to re-derive "fitted but not detected" from the other columns.
+
+    ``frame_area_sr`` is a callable ``filename -> PIXAR_SR`` (sr).  When given,
+    each frame's fitted flux and error are brought to Jy with that frame's own
+    pixel area before the inverse-variance combine (#1238); ``None`` keeps the
+    raw image units, which assumes one pixel area for all frames.
     """
     n = len(tbl)
     fl = filt.lower()  # merged-catalog columns are lowercase; frames keep orig case
@@ -251,6 +271,12 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
         if verbose:
             print(f"  [m8 {filt}] too few detections to calibrate; skip", flush=True)
         return 0
+
+    if frame_area_sr is not None and f'{filt[1:-1]}PIXA'.upper() not in tbl.meta:
+        print(f"  [m8 {filt}] WARNING: the m7 header has no {filt[1:-1].upper()}PIXA "
+              f"(PIXAREF): its firm rows were merged without per-detector pixel "
+              f"areas, so filled rows are per-detector correct and firm rows are "
+              f"not until m7 is rebuilt (#1238)", flush=True)
 
     mask = np.asarray(tbl[f'mask_{filt}'].filled(True) if hasattr(tbl[f'mask_{filt}'], 'filled')
                       else tbl[f'mask_{filt}'], dtype=bool)
@@ -294,7 +320,8 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
         return _forced_fit_frame(filename, filt, ra, dec,
                                  prepare_frame=prepare_frame,
                                  frame_arg_builder=frame_arg_builder,
-                                 fit_shape=fit_shape)
+                                 fit_shape=fit_shape, conv_jy=conv_jy,
+                                 frame_area_sr=frame_area_sr)
 
     frames = list(frames)
     if verbose and n_procs > 1 and len(frames) > 1:
@@ -418,7 +445,7 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
 def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
                               frames_for, prepare_frame, frame_arg_builder_for,
                               nsigma=3.0, fit_shape=(5, 5), verbose=True,
-                              n_procs=1):
+                              n_procs=1, frame_area_sr=frame_area_sr):
     """Load the merged m7 catalog, force-fill every band, write the m8 catalog.
 
     Parameters
@@ -432,6 +459,8 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
         returning the per-frame context object
     frame_arg_builder_for : callable ``filt -> (filename -> kwargs dict)``
     n_procs : forked processes per band's frame loop (``forced_fill_band``)
+    frame_area_sr : callable ``frame filename -> PIXAR_SR`` (sr); the default
+        reads the frame's own header (#1238).  ``None`` fills in raw image units.
     """
     if verbose:
         print(f"[m8] forced cross-band fill: {os.path.basename(merged_path)} "
@@ -450,7 +479,7 @@ def run_forced_crossband_fill(merged_path, out_path, *, filternames, module,
             tbl, filt, frames, prepare_frame=prepare_frame,
             frame_arg_builder=frame_arg_builder_for(filt),
             nsigma=nsigma, fit_shape=fit_shape, verbose=verbose,
-            n_procs=n_procs)
+            n_procs=n_procs, frame_area_sr=frame_area_sr)
     tbl.write(out_path, overwrite=True)
     if verbose:
         print(f"[m8] wrote {out_path}  ({total} phantom non-detections recovered)",

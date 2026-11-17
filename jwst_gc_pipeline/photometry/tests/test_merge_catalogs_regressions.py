@@ -350,7 +350,7 @@ class TestSatstarStaleFileExclusion:
         from astropy.coordinates import SkyCoord
         import astropy.units as u
         from jwst_gc_pipeline.photometry import merge_catalogs as M
-        assert M._SATSTAR_DEDUP_ALG == 'fp7'
+        assert M._SATSTAR_DEDUP_ALG != 'fp6'   # fp7 (#949), fp8 (#1238) and later all differ
         pdir = tmp_path / 'F770W' / 'pipeline'
         pdir.mkdir(parents=True)
         for i in range(2):

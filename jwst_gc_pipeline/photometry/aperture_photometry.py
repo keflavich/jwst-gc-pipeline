@@ -15,8 +15,10 @@ Design notes
 * Radii are defined in ARCSEC and converted to the mosaic's own pixel grid, so
   SW/LW and different resamplings are directly comparable.
 * Flux is converted MJy/sr -> Jy with the mosaic's pixel solid angle
-  (``ww.proj_plane_pixel_area()``), the same conversion the merge uses for
-  ``flux_fit`` (merge_catalogs), so aperture-Jy and PSF-Jy are on one system.
+  (``ww.proj_plane_pixel_area()``).  The merge converts ``flux_fit`` with each
+  exposure's own detector area, rescaled to the reference area it records in
+  ``PIXAREF`` (#1238), so aperture-Jy and PSF-Jy agree only to the detector's
+  pixel-area offset from the mosaic's (up to 34 mmag on NIRCam short-wave).
 * Vega/AB zeropoints follow merge_catalogs: SVO ZeroPoint (Jy) and
   ``ABMAG_OFFSET = 8.90``.
 """
