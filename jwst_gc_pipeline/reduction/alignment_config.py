@@ -916,6 +916,11 @@ ALIGNMENT_CONFIG = (
         proposal='1266', fields=('004', '008', '009', '010'),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F560W',
+        # Image3 tweakreg re-solved the table's sub-arcsecond rows away
+        # (#835): o008 and o010 F770W read the same 8.37 / 13.31 mas tie at m2
+        # after the row was applied and the frames regenerated, while o004 and
+        # o009 (4.3 and 5.7 arcsec, beyond the search radius) did respond.
+        table_only_tie=True,
         notes=('gc1266 MIRI imaging (F560W/F770W/F1130W, obs 004/008/009/010 '
                '-- four separate pointings spanning 2.87 arcmin about '
                '(266.43624, -29.01889), footprints measured from the MAST '

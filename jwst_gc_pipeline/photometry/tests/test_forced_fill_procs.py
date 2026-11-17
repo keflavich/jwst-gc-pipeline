@@ -161,4 +161,4 @@ def test_the_runner_passes_n_procs_through(tmp_path, monkeypatch):
 def test_both_m8_call_sites_read_the_option():
     import inspect
     src = ' '.join(inspect.getsource(cataloging.run_manual_pipeline).split())
-    assert src.count("n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1))") == 2
+    assert src.count("n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),") == 2

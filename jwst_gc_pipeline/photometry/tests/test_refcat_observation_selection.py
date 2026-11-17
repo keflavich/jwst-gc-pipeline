@@ -16,6 +16,7 @@ degraded reference, it is the wrong sky.
 import pytest
 
 from jwst_gc_pipeline.photometry.cataloging import _pick_refcat
+from jwst_gc_pipeline.photometry.naming import SHARED_TREE_PROPOSALS
 
 GENERIC = '/x/catalogs/gaia_virac2_refcat_epoch2023.71.fits'
 O028 = '/x/catalogs/gaia_virac2_refcat_epoch2023.71_o028.fits'
@@ -399,3 +400,327 @@ def test_m2_gaia_does_not_leak_into_later_stages_or_crossfilter(tmp_path,
                                             obs_token='_o001',
                                             proposal_id='1905')
     assert 'r' in xf and xf['r'] is None
+
+
+# --- proposal-keyed selection on a shared tree (#818) -----------------------
+# ngc6334's proposals 7213 and 6778 share one catalogs/ directory and
+# observation 001; each has a refcat at its own epoch.
+
+N_6778 = '/x/catalogs/gaia_virac2_refcat_epoch2024.68_j6778.fits'
+N_7213 = '/x/catalogs/gaia_virac2_refcat_epoch2026.30_j7213.fits'
+U_2024 = '/x/catalogs/gaia_virac2_refcat_epoch2024.68.fits'
+U_2026 = '/x/catalogs/gaia_virac2_refcat_epoch2026.30.fits'
+
+
+def test_proposal_token_selects_that_proposals_refcat():
+    assert _pick_refcat([N_6778, N_7213], field='001', proposal='6778') == N_6778
+    assert _pick_refcat([N_6778, N_7213], field='001', proposal='7213') == N_7213
+    assert _pick_refcat([N_7213, N_6778], field='001', proposal=6778) == N_6778
+
+
+def test_proposal_and_observation_token_beat_proposal_only():
+    both = '/x/catalogs/gaia_virac2_refcat_epoch2024.68_j6778_o002.fits'
+    assert _pick_refcat([N_6778, both], field='002', proposal='6778') == both
+    assert _pick_refcat([N_6778, both], field='001', proposal='6778') == N_6778
+
+
+def test_another_proposals_refcat_is_never_a_fallback():
+    with pytest.raises(ValueError, match='wrong sky'):
+        _pick_refcat([N_7213], field='001', proposal='6778')
+
+
+def test_proposal_token_beats_an_untokened_file():
+    assert _pick_refcat([U_2026, N_6778], field='001', proposal='6778') == N_6778
+
+
+def test_two_untokened_refcats_on_a_shared_tree_REFUSE():
+    """The on-disk ngc6334 state: the old pick was sorted(...)[-1], 2026.30."""
+    for prop in sorted(SHARED_TREE_PROPOSALS):
+        with pytest.raises(ValueError) as exc:
+            _pick_refcat([U_2024, U_2026], field='001', proposal=prop)
+        msg = str(exc.value)
+        assert 'epoch2024.68' in msg and 'epoch2026.30' in msg
+        assert f'_j{prop}' in msg and 'ASTROM_REFCAT' in msg
+
+
+def test_a_single_untokened_refcat_still_serves_a_shared_tree_proposal():
+    assert _pick_refcat([U_2024], field='001', proposal='6778') == U_2024
+    assert _pick_refcat([U_2024, N_7213], field='001', proposal='6778') == U_2024
+
+
+def test_non_shared_proposal_keeps_the_previous_selection():
+    """gc2211 (2211) and untagged callers: unchanged, including the
+    newest-sorting pick among untokened files."""
+    for prop in ('2211', None):
+        assert _pick_refcat([GENERIC, O028], field='023', proposal=prop) == GENERIC
+        assert _pick_refcat([GENERIC, O028], field='028', proposal=prop) == O028
+        assert _pick_refcat([U_2024, U_2026], field='001', proposal=prop) == U_2026
+
+
+def test_a_caller_without_a_proposal_does_not_see_j_tokened_files():
+    assert _pick_refcat([N_6778, N_7213, GENERIC], field='001') == GENERIC
+    with pytest.raises(ValueError, match='wrong sky'):
+        _pick_refcat([N_6778, N_7213], field='001')
+
+
+NGC = ['gaia_virac2_refcat_epoch2024.68_j6778.fits',
+       'gaia_virac2_refcat_epoch2026.30_j7213.fits']
+
+
+@pytest.mark.parametrize('prop,want', [('6778', NGC[0]), ('7213', NGC[1])])
+def test_the_STAGE_checkpoint_threads_proposal_id(tmp_path, prop, want, capsys,
+                                                  monkeypatch):
+    """Drop `proposal=` at either _pick_refcat call and both proposals get the
+    same file, or the run refuses."""
+    import os as _os
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, NGC)
+    _astrom_checkpoint_refcat(bp, field='001', proposal_id=prop)
+    chosen = [ln for ln in capsys.readouterr().out.splitlines()
+              if 'reference catalog' in ln]
+    assert chosen and _os.path.basename(chosen[-1].split()[-1]) == want, chosen
+
+
+def test_the_checkpoint_refuses_two_untokened_refcats_on_a_shared_tree(
+        tmp_path, monkeypatch):
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_checkpoint_refcat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, ['gaia_virac2_refcat_epoch2024.68.fits',
+                              'gaia_virac2_refcat_epoch2026.30.fits'])
+    with pytest.raises(ValueError, match='_j6778'):
+        _astrom_checkpoint_refcat(bp, field='001', proposal_id='6778')
+
+
+@pytest.mark.parametrize('prop,want', [('6778', NGC[0]), ('7213', NGC[1])])
+def test_the_REDUCER_side_bulk_path_threads_proposal(tmp_path, prop, want):
+    import os as _os
+    from jwst_gc_pipeline.reduction.bulk_offset_step0 import refcat_for_frame
+    bp = _catalogs(tmp_path, NGC)
+    path, cands = refcat_for_frame(bp, 'VIRAC2', field='001', proposal=prop)
+    assert len(cands) == 2 and _os.path.basename(path) == want
+
+
+def test_both_entry_points_choose_the_SAME_file_on_a_shared_tree(tmp_path,
+                                                                 monkeypatch):
+    import glob as _glob
+    import os as _os
+    from jwst_gc_pipeline.reduction.bulk_offset_step0 import refcat_for_frame
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    bp = _catalogs(tmp_path, NGC)
+    cands = sorted(_glob.glob(f'{bp}/catalogs/gaia_virac2_refcat*.fits'))
+    for prop in sorted(SHARED_TREE_PROPOSALS):
+        a = _pick_refcat(cands, field='001', proposal=prop)
+        b, _ = refcat_for_frame(bp, 'VIRAC2', field='001', proposal=prop)
+        assert _os.path.basename(a) == _os.path.basename(b), prop
+
+
+def test_the_step0_script_passes_the_proposal():
+    import pathlib
+    import re as _re
+    root = pathlib.Path(__file__).resolve().parents[3]
+    src = (root / 'scripts' / 'reduction' / 'step0_bulk_offset.py').read_text()
+    calls = _re.findall(r'refcat_for_frame\s*\((?:[^()]|\([^()]*\))*\)', src)
+    assert calls and all('proposal=args.proposal' in c for c in calls), calls
+
+
+def test_builder_token_spelling_round_trips_through_the_selector():
+    from jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery import (
+        refcat_filename)
+    assert (refcat_filename('2024.68', proposal_token='6778')
+            == 'gaia_virac2_refcat_epoch2024.68_j6778.fits')
+    assert (refcat_filename('2024.68', obs_token='1', proposal_token='j6778')
+            == 'gaia_virac2_refcat_epoch2024.68_j6778_o001.fits')
+    assert (refcat_filename('2024.68', obs_token='028')
+            == 'gaia_virac2_refcat_epoch2024.68_o028.fits')
+    cands = [f'/x/catalogs/{refcat_filename(t, proposal_token=p)}'
+             for t, p in (('2024.68', '6778'), ('2026.30', '7213'))]
+    assert _pick_refcat(cands, field='001', proposal='6778').endswith(
+        'epoch2024.68_j6778.fits')
+    assert _pick_refcat(cands, field='001', proposal='7213').endswith(
+        'epoch2026.30_j7213.fits')
+
+
+# --- review follow-ups on #818 ----------------------------------------------
+
+N_6778_E2 = '/x/catalogs/gaia_virac2_refcat_epoch2026.30_j6778.fits'
+N_6778_O1 = '/x/catalogs/gaia_virac2_refcat_epoch2024.68_j6778_o001.fits'
+N_6778_O1_E2 = '/x/catalogs/gaia_virac2_refcat_epoch2026.30_j6778_o001.fits'
+O1_2024 = '/x/catalogs/gaia_virac2_refcat_epoch2024.68_o001.fits'
+O1_2026 = '/x/catalogs/gaia_virac2_refcat_epoch2026.30_o001.fits'
+
+
+@pytest.mark.parametrize('field', ['001', None])
+def test_several_proposal_only_refcats_for_one_proposal_REFUSE(field):
+    """Two `_j6778` epochs: which one?  Raises with or without a field."""
+    with pytest.raises(ValueError, match='several reference catalogs claim '
+                                         'proposal 6778') as exc:
+        _pick_refcat([N_6778, N_6778_E2], field=field, proposal='6778')
+    assert 'epoch2024.68' in str(exc.value) and 'epoch2026.30' in str(exc.value)
+
+
+def test_exactly_two_proposal_only_refcats_is_enough_to_refuse():
+    """Pins the threshold at 2, not 3; a third file must not be required."""
+    third = '/x/catalogs/gaia_virac2_refcat_epoch2027.10_j6778.fits'
+    for cands in ([N_6778, N_6778_E2], [N_6778, N_6778_E2, third]):
+        with pytest.raises(ValueError, match='several reference catalogs'):
+            _pick_refcat(cands, field='001', proposal='6778')
+
+
+def test_the_other_proposals_second_epoch_does_not_trigger_the_refusal():
+    other = '/x/catalogs/gaia_virac2_refcat_epoch2027.10_j7213.fits'
+    assert _pick_refcat([N_6778, N_7213, other], field='001',
+                        proposal='6778') == N_6778
+
+
+def test_several_proposal_and_observation_refcats_pick_the_last_by_name():
+    """Behaviour kept from before the review, pinned rather than changed:
+    among several `_j<P>_o<NNN>` files the last candidate wins (callers pass
+    a sorted glob, so that is the last name)."""
+    assert _pick_refcat([N_6778_O1, N_6778_O1_E2], field='001',
+                        proposal='6778') == N_6778_O1_E2
+
+
+def test_several_observation_refcats_pick_the_last_by_name_off_the_shared_tree():
+    assert _pick_refcat([O1_2024, O1_2026], field='001',
+                        proposal='2211') == O1_2026
+    assert _pick_refcat([O1_2024, O1_2026], field='001') == O1_2026
+
+
+@pytest.mark.parametrize('prop', sorted(SHARED_TREE_PROPOSALS))
+def test_two_observation_tokened_refcats_on_a_shared_tree_REFUSE(prop):
+    """`--obs-token 001` for each proposal's epoch builds exactly this pair, and
+    by name order both proposals got 2026.30_o001."""
+    with pytest.raises(ValueError) as exc:
+        _pick_refcat([O1_2024, O1_2026], field='001', proposal=prop)
+    msg = str(exc.value)
+    assert '_o001' in msg and f'_j{prop}' in msg and 'ASTROM_REFCAT' in msg
+    assert 'epoch2024.68' in msg and 'epoch2026.30' in msg
+
+
+def test_one_observation_tokened_refcat_still_serves_a_shared_tree_proposal():
+    assert _pick_refcat([O1_2024], field='001', proposal='6778') == O1_2024
+    assert _pick_refcat([O1_2024, U_2026], field='001',
+                        proposal='6778') == O1_2024
+
+
+def test_the_proposal_only_name_ranks_above_the_observation_only_name():
+    """Documented choice: `_j6778` beats `_o001` even for observation 001."""
+    assert _pick_refcat([N_6778, O1_2026], field='001', proposal='6778') == N_6778
+
+
+def test_a_field_is_not_required_for_a_proposal_only_pick():
+    assert _pick_refcat([N_6778, N_7213], field=None, proposal='6778') == N_6778
+
+
+def test_a_field_less_caller_does_not_take_an_observation_tokened_proposal_file():
+    """field=None must not match `_j6778_o001` as if its observation were
+    unspecified: with no field only the proposal-only name is eligible."""
+    assert _pick_refcat([N_6778_O1, N_6778], field=None,
+                        proposal='6778') == N_6778
+    with pytest.raises(ValueError, match='wrong sky'):
+        _pick_refcat([N_6778_O1], field=None, proposal='6778')
+
+
+FIVE = '/x/catalogs/gaia_virac2_refcat_epoch2025.10_j10678.fits'
+FIVE_O1 = '/x/catalogs/gaia_virac2_refcat_epoch2025.10_j10678_o001.fits'
+
+
+def test_a_five_digit_proposal_token_is_parsed():
+    """`_j10678` used to parse as 'no proposal', so every proposal saw it as an
+    untokened file and 6778 could be handed 10678's catalog."""
+    from jwst_gc_pipeline.astrometry_utils import _refcat_tokens
+    assert _refcat_tokens(FIVE) == ('10678', None)
+    assert _refcat_tokens(FIVE_O1) == ('10678', '001')
+    assert _pick_refcat([FIVE, N_6778], field='001', proposal='10678') == FIVE
+    assert _pick_refcat([FIVE_O1, FIVE], field='001', proposal='10678') == FIVE_O1
+    assert _pick_refcat([FIVE, N_6778], field='001', proposal='6778') == N_6778
+    with pytest.raises(ValueError, match='wrong sky'):
+        _pick_refcat([FIVE], field='001', proposal='6778')
+    with pytest.raises(ValueError, match='wrong sky'):
+        _pick_refcat([FIVE], field='001')
+
+
+def test_the_builder_token_and_the_selector_accept_the_same_ids():
+    from jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery import (
+        refcat_filename)
+    for tok, want in (('10678', '_j10678'), ('j10678', '_j10678'),
+                      (6778, '_j6778')):
+        name = refcat_filename('2025.10', proposal_token=tok)
+        assert name == f'gaia_virac2_refcat_epoch2025.10{want}.fits'
+        assert _pick_refcat([f'/x/{name}'], field='001',
+                            proposal=want[2:]) == f'/x/{name}'
+    for bad in ('jw06778', '678', '123456', 'abcd'):
+        with pytest.raises(ValueError, match='4-5 digit'):
+            refcat_filename('2025.10', proposal_token=bad)
+
+
+def test_the_builder_cli_stamps_the_proposal_token(tmp_path, monkeypatch):
+    """main() must pass --proposal-token to the filename, not just parse it."""
+    import sys
+    from astropy.table import Table
+    from jwst_gc_pipeline.reduction import build_gaia_virac2_refcat_byquery as B
+    (tmp_path / 'catalogs').mkdir()
+    tab = Table({'RA': [266.4], 'DEC': [-28.9]})
+    tab.meta['NGAIA'] = 1
+    tab.meta['NVIRAC'] = 0
+    monkeypatch.setattr(B, 'query_gaia', lambda *a, **k: (None, 'none'))
+    monkeypatch.setattr(B, 'query_virac2', lambda *a, **k: None)
+    monkeypatch.setattr(B, 'build_refcat_table', lambda *a, **k: tab)
+    monkeypatch.setattr(sys, 'argv', [
+        'build', '--base', str(tmp_path), '--epoch', '2024.68',
+        '--ra', '260.2', '--dec', '-35.7', '--proposal-token', '6778'])
+    B.main()
+    assert (tmp_path / 'catalogs'
+            / 'gaia_virac2_refcat_epoch2024.68_j6778.fits').exists()
+    assert not list((tmp_path / 'catalogs').glob('*_o*'))
+
+
+def test_the_Gaia_seed_pick_threads_the_proposal_too(tmp_path, monkeypatch):
+    """Both `_pick_refcat` calls in the checkpoint get `proposal=`; the second
+    (the Gaia-only seed) is otherwise invisible because its name regex cannot
+    carry a `_j` token."""
+    from jwst_gc_pipeline.photometry import cataloging as _cat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    seen = []
+
+    def spy(cands, field=None, proposal=None):
+        seen.append((sorted(cands), proposal))
+        return None
+
+    monkeypatch.setattr(_cat, '_pick_refcat', spy)
+    bp = _catalogs(tmp_path, ['gaia_refcat.fits'])
+    _cat._astrom_checkpoint_refcat(bp, field='001', proposal_id='1905',
+                                   gaia_fallback=True)
+    assert len(seen) == 2 and [p for _, p in seen] == ['1905', '1905'], seen
+
+
+@pytest.mark.parametrize('prop,want', [('6778', NGC[0]), ('7213', NGC[1])])
+def test_the_REDUCER_fallback_with_no_frame_match_threads_proposal(tmp_path,
+                                                                   prop, want):
+    """A reference_frame no refcat name matches takes the second branch of
+    refcat_for_frame, which also has to carry the proposal."""
+    import os as _os
+    from jwst_gc_pipeline.reduction.bulk_offset_step0 import refcat_for_frame
+    bp = _catalogs(tmp_path, NGC)
+    path, cands = refcat_for_frame(bp, 'GNS', field='001', proposal=prop)
+    assert len(cands) == 2 and _os.path.basename(path) == want
+    with pytest.raises(ValueError, match='wrong sky'):
+        refcat_for_frame(bp, 'GNS', field='001')
+
+
+def test_the_missing_refcat_message_names_the_right_builder_flag(tmp_path,
+                                                                 monkeypatch):
+    """On a shared tree `--obs-token` builds a name both proposals match; the
+    message must point at `--proposal-token`.  Other fields keep `--obs-token`."""
+    from jwst_gc_pipeline.photometry import cataloging as _cat
+    monkeypatch.delenv('ASTROM_REFCAT', raising=False)
+    monkeypatch.setattr(_cat, '_refcat_is_required', lambda p, f: True)
+    bp = str(tmp_path)
+    for prop, flag, other in (('6778', '--proposal-token 6778', '--obs-token'),
+                              ('2211', '--obs-token 023', '--proposal-token')):
+        with pytest.raises(_cat.MissingReferenceCatalogError) as exc:
+            _cat._astrom_checkpoint_refcat(bp, field='023' if prop == '2211'
+                                           else '001', proposal_id=prop)
+        msg = str(exc.value)
+        assert flag in msg and other not in msg, (prop, msg)
