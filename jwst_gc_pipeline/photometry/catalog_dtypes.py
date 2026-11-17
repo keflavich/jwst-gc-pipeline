@@ -15,8 +15,9 @@ allowlist intersection (``table.colnames``), not an error.
 
 Hard rule (CLAUDE.md astrometry rules): pixel positions/errors and sky
 coordinates are NEVER downcast here -- ``x_fit``/``y_fit``/``x_init``/
-``y_init``/``x_err``/``y_err``/``x_0``/``y_0``/``xcentroid``/``ycentroid``,
-every ``skycoord_*`` column, and ``sat_com_ra``/``sat_com_dec`` stay
+``y_init``/``x_err``/``y_err``/``x_0``/``y_0``/``xcentroid``/``ycentroid``
+and the satstar ``x_fit_cutout``/``y_fit_cutout``/``x_init_cutout``/
+``y_init_cutout`` copies (#949), every ``skycoord_*`` column, and ``sat_com_ra``/``sat_com_dec`` stay
 ``float64``. The per-row ``dra``/``ddec`` arcsec-error columns
 (``crowdsource_catalogs_long.save_photutils_results``, derived from
 ``x_err``/``y_err``) are likewise left alone -- they are position errors in a

@@ -65,14 +65,21 @@ def _is_compact(zf_sm, yy, xx, fwhm_pix, conc_min):
     return peak >= conc_min * abs(med) if med != 0 else True
 
 
-def _fof_merge(centers, link, radii=None, radius_frac=0.6):
+def _fof_merge(centers, link, radii=None, radius_frac=0.6, return_radii=False):
     """Friends-of-friends merge of (y,x) centres → group means.
 
     Two centres link when they are within ``link`` px, or, given ``radii``
     (the radius of the ZF-saturated core each centre was taken from, 0 for a
     peak), within ``radius_frac * max(r_i, r_j)`` px.
+
+    With ``return_radii`` the result is ``(means, group_radii)``, where
+    ``group_radii[k]`` is the largest member radius of group ``k`` (0 without
+    ``radii``), in the order of ``means``.
     """
     if len(centers) <= 1:
+        if return_radii:
+            r1 = [0.0] * len(centers) if radii is None else [float(x) for x in radii]
+            return centers, r1
         return centers
     pts = np.asarray(centers, dtype=float)
     r = np.zeros(len(pts)) if radii is None else np.asarray(radii, dtype=float)
@@ -90,7 +97,10 @@ def _fof_merge(centers, link, radii=None, radius_frac=0.6):
     groups = {}
     for i in range(len(pts)):
         groups.setdefault(find(i), []).append(i)
-    return [tuple(pts[idx].mean(axis=0)) for idx in groups.values()]
+    means = [tuple(pts[idx].mean(axis=0)) for idx in groups.values()]
+    if return_radii:
+        return means, [float(r[idx].max()) for idx in groups.values()]
+    return means
 
 
 def _neighbour_claim(blob, other, fwhm_pix, pad):
@@ -335,19 +345,25 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     # centres -> 1 seed).  Peaks inside a core's claimed region are already
     # absorbed above, and unconfirmed secondary peaks must pass the
     # compactness test.
-    centers = _fof_merge(centers, link=min_sep, radii=center_r)
+    # ``order_key`` follows the merged centres: the largest core radius of each
+    # group (a ZF-saturated core has r >= sqrt(3/pi), a peak 0), so that the
+    # caller can fit the larger cores first (#1094).
+    centers, order_key = _fof_merge(centers, link=min_sep, radii=center_r,
+                                    return_radii=True)
 
     if not centers:
         # ultimate fallback: bbox centre (current production behaviour)
         cy = 0.5 * (sl[0].start + sl[0].stop - 1)
         cx = 0.5 * (sl[1].start + sl[1].stop - 1)
         centers = [(cy, cx)]
+        order_key = [0.0]
 
     if verbose:
         print(f"  L{label_id}: area={area} r_sat={r_sat:.1f} -> {len(centers)} star(s)",
               flush=True)
     return centers, dict(r_sat=r_sat, bg=bg, mad=mad, area=area,
-                         crop=(y0, y1, x0, x1), zf_sm=zf_sm, blob_dil=blob_dil)
+                         crop=(y0, y1, x0, x1), zf_sm=zf_sm, blob_dil=blob_dil,
+                         order_key=order_key)
 
 
 def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
@@ -361,7 +377,14 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
     already consumes::
 
         {'com': (cy, cx), 'label': component_label, 'forced': False,
-         'sat_area': component_saturated_area}
+         'sat_area': component_saturated_area, 'order_key': core_radius}
+
+    ``order_key`` (deblended records only) is the radius in px of the
+    ZF-saturated core the star was taken from, 0 for a star taken from an
+    unsaturated peak.  Every star of a component carries the component's
+    ``sat_area``, so ``order_key`` is the only brightness proxy that tells the
+    members apart; ``get_saturated_stars`` sorts on it when
+    ``SATSTAR_DEBLEND_ORDER`` is set.  It does not change ``sat_area``.
 
     A component that is too small (``< min_area`` saturated pixels), has a
     non-finite centroid, or deblends to a single star yields exactly ONE record at
@@ -387,7 +410,7 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
                             'sat_area': area})
             continue
         try:
-            centers, _ = deblend_blob_zeroframe(
+            centers, _info = deblend_blob_zeroframe(
                 zeroframe, data, sources, label_id, sl, fwhm_pix,
                 daophot_xy=daophot_xy, confirm_xy=confirm_xy,
                 sat_ceiling=ceiling, **deblend_kwargs)
@@ -395,7 +418,11 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
             centers = None
         if not centers:
             centers = [com]
-        for c in centers:
+            keys = [0.0]
+        else:
+            keys = _info['order_key']
+        for c, key in zip(centers, keys):
             records.append({'com': (float(c[0]), float(c[1])), 'label': label_id,
-                            'forced': False, 'sat_area': area})
+                            'forced': False, 'sat_area': area,
+                            'order_key': float(key)})
     return records

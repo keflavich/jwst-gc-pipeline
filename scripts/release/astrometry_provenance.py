@@ -69,7 +69,6 @@ their contrast so the choice is visible rather than asserted.  Both legs are bul
 per-star error bar is a separate quantity.
 """
 import datetime
-import glob
 import hashlib
 import json
 import os
@@ -152,9 +151,17 @@ def reference_ties(field_cfg):
     Best-effort: a field with no checkpoint records simply reports none, which
     the page then says out loud rather than implying a tie was measured.
     """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import current_records
+
     checkpoints = Path(field_cfg["data_dir"]) / "astrometry_checkpoints"
     out = {}
-    for path in sorted(glob.glob(str(checkpoints / "checkpoint_m2_*_latest.json"))):
+    # Current records only (issue #827): a pre-migration untokened record is
+    # dropped where a tokened one covers the same filter.
+    m2_paths = sorted(p for k, p in current_records(checkpoints).items()
+                      if k[0] == "m2")
+    for path in m2_paths:
         try:
             record = json.loads(Path(path).read_text())
         except (OSError, ValueError):
