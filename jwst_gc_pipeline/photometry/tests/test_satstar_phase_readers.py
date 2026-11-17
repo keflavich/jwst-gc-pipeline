@@ -177,6 +177,33 @@ def test_partner_seed_fallback_reads_one_phase_per_exposure(tmp_path, phase, wan
     assert [satstar_file_phase_token(f) for f in files] == want
 
 
+def test_partner_seed_fallback_reads_the_variant_being_fit(tmp_path):
+    """#1194: the newer file is the align one; the frames being fit are
+    destreak, so the destreak catalog seeds."""
+    pdir = tmp_path / 'F480M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    destreak = _satcat(pdir, EXP, 'm7', 266.41)
+    align = pdir / f'{EXP}_align_o040_crf_m7_satstar_catalog.fits'
+    Table({'flux_fit': [1e4]}).write(align)
+    os.utime(destreak, (1_000, 1_000))
+    os.utime(align, (2_000, 2_000))
+    got = C._partner_satstar_seed_files(
+        str(tmp_path), 'f480m', phase='m7',
+        frame_variants=C._frame_variants_of_paths(
+            [f'/x/{EXP}_destreak_o040_crf.fits']))
+    assert got == [str(destreak)]
+    assert C._partner_satstar_seed_files(
+        str(tmp_path), 'f480m', phase='m7') == [str(align)]
+
+
+def test_frame_variants_of_paths_ignores_unreadable_names():
+    assert C._frame_variants_of_paths(
+        [f'/x/{EXP}_destreak_o040_crf.fits', '/x/cutout.fits']) \
+        == frozenset({'destreak_o040_crf'})
+    assert C._frame_variants_of_paths([]) is None
+    assert C._frame_variants_of_paths(['/x/cutout.fits']) is None
+
+
 def test_partner_seed_prefers_the_consolidated_catalog(tmp_path):
     pdir = tmp_path / 'F480M' / 'pipeline'
     pdir.mkdir(parents=True)
@@ -241,6 +268,12 @@ def _keyword_calls(module, func):
     (C, '_satstar_cofit_positions', 'phase', 'merge_label'),
     # _prepare_frame_for_photometry: the partner seeds read the phase being fit
     (C, '_partner_satstar_seed_files', 'phase', 'satstar_label'),
+    # ... and the frame variant of the frame being fit (#1194)
+    (C, '_partner_satstar_seed_files', 'frame_variants',
+     '_frame_variants_of_paths([original_filename])'),
+    # the co-fit dedup reads the variant of the frames the merge reads (#1194)
+    (C, '_satstar_cofit_positions', 'frame_variants',
+     "_frame_variants_of_paths(frame_cache.get((module, filt), []))"),
     # load_satstar_catalog: primary and consolidated branches
     (MC, 'apply_pooled_wingcal', 'phase', 'phase'),
 ])
