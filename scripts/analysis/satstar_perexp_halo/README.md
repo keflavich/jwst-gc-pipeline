@@ -112,7 +112,7 @@ comparison.
 
 `production_flux_vs_x.py fit <workdir> <psf dir> <cal key>...` runs `saturated_star_finding.remove_saturated_stars` unchanged on each `_cal` frame. It uses the fovp1024 F480M grid, and has no ZEROFRAME anchoring because no `_ramp.fits` is available here. `analyze <prefix> <workdir>` then compares each star's `flux_fit` across its dithers (`production_flux_vs_x.*`).
 
-Note that the catalog's `x_fit`/`y_fit` are positions inside the fit box; the detector position is `x_0`/`y_0`, which agrees with `skycoord_fit` through the GWCS to 0.0005 px.
+Note that in catalogs written before #949 `x_fit`/`y_fit` are positions inside the fit box (since #949 they are detector pixels and the box values are `x_fit_cutout`/`y_fit_cutout`); `x_0`/`y_0` is the detector position in both vintages and agrees with `skycoord_fit` through the GWCS to 0.0005 px.
 
 - **Data:** obs 041, 061, 075 and 086 of 10678, 24 NRCBLONG frames, 16,397 catalog rows. 921 stars have dithers both in the band (x = 250–550) and outside it. "Outside" excludes both the band and the null band (±50 px).
 - **The production flux is low in the band, and more so for larger cores.** Median `flux_fit` in band / outside, by the star's median `sat_area`:

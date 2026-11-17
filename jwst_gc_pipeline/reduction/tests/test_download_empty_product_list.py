@@ -27,11 +27,12 @@ import numpy as np
 import pytest
 from astropy.table import Table
 
+from jwst_gc_pipeline.reduction.mast_obs_scope import uncal_uri_mask
+
 
 def _uncal_mask(uris):
-    """The mask as the script builds it, including the dtype that matters."""
-    return np.array([u.endswith('_uncal.fits') and '_nrc' in u for u in uris],
-                    dtype=bool)
+    """The production selector, as the script calls it (observation 129)."""
+    return uncal_uri_mask(uris, '10678', '129', '_nrc')
 
 
 def test_an_empty_uri_list_yields_a_BOOLEAN_mask():

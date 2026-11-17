@@ -3,7 +3,9 @@ from exposure import Exposure
 k=int(sys.argv[1]); tag=sys.argv[2]
 J1=np.load('tgt_e1.npz')['J']; ex=Exposure(f'tgt_e{k}.npz',J1)
 z=np.load(f'{tag}_e{k}.npz'); pred=z['pred']; cov=z['cov']; varQ=z['varQ']
-chic=(ex.d-pred)/np.sqrt(ex.var+varQ)
+# a loo_crop.py NOISEONLY run stores the simulated data; score against those, not the real ones
+d=z['d'] if 'd' in z.files else ex.d
+chic=(d-pred)/np.sqrt(ex.var+varQ)
 m=ex.good&(cov>=3)&np.isfinite(chic)
 dq=ex.dq
 yy,xx=np.mgrid[:1024,:1024]; r=np.hypot(xx-ex.xt0,yy-ex.yt0)

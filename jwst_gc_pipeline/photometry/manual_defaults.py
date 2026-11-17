@@ -40,6 +40,19 @@ MANUAL_DEFAULTS = {
     # over-corrects; 12 px fails (interpolation kernel cannot fill the hole).
     # 0 = off (bit-identical to the plain source mask).
     'manual_residual_bg_satstar_mask_fwhm': 0.0,
+    # -- how the masked source disks of that bg are refilled (#694).  The
+    # defaults reproduce the original behaviour.  The 2 FWHM disk is refilled by
+    # a sigma = 1 FWHM Gaussian convolution, which reaches only ~1.2 FWHM and so
+    # draws mainly on the ring just outside the disk, i.e. the star's own
+    # residual wing; the pedestal is subtracted in the next phase and the wing
+    # grows from phase to phase.  fill_sigma_fwhm widens the kernel; fill_mode
+    # 'annulus' fills each disk with the median of an annulus starting at
+    # fill_annulus_fwhm (Gaussian fill where the annulus is mostly empty);
+    # mask_fwhm sets the disk radius.  No default has been chosen from a re-fit.
+    'manual_residual_bg_mask_fwhm': 2.0,
+    'manual_residual_bg_fill_sigma_fwhm': 1.0,
+    'manual_residual_bg_fill_mode': 'gauss',
+    'manual_residual_bg_fill_annulus_fwhm': 3.0,
     # -- fit QC (model/data-peak overshoot; NOTES_star_vs_extended_emission.md)
     'manual_overshoot_ratio': 1.2,
     'manual_overshoot_action': 'refit',
@@ -87,6 +100,19 @@ MANUAL_DEFAULTS = {
     # bright keep also for grouped rows (group_size > 1); only grouped fits
     # produce them, so ungrouped runs are unchanged.  See _filter_extended_emission.
     'manual_ext_high_keep_grouped': True,
+    # group-aware qfit (#1245).  On: the per-frame pass writes ``qfit_group``
+    # (a grouped member's qfit with its own flux replaced by the light in its fit
+    # box, partners included; see group_qfit.py) and the merged-catalogue
+    # vetting reads it in place of qfit.  Default off, which leaves the
+    # per-frame and merged catalogs without the column.  A member fainter than
+    # ``manual_ext_group_qfit_min_ratio`` x the brightest member of its group
+    # keeps its own qfit; 0.1 is the ``manual_m7_seed_own_band_companion_max_ratio``
+    # value and is not validated for vetting: at 0.1 the discount factor of the
+    # faint member is ~0.13 within ~1 FWHM, so a spurious faint member can pass
+    # the flat qfit gate (0.3 gives ~0.31).  qfit_group also feeds the
+    # qfit_confident S/N bypass of the vetting.
+    'manual_ext_group_qfit': False,
+    'manual_ext_group_qfit_min_ratio': 0.1,
     'manual_ext_qfit_recover_max': 0.2,  # == qfit_max -> recover tier NO-OP
     # previous-phase (hysteresis) keep: a source the previous phase vetted is
     # kept while qfit < this and S/N >= the next; 0 = off
@@ -180,6 +206,11 @@ MANUAL_DEFAULTS = {
     'manual_crossband_seed_snr_min': 5.0,
     'manual_crossband_seed_qfit_max': 0.2,
     'manual_crossband_seed_max_sep_mas': 30.0,
+    # seed health (#981): warn (or raise) when the seed confirms fewer than this
+    # fraction of the smallest band's good detections (each band's confirmed
+    # count over min(n_good))
+    'manual_crossband_seed_min_frac': 0.3,
+    'manual_crossband_seed_collapse_action': 'warn',
     # m7 seed of each band = cross-band seed UNION the band's own m6 vetted
     # catalog, plus daofind on the m6 residual - bg (_build_m7_band_seed).
     # None = AUTO (_auto_m7_seed_own_band): on for star-dominated NIRCam
@@ -201,6 +232,20 @@ MANUAL_DEFAULTS = {
     # gate (1.0) left them unsubtracted in the m7 residual
     # (docs/evidence/m7_companion_ratio).
     'manual_m7_seed_own_band_companion_max_ratio': 0.1,
+    # Seed dedup (#1206): a cross-band position and an own-band m6 position of
+    # one star differ by more than the 30 mas match radius in the red bands
+    # (Brick F405N pairs: 31 / 41 / 61 mas at p10 / 50 / 90, FWHM 136 mas),
+    # and the seed pair then fits the star twice.  With this > 0 the cross-band
+    # to own-band match radius becomes max(manual_crossband_seed_max_sep_mas,
+    # this x FWHM), and own-band sources closer than this x FWHM to a
+    # cross-band position or to a brighter own-band source are not added.
+    # 0.5 FWHM = 31 / 32 / 36 / 68 mas in F182M / F187N / F212N / F405N, below
+    # the 0.75 FWHM of the closest resolved pairs.  OFF (0 = match radius
+    # max_sep_mas alone) until the production seeds are rerun with it
+    # (decision 2026-11-14); 0.5 is the documented opt-in value
+    # (--manual-m7-seed-dedup-fwhm 0.5).  Unrelated to
+    # manual_crossband_seed_dedup_mas, the older union-seed dedup.
+    'manual_m7_seed_dedup_fwhm': 0.0,
     # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
     # resample) only on the FINAL phase by default; intermediates are never
     # staged/read, so skipping them saves ~1 resample per intermediate phase.
@@ -243,6 +288,15 @@ MANUAL_DEFAULTS = {
     # frames cover (or is_saturated); 100 switches the rank cut off
     'manual_xexp_single_snr': 50.0,
     'manual_xexp_single_top_pct': 5.0,
+    # -- cross-epoch seed (cataloging.xepoch_seed_catalog_path), off by default.
+    # With all three set, m7 adds the other epoch's m7 vetted merged catalog
+    # (same band, 'merged' module) to the seed with keep_in_fit=True: those rows
+    # stay in the fit so their neighbours are fitted jointly, and the catalog
+    # lists them by the production rules (_build_manual_seed /
+    # _manual_phot_pass).
+    'xepoch_field': None,
+    'xepoch_proposal_id': None,
+    'xepoch_target': None,
 }
 
 

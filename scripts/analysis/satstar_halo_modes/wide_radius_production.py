@@ -10,8 +10,9 @@ The production hook (``SATSTAR_HALO_MODES``) is confined to the photutils box
 r ~ 200 px.  This measures that on PRODUCTION catalogs: for every row of the
 ``<root>_satstar_catalog.fits`` in ``<catalog dir>`` (from
 ``satstar_perexp_halo/production_flux_vs_x.py``) it cuts a 2*RMAX+1 stamp of
-the ``_cal`` frame around (x_0, y_0) -- the fitted DETECTOR position;
-``x_fit``/``y_fit`` are local to the fit box -- evaluates the production PSF grid
+the ``_cal`` frame around (x_0, y_0) -- the fitted DETECTOR position
+(``x_fit``/``y_fit`` are local to the fit box in catalogs written before #949,
+detector pixels since) -- evaluates the production PSF grid
 (``load_stpsf_grid``) there at unit flux, masks DQ DO_NOT_USE/SATURATED
 dilated by 3 px, and fits ``F P + B`` and the halo modes
 (``satstar_halo_knots(r_core, RMAX)``, r_core = sqrt(sat_area/pi) + 3) on the

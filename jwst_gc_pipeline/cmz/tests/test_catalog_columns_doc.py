@@ -62,6 +62,31 @@ def test_every_released_column_is_described(mw):
     assert not missing, f'catalog_columns.txt does not describe {missing}'
 
 
+def test_forced_bkg_sigma_column_is_described(mw):
+    # written by the m8 fill under --forced-fill-bkg-scatter (#1120); not in
+    # RELEASED_COLUMNS because no released catalog carries it yet
+    text = mw.CATALOG_COLUMNS_SRC.read_text()
+    assert 'forced_bkg_sigma_{filter}' in text
+    assert 'forced_bkg_nframes_{filter}' in text
+
+
+def test_forced_nbrsub_and_error_scale_columns_are_described(mw):
+    # written by the m8 fill under --forced-fill-nbrsub / --forced-fill-nrand
+    # (#1284); not in RELEASED_COLUMNS because no released catalog carries them
+    text = mw.CATALOG_COLUMNS_SRC.read_text()
+    for name in ('forced_nbrsub_{filter}', 'forced_near_m7_sep_{filter}',
+                 'forced_err_scale_{filter}', 'forced_snr_raw_{filter}'):
+        assert name in text
+
+
+def test_cmd_default_columns_are_described(mw):
+    # written on m7, m8 and m8_dedup tables (#1283); the per-tile release
+    # tables and the joint catalogue built from m8_dedup carry them
+    text = mw.CATALOG_COLUMNS_SRC.read_text()
+    for name in ('oksep_pass', 'cmd_default', 'CMDDEF'):
+        assert name in text
+
+
 def test_file_is_plain_ascii(mw):
     # served as text/plain with no charset; keep it readable everywhere
     mw.CATALOG_COLUMNS_SRC.read_bytes().decode('ascii')
