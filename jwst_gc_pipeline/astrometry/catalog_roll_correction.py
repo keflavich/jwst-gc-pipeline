@@ -946,6 +946,15 @@ def correct_catalog(path, out_path, field_name, models, include_miri=False,
                 ROLLCPIV=('visit coverage centroid', 'rotation pivot'),
                 ROLLPIX=('pixel cols refer to UNCORRECTED WCS', 'x/y not rotated'),
                 ROLLCDAT=(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'applied UTC'))
+    if is_fits:
+        # The FITS writer stamps GCPIPEV/GCTAG with THIS run's commit over the
+        # producer's (provenance.install_fits_provenance_hook), so keep the
+        # input's values under ROLLCUPV/ROLLCUTG.  ECSV output keeps them in meta.
+        for key, card, cmt in (('GCTAG', 'ROLLCUTG', 'upstream GCTAG'),
+                               ('GCPIPEV', 'ROLLCUPV', 'upstream GCPIPEV')):
+            val = next((h.header[key] for h in (hl[0], hl[ti]) if key in h.header), None)
+            if val is not None:
+                prov[card] = (str(val), cmt)
     vis_cards = []
     for i, m in enumerate(model_cache.values()):
         for j, v in enumerate(m.visits):

@@ -286,6 +286,25 @@ gc2211) needs it: an untokened catalog is handed to every observation alike,
 and for pointings arcminutes apart that is the wrong sky — the way gc2211 o023
 took a −9.28″ correction.
 
+A directory shared by two proposals (ngc6334: 7213 and 6778, which also share
+observation `001`) needs `--proposal-token <PPPP>` instead, which stamps
+`_j<PPPP>` before any observation token (`..._epoch2024.68_j6778.fits`).
+`pick_refcat(cands, field, proposal=...)` prefers `_j<proposal>_o<NNN>`, then
+`_j<proposal>`, then `_o<NNN>`, then an untokened file, and never falls back to
+another proposal's `_j` file.  `_j<proposal>` outranks `_o<NNN>` even for the
+matching observation, because the proposal fixes the epoch and footprint and an
+observation number alone does not (7213 and 6778 are both `001`).  It refuses
+(naming the files and the fix, rename or `ASTROM_REFCAT`) several `_j<proposal>`
+files with no observation token for one proposal, and, for a proposal in
+`naming.SHARED_TREE_PROPOSALS`, several untokened candidates or several
+`_o<NNN>` candidates for the run's observation; before this, the newest-sorting
+name won and 6778 was tied to 7213's epoch-2026.30 file (#818).  Proposal ids
+are 4 or 5 digits (`_j6778`, `_j10678`); `--proposal-token` rejects any other
+spelling.  On a shared tree build with `--proposal-token`, not `--obs-token`:
+the `_o<NNN>` name is the same for both proposals.  Among several `_j<P>_o<NNN>`
+(or several `_o<NNN>` off the shared tree) the last in sorted order wins, as
+before.  The ngc6334 `fields.yaml` entries name the `_j6778` / `_j7213` files.
+
 `ALLOW_CONSENSUS_ONLY_ASTROMETRY=1` runs without one, for a deliberate first
 look at a field whose catalog has not been built.  It never lets a run borrow
 another observation's catalog: `pick_refcat` refuses that separately, override
@@ -308,6 +327,47 @@ Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting
 checkpoint.  "m2..m5" of the plan = merge tokens m3..m6 here.  "m6
 cross-filter" = the m7 cross-band merge.
+
+## The m7 cross-band seed health check (issue #981)
+
+`_build_crossband_seed` confirms a position only when `min_filters` bands detect
+it within `manual_crossband_seed_max_sep_mas` (30 mas). On a two-band target
+such as gc-treasury (F212N, F480M), bands registered worse than that radius
+confirm almost nothing: o111, o113, o063 and o138 sat 66-272 mas apart and the
+seed held only a small fraction of the good detections (about 0.003-0.05 on the
+collapsed tiles checked, 0.69-0.82 on the healthy ones; 7 tiles, measured with
+the earlier pooled `n_seed / min(n_good)` form; not re-measured on all 68).
+On the 68 two-band gc-treasury tiles the pooled form gives 0.63-0.82 while a
+per-band count over each band's *own* `n_good` gives 0.28-0.63 (six tiles, o042,
+o043, o045, o069, o070 and o076, at 0.282-0.298, under the 0.3 floor), because
+the band with more good detections (F212N on 65 of the 68 tiles, F480M on 3)
+has detections the other band can never confirm. The
+two forms therefore agree only for bands of equal depth, and the per-band count
+uses the smallest band's `n_good` for every band (below).
+
+For each band the build counts the detections (summed over modules) that sit in
+a cluster the seed kept and divides by the smallest band's good-detection count,
+capping at 1. The smallest
+band fraction is the seed's health, so with three or more bands a single
+mis-registered band is flagged even when the others agree with each other (a
+pooled seed-size over smallest-band-count would not see it). Below
+`manual_crossband_seed_min_frac` (0.3) the build prints one
+`WARNING [m7] crossband seed collapsed` line per process, naming the counts, the
+per-band fractions and the worst band. A coarse offset between the worst band
+and the highest-S/N other band (offset-histogram stacking in a 0.3 arcsec
+window; skipped under 200 pairs) is printed and stored only when the
+measurement reports a coherent peak; a pair registered further apart than the
+window gives the highest noise bin, which is reported as "no coherent peak",
+with `offset_ok` False and the contrast in the JSON. The numbers are stored in
+the seed table meta (`SEEDFRAC`, `SEEDCOLL`, `SEEDNGD`, `SEEDOFFX`, `SEEDOFFY`)
+and in `crossband_seed_manual<obs>.health.json` beside the seed.
+`manual_crossband_seed_collapse_action` is `warn` (default) or `raise`
+(`CrossbandSeedCollapsedError`, after the files are written).
+
+There is no wider-radius fallback: the repair is the reference tie (#921,
+#1198). The offset is a diagnostic confined to its window. The m7 cross-filter
+checkpoint above and `registration_failsafes.py --scan` remain the authority on
+registration; the seed check stops earlier, before the m7 compute is spent.
 
 ## The cross-filter residual field (m7, measurement only)
 
@@ -405,6 +465,44 @@ pipeline ties to; see [`../../docs/JWST_CONSENSUS_CATALOG.md`](../../docs/JWST_C
    (the median limits the pull of any one bad exposure).
 5. Every exposure re-measured against the consensus; misaligned = off > 2 mas
    AND significant vs the peak error bars.
+
+### Wide windows: capped bin, significance gate, and what it refuses (#1232)
+
+`measure_offset` histograms each window at `_window_bin_arcsec`, which is
+`window/150` capped at `MAX_WINDOW_BIN_ARCSEC` (0.1″): the 3″ and 10″ windows
+keep their bins (0.02″, 0.067″), the 30″ and 60″ windows read 0.1″ instead of
+0.2″ and 0.4″, so a true 20–30″ tie in a dense field is no longer diluted below
+the contrast floor.  A finer bin lets a noise maximum read contrast 5–9, so at
+windows above `SIGNIFICANCE_GATE_MIN_WINDOW_ARCSEC` (15″) `ok` also needs
+`peak_significance >= min_peak_significance` (a trial-corrected Poisson
+significance against the local background).  Window choice stays on contrast;
+when the winner is refused by the floor, the highest-contrast NARROWER window
+that passes its own gate and reads the same peak (within 100 mas or 3000 × the
+bin) is reported instead.
+
+Consequences for existing records and readers:
+
+* Contrasts recorded at 30″ and 60″ before this change were read at the coarser
+  bins and are not comparable (the cloudc F182M "contrast 9.0" above is such a
+  value).  A noise peak above 15″ can now read contrast 5–9, so a contrast
+  check alone no longer separates it; per-exposure records carry
+  `peak_significance`, `min_peak_significance` and `bin_arcsec` next to
+  `contrast` for that reason.
+* `measure_offset_grid` (per-tile `clean`, `per_tile_ok`, `apply_ok`), the
+  Gaia-sparse cross-check of `measure_reference_tie` (`sparse_untrustworthy`
+  now also follows a significance refusal), `visit_consensus`'s sparse arbiter,
+  `bulk_astrometry_update` and `multiepoch_pm.affine_tie` all read the default
+  sweep, so a noise peak above 15″ that used to read `ok` is `ok=False` there.
+  Existing checkpoint records may flip on re-measurement.
+* Measured limits (simulated uniform fields, default sweep; not real data):
+  50 pairs of independent 50″ fields read `ok` 1 time (base 50); at 0.3″
+  scatter a 20–30″ true tie reads `ok` in 11 of 24 fields (7 within 150 mas of
+  the truth) against 24 of 24 at the base (11 within 150 mas).  Scatter of
+  0.04–0.1″ is unaffected.  The 3″/10″ fallback windows have no significance
+  test of their own, which is where the one noise `ok` came from.
+* The alias-probe fixtures of `test_reference_tie_unswept_sparse_alias.py`
+  reach the probe only on a selected seed; the usual route of the same regime
+  is the wide-window significance floor (`wide_window_case`).
 
 ## The reference tie (`measure_reference_tie`) — five checks
 

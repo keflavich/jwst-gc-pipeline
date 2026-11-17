@@ -43,3 +43,4 @@ NOTES*.md
 
 # compiled PCAT kernels (photometry/transdimensional/kernel.py)
 jwst_gc_pipeline/photometry/transdimensional/_lib/
+*.whl
