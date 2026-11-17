@@ -377,6 +377,61 @@ ONLY_SHARDS=1,3,5 SKIP_IF_DONE=1 FANOUT_TIME_M7=<longer> \
   60 h for m7, so a chain submitted from now on should need this less. A
   `FANOUT_TIME` set in a runner script still overrides the table.
 
+## The re-tie loop runs from a pinned checkout
+
+`run_field_retie_loop.sh` drives reduce -> catalog to m2 -> re-tie for as long as
+a field takes to converge, which can be days. Every job it submits imports
+`jwst_gc_pipeline` from `PIPE_ROOT` when the job starts, and the loop reads its
+own helpers (`submit_reduction.sbatch`, `submit_cataloging_perframe.sh`,
+`offsets_value_digest.py`) from its checkout on every iteration. Left on a live
+checkout, one run therefore spans every commit merged meanwhile (issue #679).
+
+So the loop snapshots the tree into a detached, locked git worktree at launch and
+re-executes from it. The tree pinned is the one named by `PIPE_ROOT` or, when that is
+unset, the checkout the script lives in. Both `PIPE_ROOT` and `$HERE` then point
+into the pin, and the provenance banner prints
+`pin: run-lifetime; pinned from <source> -> <pin>`.
+
+```
+PROPOSAL=4147 FIELD=012 TARGET=sgrc FILTERS="..." PIPE_ROOT=$PWD \
+    scripts/reduction/run_field_retie_loop.sh > ~/retie_sgrc4147_o012.log 2>&1
+# pin: /blue/adamginsburg/adamginsburg/repos/pinned/retie-sgrc4147-o012-<UTC stamp>-<sha7>
+```
+
+- Keep the log outside the checkout (as above): a `*.log` redirected into it is
+  an untracked file, so the launch refuses itself as dirty.
+- A pin holds the source's `HEAD`. A source with uncommitted or untracked files
+  is refused (exit 2) because the snapshot would not contain them; commit them,
+  or set `RETIE_PIN_ALLOW_DIRTY=1` to run `HEAD` without them (the log says so).
+- A merge reaches a run only when it is restarted. To adopt a safety fix, stop
+  the loop and launch it again; the new run takes a new pin.
+- `RETIE_PIN=0` keeps the old behaviour for debugging and prints a warning.
+  `RETIE_PIN_DIR` changes where pins go. `RETIE_PROVENANCE_ONLY=1` reports
+  `would pin ...` and creates nothing.
+- The loop does not delete its pin on exit: the m3-m7 chain it submits at the end
+  is still queued and imports from it when it starts. Run
+  `scripts/reduction/prune_retie_pins.sh` to list the pins whose
+  `<TARGET><PROPOSAL>-o<FIELD>-*` jobs have all left the queue, and
+  `prune_retie_pins.sh --apply` to remove them. A pin is kept while any job of
+  that name prefix is queued or running, or while the loop that made it is alive
+  (its pid is in the worktree lock reason; a pin locked from another host is kept
+  because the pid cannot be checked, unless `RETIE_PRUNE_ASSUME_LOOPS_DEAD=1`).
+- A revived chain (the `ONLY_SHARDS` and finalize-resubmission recipes above)
+  has to import the same code as the rest of the chain. `cd` into the chain's
+  pin directory and run those recipes there, so that `PIPE_ROOT=$PWD` and
+  `scripts/reduction/submit_cataloging_perframe.sh` both name the pin: the
+  driver takes its phase sbatch from its own location, so `PIPE_ROOT=<pin>`
+  with the driver run from a live checkout mixes the pin's package with the live
+  checkout's sbatch. Do not run `prune_retie_pins.sh --apply` between the
+  `scancel` and the resubmission: with the field's jobs cancelled the queue is
+  empty for it and the pin the recipe needs would be removed.
+- `RETIE_PIN_DIR` must be an absolute path; a relative one is refused (exit 2).
+  `RETIE_PINNED=1` is the re-exec's marker, not a switch: set by hand, the loop
+  checks that `PIPE_ROOT` is a detached linked worktree and otherwise prints
+  `pin: NOT VERIFIED` instead of claiming a pin.
+- `prune_retie_pins.sh --apply` skips a symlink named like a pin, and a pin it
+  cannot read or remove is reported while the others are still handled (exit 1).
+
 ## Overriding the target
 
 ```

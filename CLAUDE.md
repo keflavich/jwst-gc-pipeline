@@ -262,6 +262,10 @@ All pipeline work goes on **worktree branches** (`../jwst-gc-pipeline-<slug>`) p
 as **pull requests**, one concern per PR. Never accumulate uncommitted changes on the
 active `main` working tree (it is the live reduction environment).
 
+Retie loops (`scripts/reduction/run_field_retie_loop.sh`) run from a per-run pinned
+worktree that they create themselves (#679); a merge reaches a run only on restart.
+Clear finished pins with `scripts/reduction/prune_retie_pins.sh`.
+
 ## Other conventions
 - SLURM: use `--account=astronomy-dept --qos=astronomy-dept-b`. The default
   `adamginsburg` QOS caps cpu=10 and will hang a 16-cpu task.
