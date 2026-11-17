@@ -683,7 +683,8 @@ def test_run_manual_pipeline_passes_the_runs_only_in_cofit_residual():
     assert "if _want_cofit: if _infield_mode == 'cofit_residual':" in flat
     assert ('_cofit_runs = _satstar_cofit_runs( os.path.join(cut_bp, filt, '
             "'pipeline'), proposal_id=proposal_id, field=field, "
-            'phase=merge_label)') in flat
+            'phase=merge_label, frame_variants=_frame_variants_of_paths( '
+            'frame_cache.get((module, filt), [])))') in flat
     assert "_cofit = [_r['positions'] for _r in _cofit_runs]" in flat
     start = src.index('_clean_offfov_dups_and_offfield(')
     call = ' '.join(src[start:src.index(')', src.index('cofit_runs=', start))
