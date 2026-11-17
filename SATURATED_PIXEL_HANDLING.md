@@ -157,8 +157,8 @@ gates on data *severity*:
 |---|---|---|
 | satstar **seeding** | starts from the full any-group `SATURATED` mask (≥3-px clusters, `JUMP_DET` disambiguated, per-filter wing data floor), then a severity gate **removes** components and three blocks **add** seeds — see below | `find_saturated_stars` |
 | satstar **fit** | the current source's saturated component **dilated** by the adaptive mask buffer, plus other sources' saturated pixels — for a **forced / off-FOV** source the *whole* saturated mask is dilated as one mask for all sources, and wing self-cal is skipped. With a ZEROFRAME anchor `zf_deep_core` is substituted for `saturated` and goes through the same dilation. The mask also carries `cutout == 0` and `isnan(cutout)`, and `data` is zeroed where `VAR_POISSON` is NaN — which is *why* truly-lost pixels are excluded in practice. | `get_saturated_stars` |
-| daophot fit mask | any-group `SATURATED`, narrowed to pixels whose data exceeds the per-filter `SAT_SEVERITY_FLOOR` | `_prepare_frame_for_photometry` (`cataloging.py`) |
-| `_filter_near_saturation` veto | the **raw** any-group `SATURATED` bit from `ctx.dqarr`, recomputed inside the veto; drops fits within `near_sat_dist_pix` (1.0 px on NIRCam). **This veto uses the unnarrowed bit.** | `crowdsource_catalogs_long.py` |
+| daophot fit mask | any-group `SATURATED` (the `_bad_dq_bitmask` OR re-adds every `SATURATED` pixel, so the per-filter `SAT_SEVERITY_FLOOR` narrows only the pixels set to NaN in the detection image, not the fit mask). With `--truly-lost-saturation-in-fit` (default off, #567): `SATURATED & DO_NOT_USE` only, taken before the floor, plus the non-`SATURATED` bad flags | `_prepare_frame_for_photometry` (`cataloging.py`) |
+| `_filter_near_saturation` veto | the **raw** any-group `SATURATED` bit from `ctx.dqarr`, recomputed inside the veto; drops fits within `near_sat_dist_pix` (1.0 px on NIRCam). **This veto uses the unnarrowed bit.** With `--truly-lost-saturation-in-fit` the manual path hands the veto a copy of the DQ with `SATURATED` cleared outside the truly-lost set (`ctx.dq_for_satveto`); `ctx.dqarr` stays raw | `crowdsource_catalogs_long.py` |
 
 `_unrecoverable = isnan(VAR_POISSON)` feeds the per-pixel flag image (bit 1 =
 saturated-but-recovered, bit 2 = unrecoverable), centroid refinement, and the
@@ -269,7 +269,11 @@ three additive blocks; the satstar fit masks the **dilated** saturated component
 daophot gates on data severity. Before changing any of these, read the table above:
 the code deliberately avoids all three plausible-sounding "fixes" (restrict seeding
 to `DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
-`_filter_near_saturation` with the severity floor).
+`_filter_near_saturation` with the severity floor). The one exception is the opt-in
+`--truly-lost-saturation-in-fit` (default off): it applies the second of those
+(truly-lost pixels only in the fit mask, and in the DQ the veto reads) so the B arm
+of the #418 comparison can be produced; it is not a default and is not evidence that
+the restriction is safe.
 
 ---
 
@@ -587,6 +591,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | flag | dest | default | purpose |
 |---|---|---|---|
 | `--saturation-data-floor` | `saturation_data_floor` | −1.0 | mask a SATURATED px only if data > floor; −1 = per-filter auto, 0 = mask all, >0 = explicit |
+| `--truly-lost-saturation-in-fit` | `truly_lost_saturation_in_fit` | False | manual path only: fit mask, near-sat veto DQ and the satstar saturated-pixel fill use truly-lost saturation (SATURATED & DO_NOT_USE) instead of the any-group SATURATED flag (#567). Recorded per frame as catalog header `TLSATFIT`. The A and B arms write the **same** per-frame product names and `--skip-if-done` markers are judged by mtime only (`_marker_is_current`), so run the B arm in its own basepath and do not combine it with `--skip-if-done` over an A-arm tree (a marker does not record the arm). The legacy crowdsource step, `artificial_stars.py` and `xexp_reconcile` keep the raw flag |
 | `--desaturated` / `-d` | `desaturated` | False | use the satstar-removed image |
 | `--fit-satstar-outside-fov` / `--no-…` | `fit_satstar_outside_fov` | None (auto) | fit stars whose centers are off-frame (auto: on full-frame, off cutout) |
 | `--deblend-satstars` | `deblend_satstars` | False | ZEROFRAME-deblend touching saturated cores |
