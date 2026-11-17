@@ -8191,7 +8191,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
-        path = _pick_refcat(cands, field=field)
+        path = _pick_refcat(cands, field=field, proposal=proposal_id)
         if (gaia_fallback and not path
                 and not _refcat_is_required(proposal_id, field)):
             # A field outside the VVV footprint carries only the Gaia seed
@@ -8202,7 +8202,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
             gcands = sorted(
                 p for p in glob.glob(f"{basepath}/catalogs/gaia_refcat*.fits")
                 if _GAIA_REFCAT_RE.match(os.path.basename(p)))
-            path = _pick_refcat(gcands, field=field)
+            path = _pick_refcat(gcands, field=field, proposal=proposal_id)
             if path:
                 print(f"astrom checkpoint: no gaia_virac2_refcat under "
                       f"{basepath}/catalogs; using the Gaia-only seed refcat",
@@ -8222,6 +8222,12 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
         return load_reference_catalog(path)
     where = f"{basepath}/catalogs"
     if _refcat_is_required(proposal_id, field):
+        from jwst_gc_pipeline.photometry.naming import SHARED_TREE_PROPOSALS
+        # Proposals that share one directory are told apart by proposal, not
+        # observation: an `_o<NNN>` name is the same for both (#818).
+        build_token = (f"--proposal-token {proposal_id}"
+                       if str(proposal_id) in SHARED_TREE_PROPOSALS
+                       else f"--obs-token {field}")
         msg = (f"astrom checkpoint: no reference catalog under {where} for "
                f"proposal {proposal_id} observation {field}, whose alignment "
                f"config declares the VIRAC2 frame.  Without it the checkpoints "
@@ -8230,7 +8236,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
                f"green.  Build one with\n"
                f"  python -m jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery "
                f"--base {basepath} --epoch <YYYY.Y> --ra <deg> --dec <deg> "
-               f"--radius <deg> [--obs-token {field}]\n"
+               f"--radius <deg> [{build_token}]\n"
                f"or point ASTROM_REFCAT at an existing one.  Set "
                f"{ALLOW_CONSENSUS_ONLY_ENV}=1 to run without an absolute tie "
                f"(the result is not releasable).")

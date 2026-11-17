@@ -746,7 +746,7 @@ fields:
     observations:
       '6778':
         reference_catalog:
-          '001': catalogs/gaia_virac2_refcat_epoch2024.68.fits
+          '001': catalogs/gaia_virac2_refcat_epoch2024.68_j6778.fits
         nvisits: 3
         reference_frame: VIRAC2
         obsids:
@@ -770,8 +770,8 @@ fields:
         # -35.68099, a separate offset pointing with 2 exposures per band, not
         # NGC 6334I.
         reference_catalog:
-          '001': catalogs/gaia_virac2_refcat_epoch2026.30.fits
-          '002': catalogs/gaia_virac2_refcat_epoch2026.30.fits
+          '001': catalogs/gaia_virac2_refcat_epoch2026.30_j7213.fits
+          '002': catalogs/gaia_virac2_refcat_epoch2026.30_j7213.fits
         nvisits: 7
         reference_frame: VIRAC2
         obsids:
