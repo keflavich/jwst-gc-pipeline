@@ -5502,6 +5502,25 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'merges split a single star into two reference rows; the '
                             'dedup collapses complementary-coverage pairs while '
                             'preserving resolved binaries.'))
+    parser.add_option('--m8-dedup-winner-emag-ratio',
+                      dest='m8_dedup_winner_emag_ratio',
+                      default=None, type='float',
+                      help=('Winner hysteresis for the m8 dedup (#1278): a '
+                            'merged row keeps its primary row\'s own measurement '
+                            'of a band unless the other member\'s emag_ab is '
+                            'below RATIO times the primary\'s (e.g. 0.8).  '
+                            'Default: off, the lowest-emag member always wins.'),
+                      metavar='RATIO')
+    parser.add_option('--m8-dedup-band-resolve-mas',
+                      dest='m8_dedup_band_resolve_mas',
+                      default=None,
+                      help=('Resolved-in-band guard for the m8 dedup (#1278): two '
+                            'rows that a band detects independently at '
+                            'skycoord_<band> positions further apart than this '
+                            'are not merged whatever their magnitudes.  A number '
+                            '(all bands) or BAND=MAS,... (e.g. f212n=60).  '
+                            'Default: off.'),
+                      metavar='MAS')
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')
@@ -5792,6 +5811,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '--forced-fill-nbrsub (warns without it) '
                             '(#1284).'))
     (options, args) = parser.parse_args()
+
+    # The m8 dedup runs at the end of the m8 phase, inside a handler that logs
+    # a failure and carries on; a malformed option would cost the dedup product
+    # only after the whole fill.  Reject it here instead (#1278).
+    from jwst_gc_pipeline.photometry.dedup_catalog import (
+        check_winner_emag_ratio, parse_band_resolve_mas)
+    try:
+        check_winner_emag_ratio(options.m8_dedup_winner_emag_ratio)
+        parse_band_resolve_mas(options.m8_dedup_band_resolve_mas)
+    except ValueError as _dedup_err:
+        parser.error(f"--m8-dedup-*: {_dedup_err}")
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the
     # instrument must be stated explicitly.  Set the process-global env override

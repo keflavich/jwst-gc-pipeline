@@ -139,8 +139,11 @@ def _tile_view_from_region(region):
         'tile_tol_mas': _finite(region.get('tol_mas')),
         # Regions that hold sources but not the matched pairs the field rate
         # predicts (a region displaced beyond the match radius).  They are
-        # outside `cells`/`n_cells`, and they alone can make `clean` False with
-        # nothing flagged, so they are published beside `tiles_ok`.
+        # outside `cells`/`n_cells`, and they can make `clean` False with
+        # nothing flagged -- as can a reference too sparse to test coverage
+        # (`ref_too_sparse`, issue #1191), which has no uncovered cell to count
+        # and is then named in `tile_reason` -- so they are published beside
+        # `tiles_ok`.
         'tiles_uncovered': region.get('n_uncovered'),
         'tile_reason': region.get('reason'),
         'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
