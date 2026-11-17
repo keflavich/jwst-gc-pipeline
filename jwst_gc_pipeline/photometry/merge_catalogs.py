@@ -669,6 +669,14 @@ def _empty_combine_output(tbls, column_names, flux_colname, flux_error_colname,
     return newtbl
 
 
+#: Optional per-frame columns whose presence differs between frames when the
+#: catalogs come from runs before and after the option that writes them (#1245
+#: ``manual_ext_group_qfit``).  Phase 2 keys on ``tbls[0]``, so a first frame
+#: without the column drops it from the merge and a partial column is averaged
+#: over the frames that carry it; both are logged.
+_PARTIAL_COLUMN_WARN = ('qfit_group',)
+
+
 def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaverage=nanaverage_dask,
                         min_offset=0.10*u.arcsec,
                         offsets_table=None,
@@ -722,7 +730,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         flux_colname = 'flux_fit'
         # skycoord comes in as skycoord_centroid but we want it to leave as skycoord
         skycoord_colname = 'skycoord_centroid'
-        column_names = (flux_colname, flux_error_colname, 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', ) + RESBKG_COLUMNS
+        column_names = (flux_colname, flux_error_colname, 'qfit', 'qfit_group', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', ) + RESBKG_COLUMNS
 
     # Loop 1: Add new sources, which are any that don't have a match in the existing catalog closer than min_offset
     # this loop _only_ adds new sources
@@ -1205,7 +1213,19 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             continue
         if key not in tbls[0].colnames:
             print(f"  Skipping {key} (not in tbls[0])", flush=True)
+            if key in _PARTIAL_COLUMN_WARN:
+                _have = sum(key in tbl.colnames for tbl in tbls)
+                if _have:
+                    print(f"  WARNING: {key} is dropped because tbls[0] lacks "
+                          f"it, but {_have} of {len(tbls)} frames carry it "
+                          f"(mixed per-frame catalogs from before and after "
+                          f"the option)", flush=True)
             continue
+        if key in _PARTIAL_COLUMN_WARN:
+            _have = sum(key in tbl.colnames for tbl in tbls)
+            if _have < len(tbls):
+                print(f"  WARNING: {key}_avg averages only the {_have} of "
+                      f"{len(tbls)} frames that carry {key}", flush=True)
         _t0 = time.time()
         print(f"  Phase 2 [{_ci}] column {key!r}: allocating + filling "
               f"({n_src}x{n_tbl})...", flush=True)
@@ -2209,7 +2229,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         # flux_colname = 'flux_fit'
     elif method in ('dao', 'daophot', 'basic', 'daobasic', 'iterative', 'daoiterative'):
         flux_error_colname = 'flux_err'
-        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size') + RESBKG_COLUMNS
+        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'qfit_group', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size') + RESBKG_COLUMNS
         # flux_colname = 'flux'
         method_suffix = 'daophot'
     else:
