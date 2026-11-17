@@ -931,6 +931,91 @@ Two cases follow from that:
   across the filter's own m2 record and the failing frozen stage's
   `reference_tie` record before concluding the tied filter itself moved.
 
+### Opt-in: a hand-recorded bulk prior unlocks the same-star tie (issue #819)
+
+Same-star pairing is sanctioned only after check A has verified a small tie
+(CLAUDE.md rule #1), so a dense-reference histogram that is too noisy to verify
+one also locks out the estimator that would replace it.  crowded_l3
+(9438/o006) F150W, F182M and F210M show it: a zero-prior same-star test read
+51-59 mas on 1600-1700 pairs each, in one direction, while the histograms peaked
+at contrast 3.7-8 and were refused.
+
+`alignment_config.FieldAlignment.bulk_prior_mas` (`{filter: (dra_mas,
+ddec_mas)}`, empty by default and empty for every shipped field) names a
+hand-recorded value per filter.  `astrometry_checkpoint.attach_bulk_prior`
+puts it on the filter's reference dict, and `run_visit_checkpoint` hands it to
+`measure_reference_tie(..., bulk_prior=...)` at a correcting stage only.  The
+prior is consulted only when check A verifies no tie (no coherent peak, or a
+rejected window-edge alias); a tie that A verifies ignores it, so a prior never
+overrules a measured histogram.  A malformed prior is a configuration error and
+raises one `ValueError` naming the field, whether or not the prior ends up
+used: a missing or `None` value, a non-numeric or non-finite one, or an offset
+beyond 100 mas (match radius / 3; exactly 100 mas is accepted).
+
+When it is used, the prior stands in for `vs_full` in the single-cell
+`local_residual_map` and every later step, so `apply_ok` can become True.  Check
+A's own result stays in `vs_full`.  The pairing is made on the unshifted
+catalogue, so the measured same-star tie does not depend on the prior's value;
+the value acts as a constraint on it (check 1).  Because a seed is not a
+measurement, all of these must hold and a check that cannot run counts as
+failed:
+
+1. prior agreement: the same-star tie is within 10 mas of the prior itself.  A
+   prior that is wrong by 30-80 mas is refused here even if the sibling values
+   agree with the data;
+2. the same-star tie is within 100 mas, so the pairing was unambiguous;
+3. pair excess: sources with a reference star within 0.1" at the same-star tie,
+   against the mean of the same count with the reference displaced by 1.5" in
+   four directions, at least 3x and 5 sigma;
+4. magnitude stability: `residual_vs_magnitude` about the same-star tie is
+   clean over at least three bins;
+5. cross-filter coherence: the tie agrees to 10 mas with every other filter's
+   recorded value in the same `bulk_prior_mas`, and at least one is given;
+6. the same-star region map and the sparse cross-check gate `apply_ok` as for
+   any dense tie.  The sparse leg is compared with the adopted same-star tie,
+   because the failed histogram's separation from it is not informative; a
+   sparse leg that cannot be measured does not block, as on the ordinary path
+   (a Gaia-sparse tie never blocks).  With `dense=False` there is no region map
+   (`per_tile_ok` is just "a same-star tie exists"), so checks 1-5 are then the
+   whole gate.
+
+The record carries `bulk_source: "same-star-prior"` and a `bulk_prior` block
+(the prior, `prior_agreement`, `pair_excess`, `magnitude`, `coherence`,
+reasons, and `vs_prior`).  `vs_prior["prior"] is True` marks the seed, and its
+`ok` mirrors the verification verdict rather than a measurement.  A call with
+no prior has the same record keys as before.  The offsets-table row of an
+accepted prior tie carries the ordinary `consensus->reference` source text;
+`bulk_source` and the `bulk_prior` block live in the checkpoint record only, so
+read the record to tell a data-verified bulk row from one that depended on the
+config entry.  Sibling values are config numbers: the coherence check is only
+as independent as the measurements behind them, so record the date and
+estimator per filter in `notes`.
+
+Known limits, not yet calibrated:
+
+* The nearest-neighbour same-star estimate drifts toward zero in a crowded
+  reference, and the coherence check cannot see a bias the siblings share.  A
+  synthetic probe from the #1336 review (100" field, 80% of sources matched
+  with 40 mas scatter; not re-run here) read an error of +0.7 mas at 53 mas
+  truth and -0.2 mas at 90 mas for 0.3 reference stars/arcsec^2, and -5.0 mas
+  at 53, -10.9 at 90 and -29.5 at 160 mas for 3.0 stars/arcsec^2.  The estimate
+  is therefore biased low in a crowded reference, and a sibling value made with
+  the same estimator shares that bias.
+* The 1.5" displaced-reference control is not a null where the stellar density
+  varies on scales near or below 1.5": in the same review's probe two
+  unrelated Gaussian-core catalogues (sigma 0.1-0.25") passed the pair-excess
+  gate, and with a sibling within 10 mas of zero reached `apply_ok` in 8 of 8
+  `dense=False` runs (not re-run here).  Check 1 now also requires the tie to
+  sit within 10 mas of the prior, which a noise tie near zero meets only for a
+  prior near zero.
+* The thresholds (3x, 5 sigma, 3 bins, 10 mas) are provisional and exercised
+  on synthetic fields only.  Calibration against crowded_l3 F335M (a verified
+  tie), including the bias of the estimate, and a deliberately wrong prior on
+  F140M is pending.
+
+No field carries a prior until the policy question in issue #819 is answered,
+and the rule in CLAUDE.md is unchanged until then.
+
 ## Corrections & provenance
 
 * The offsets table is the ONLY authoring channel (see

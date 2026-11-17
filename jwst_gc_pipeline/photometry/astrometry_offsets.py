@@ -30,8 +30,9 @@ small, then take the PRECISE bulk value same-star, from ``local_residual_map``
 (single giant cell) -- or simply call
 ``visit_consensus.measure_reference_tie``, which does the whole detect-then-
 refine sequence and reports which route produced its number
-(``bulk_source``: ``"same-star"`` / ``"histogram"``).  A shipped correction must
-come from the same-star bulk.  See CLAUDE.md and the
+(``bulk_source``: ``"same-star"`` / ``"histogram"``, or ``"same-star-prior"`` /
+``"prior"`` when an opt-in ``bulk_prior`` unlocked the estimator, issue #819).
+A shipped correction must come from the same-star bulk.  See CLAUDE.md and the
 ``histogram-vs-samestar-offset-bias`` note.
 """
 

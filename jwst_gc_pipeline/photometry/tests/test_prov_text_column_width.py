@@ -166,6 +166,14 @@ def _emitted_sources():
         src = kw.get("source")
         if not isinstance(src, ast.JoinedStr):
             continue
+        # Only `f"{stage} ..."` is a prov_source value.  Another keyword named
+        # `source` (the bulk prior's label in `attach_bulk_prior`) never reaches
+        # the offsets table, so it is not a producer this guard counts.
+        head = src.values[0] if src.values else None
+        if not (isinstance(head, ast.FormattedValue)
+                and isinstance(head.value, ast.Name)
+                and head.value.id == "stage"):
+            continue
         # f"{stage} <literal>" -> take the tail after the stage.
         #
         # A piece of that tail may be a module-level NAME rather than a literal

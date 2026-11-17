@@ -74,6 +74,7 @@ from .visit_consensus import (
     catalog_coords, detect_detector_antisymmetry,
     detect_module_antisymmetry, load_reference_catalog,
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
+    validate_bulk_prior,
     # The same-star SELECTION the #285 restriction uses: mutual nearest
     # partners within a radius, returning a boolean MASK and no offset.
     # Imported rather than re-written here so the nearest-neighbour pairing
@@ -4042,6 +4043,53 @@ def resolve_tie_reference(refcat, basepath, proposal_id, field, filtername,
     )
 
 
+def attach_bulk_prior(refcat, proposal_id, field, filtername):
+    """``refcat`` carrying this filter's hand-recorded bulk prior, if any.
+
+    Byte-for-byte ``refcat`` (the same object) unless
+    ``alignment_config.resolve(proposal_id, field).bulk_prior_mas`` has an entry
+    for ``filtername``, so a field without one is untouched.  Otherwise a copy
+    with ``bulk_prior`` = ``dict(dra_mas, ddec_mas, source, coherence=[...])``,
+    where ``coherence`` lists the OTHER filters' entries of the same field:
+    ``measure_reference_tie`` requires the prior-seeded tie to agree with them
+    and with the prior itself (issue #819).  A malformed entry (``None``, a
+    non-numeric or non-finite value, beyond 100 mas of zero) raises one
+    ``ValueError`` here.  ``run_visit_checkpoint`` hands the prior to the tie
+    only at a correcting stage; a frozen stage measures a corrected frame, where
+    the histogram verifies the tie and a prior would be unused anyway.
+    """
+    from jwst_gc_pipeline.reduction import alignment_config as _alignment_config
+    if refcat is None:
+        return None
+    cfg = _alignment_config.resolve(proposal_id, field)
+    priors = {str(k).upper(): v for k, v in (cfg.bulk_prior_mas.items()
+                                             if cfg is not None else ())}
+    if str(filtername).upper() not in priors:
+        return refcat
+    mine = priors[str(filtername).upper()]
+
+    def _entry(label, value):
+        # One clear ValueError for a malformed config entry (None, a short
+        # tuple, a string), naming the filter.
+        try:
+            dra, ddec = value
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"alignment_config.bulk_prior_mas[{label}] must be a "
+                f"(dra_mas, ddec_mas) pair, got {value!r}") from None
+        return dict(label=label, dra_mas=dra, ddec_mas=ddec)
+
+    me = str(filtername).upper()
+    out = dict(refcat)
+    mine = _entry(me, mine)
+    out["bulk_prior"] = dict(
+        dra_mas=mine["dra_mas"], ddec_mas=mine["ddec_mas"],
+        source=f"alignment_config.bulk_prior_mas[{me}]",
+        coherence=[_entry(k, v) for k, v in sorted(priors.items()) if k != me])
+    validate_bulk_prior(out["bulk_prior"])
+    return out
+
+
 def _m2_consensus_catalog(record_dir, basepath, filtername, obs_token=""):
     """(SkyCoord, magnitude array or None, path) of the m2 consensus catalog.
 
@@ -4867,6 +4915,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 filtername=filt, consensus_mag=tie_mag,
                 ref_mag=tie_refcat.get("mag"), dense=tie_refcat.get("dense", True),
                 **_sigma_cut_kwargs(tie_refcat),
+                bulk_prior=(tie_refcat.get("bulk_prior") if correcting else None),
                 context=vctx)
             # Provenance: which CATALOG this tie measured against.  Every
             # field's default is VIRAC2 itself (`tie_refcat` carries no
