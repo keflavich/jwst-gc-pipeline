@@ -61,6 +61,7 @@ for f in BANDS:
     own = f'{cut_bp}/catalogs/' + M6.format(f=fl)
     band = C._build_m7_band_seed(xb, own, f, 'merged',
                                  max_sep_mas=MD['manual_crossband_seed_max_sep_mas'],
+                                 dedup_fwhm=0,  # the matching these numbers were made with (#1206 dedup off)
                                  label=f'evid:{f}')
     pat = f'{PROD}/{f}/pipeline/jw02221-o001_t001_nircam_*{fl}-merged_resbgsub_m6_daophot_basic_mergedcat_residual_i2d.fits'
     res = sorted(glob.glob(pat))

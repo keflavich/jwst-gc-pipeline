@@ -6268,10 +6268,72 @@ def m7_band_seed_path(crossband_path, module, filtername):
     return crossband_path.replace('.fits', f'_{module}_{filtername.lower()}_vetted.fits')
 
 
+def _dedup_m7_band_seed(xsc, osc, oflux, *, match_mas, dedup_mas):
+    """Cross-band to own-band matching of :func:`_build_m7_band_seed` with the
+    sub-FWHM dedup.  Returns ``(xflux, own_new, n_dedup)``: the flux of each
+    cross-band position (1.0 without an own-band source within ``match_mas``),
+    the own-band rows to add to the seed, and how many of them the dedup left
+    out.  ``osc`` must not be empty (astropy cannot match against a
+    length-0 catalog); the caller skips the dedup without own-band rows.
+
+    A cross-band position takes the flux of its NEAREST own-band source within
+    ``match_mas``; that source (its donor) is not added.  Any other own-band
+    source is added unless it lies within ``dedup_mas`` of a cross-band
+    position, of a donor, or of a brighter own-band source that is added.  An
+    own-band source farther from a cross-band position than its donor, and
+    wider than ``dedup_mas`` from everything above, stays an own-band seed.
+
+    The donation is many-to-one: each cross-band position looks for its own
+    nearest source, so one own-band source can donate its flux to two
+    cross-band positions inside ``match_mas`` of it (a faint cross-band
+    neighbour inherits the bright source's flux instead of 1.0), and that
+    flux is also the neighbour's flux in the companion cut of the caller.
+    Donors are marked kept before the brightest-first pass, so a faint donor
+    drops a brighter non-donor row inside ``dedup_mas`` of it and that row's
+    flux is not used.  Equal fluxes are ordered by position (RA, then Dec),
+    so the kept row does not depend on the catalog order.
+    """
+    from astropy.coordinates import search_around_sky
+    if len(osc) == 0:
+        raise ValueError("_dedup_m7_band_seed needs at least one own-band row")
+    xflux = np.ones(len(xsc))
+    donor = np.zeros(len(osc), dtype=bool)
+    near_xb = np.zeros(len(osc), dtype=bool)
+    if len(xsc):
+        idx, sep, _ = xsc.match_to_catalog_sky(osc)
+        hit = sep.to_value(u.mas) < match_mas
+        xflux[hit] = oflux[idx[hit]]
+        donor[idx[hit]] = True
+        io, _, _, _ = search_around_sky(osc, xsc, dedup_mas * u.mas)
+        near_xb[io] = True
+    ia, ib, _, _ = search_around_sky(osc, osc, dedup_mas * u.mas)
+    pair = ia != ib
+    ia, ib = ia[pair], ib[pair]
+    order = np.argsort(ia, kind='stable')
+    ia, ib = ia[order], ib[order]
+    kept = donor.copy()
+    dropped = np.zeros(len(osc), dtype=bool)
+    rows = np.unique(ia)
+    # brightest first: a row's brighter neighbours are decided before it is
+    # (equal fluxes: by position, so the order of the catalog does not matter)
+    for i in rows[np.lexsort((osc.dec.deg[rows], osc.ra.deg[rows], -oflux[rows]))]:
+        if donor[i]:
+            continue
+        nbr = ib[np.searchsorted(ia, i, 'left'):np.searchsorted(ia, i, 'right')]
+        if near_xb[i] or kept[nbr].any():
+            dropped[i] = True
+        else:
+            kept[i] = True
+    # a row near a cross-band position without a close neighbour has no pair
+    dropped |= near_xb & ~donor
+    return xflux, ~donor & ~dropped, int(dropped.sum())
+
+
 def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module, *,
                         max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                         companion_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
                         companion_max_ratio=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'],
+                        dedup_fwhm=MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'],
                         fwhm_arcsec=None, label=''):
     """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
     vetted catalog (``manual_m7_seed_own_band``; AUTO by default, see
@@ -6307,9 +6369,29 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     residual (the image m7 detects on) no longer shows it and m7 does not
     find it again; it stays whole in the final m7 residual.
 
+    Seed dedup (``dedup_fwhm``, ``manual_m7_seed_dedup_fwhm``): a cross-band
+    position and the own-band m6 position of the same star can differ by more
+    than ``max_sep_mas`` in the red bands (31 / 41 / 61 mas at p10 / 50 / 90
+    in Brick F405N, where the FWHM is 136 mas), and a seed pair that close
+    fits one star twice (docs/evidence/close_pair_oversub).  With
+    ``dedup_fwhm`` > 0 the match radius between a cross-band position and the
+    own-band sources is ``max(max_sep_mas, dedup_fwhm * FWHM)``, and an
+    own-band source that is not the flux donor of a cross-band position is
+    left out when it lies within ``dedup_fwhm`` FWHM of a cross-band
+    position, of a donor, or of a brighter own-band source that is kept.
+    Pairs wider than ``dedup_fwhm`` FWHM stay two rows.  ``dedup_fwhm=0``
+    uses ``max_sep_mas`` alone and any own-band source within it of a
+    cross-band position is left out, the matching before this option.
+    The default is 0 (off) until the production seeds are rerun with 0.5;
+    0.5 is the documented opt-in value.  The flux donation is many-to-one
+    (see :func:`_dedup_m7_band_seed`): with the radius widened to 0.5 FWHM a
+    faint cross-band position next to a bright one can inherit the flux of
+    the bright one's own-band source.  A filter missing from the FWHM table
+    needs ``fwhm_arcsec`` when ``dedup_fwhm`` > 0 or the companion cut is on.
+
     Seed fluxes: an own-band source keeps its m6 flux; a cross-band position
-    takes the flux of the own-band source within ``max_sep_mas`` (else 1.0,
-    the value ``SeededFinder`` gives a flux-less seed).  Writes
+    takes the flux of the nearest own-band source within the match radius
+    (else 1.0, the value ``SeededFinder`` gives a flux-less seed).  Writes
     ``<crossband seed>_<module>_<filt>_vetted.fits`` (one per shard key, as
     the per-module own-band catalogs differ) and returns its path (the
     ``_vetted`` suffix lets ``_build_i2d_augmented_seed`` add residual
@@ -6341,9 +6423,31 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     good = np.isfinite(oflux) & (oflux > 0)
     osc, oflux = osc[good], oflux[good]
 
+    if dedup_fwhm < 0:
+        raise ValueError(f"dedup_fwhm must be >= 0, got {dedup_fwhm}")
+
+    def _fwhm():
+        nonlocal fwhm_arcsec
+        if fwhm_arcsec is None:
+            ftab_path = _L.fwhm_table_path()
+            ftab = Table.read(ftab_path)
+            row = ftab[ftab['Filter'] == filtername.upper()]
+            if len(row) == 0:
+                raise ValueError(f"filter {filtername.upper()} is not in the FWHM table "
+                                 f"{ftab_path}; pass fwhm_arcsec")
+            fwhm_arcsec = float(row['PSF FWHM (arcsec)'][0])
+        return fwhm_arcsec
+
     xflux = np.ones(len(xsc))
     own_new = np.ones(len(osc), dtype=bool)
-    if len(osc) and len(xsc):
+    n_dedup = 0
+    match_mas, dedup_mas = max_sep_mas, 0.0
+    if dedup_fwhm > 0 and len(osc):
+        dedup_mas = dedup_fwhm * _fwhm() * 1e3
+        match_mas = max(max_sep_mas, dedup_mas)
+        xflux, own_new, n_dedup = _dedup_m7_band_seed(
+            xsc, osc, oflux, match_mas=match_mas, dedup_mas=dedup_mas)
+    elif len(osc) and len(xsc):
         idx, sep, _ = xsc.match_to_catalog_sky(osc)
         hit = sep.to_value(u.mas) < max_sep_mas
         xflux[hit] = oflux[idx[hit]]
@@ -6351,9 +6455,7 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
         own_new = sep_o.to_value(u.mas) >= max_sep_mas
     n_companion = 0
     if companion_fwhm > 0 and own_new.any():
-        if fwhm_arcsec is None:
-            ftab = Table.read(_L.fwhm_table_path())
-            fwhm_arcsec = float(ftab[ftab['Filter'] == filtername.upper()]['PSF FWHM (arcsec)'][0])
+        fwhm_arcsec = _fwhm()
         cand = np.flatnonzero(own_new)
         pool_sc = SkyCoord([xsc, osc[cand]]) if len(xsc) else osc[cand]
         pool_flux = np.concatenate([xflux, oflux[cand]])
@@ -6375,10 +6477,16 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     out.meta['COMPFWHM'] = float(companion_fwhm)
     out.meta['COMPRAT'] = float(companion_max_ratio)
     out.meta['NCOMPAN'] = n_companion
+    out.meta['DEDUPFWH'] = float(dedup_fwhm)
+    out.meta['NDEDUP'] = n_dedup
     outpath = m7_band_seed_path(crossband_seed_path, module, filtername)
     write_table_atomic(out, outpath)
+    dedup_msg = (f"{n_dedup} within {dedup_fwhm:g} FWHM ({dedup_mas:g} mas) of a seed "
+                 f"position or a brighter own-band source left out, "
+                 if dedup_fwhm > 0 else "")
     print(f"[{label}] m7 band seed: {len(xsc)} cross-band + {n_own} own-band m6 "
-          f"vetted (not within {max_sep_mas:g} mas of a cross-band position; "
+          f"vetted (not within {match_mas:g} mas of a cross-band position; "
+          f"{dedup_msg}"
           f"{n_companion} more within {companion_fwhm:g} FWHM of a seed source "
           f">{1 / companion_max_ratio:g}x brighter left out) -> {len(out)} "
           f"({os.path.basename(outpath)})", flush=True)
@@ -11718,6 +11826,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                 max_sep_mas=float(mopt(opts_phase, 'manual_crossband_seed_max_sep_mas')),
                                 companion_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_fwhm')),
                                 companion_max_ratio=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_max_ratio')),
+                                dedup_fwhm=float(mopt(opts_phase, 'manual_m7_seed_dedup_fwhm')),
                                 label=f'{phase}:{filt}')
                             det_i2d = resid_i2d_for_next.get((module, filt))  # m6 residual
                             bg_sub = bg_for_next.get((module, filt))          # minus m6 bg
