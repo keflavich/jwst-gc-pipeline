@@ -693,3 +693,34 @@ def test_defaults_are_off_and_cli_follows_them(monkeypatch):
     o = _parse(monkeypatch, ['--manual-ext-group-qfit',
                              '--no-manual-ext-group-qfit'])
     assert o.manual_ext_group_qfit is False
+
+
+def _run_kif(listed_bright):
+    """The pair + isolated scene with the bright pair member fitted as
+    ``keep_in_fit`` and listed in the output only when ``listed_bright``."""
+    seed = _seed()
+    seed['keep_in_fit'] = np.array([True, False, False])
+    seed['keep_in_fit_listed'] = np.array([listed_bright, True, True])
+    res, _, _ = C._manual_phot_pass(
+        data=_scene(), mask=np.zeros(SHAPE, bool), err=np.ones(SHAPE),
+        bad=np.zeros(SHAPE, bool), dao_psf_model=_gaussian_grid_psf(),
+        init_params=seed, aperture_radius_pix=2 * FWHM,
+        localbkg_inner=6, localbkg_outer=10,
+        grouper=L.CappedSourceGrouper(2.0 * FWHM, max_size=10),
+        options=_options(manual_ext_group_qfit=True),
+        dq=np.zeros(SHAPE, np.uint32),
+        satstar_model_subtracted=np.zeros(SHAPE), label='t',
+        near_sat_dist_pix=1.0)
+    return res
+
+
+def test_unlisted_keep_in_fit_partner_still_reduces_the_neighbour():
+    """The group qfit is computed before the keep_in_fit listing drops the
+    fitted-but-unlisted rows, so such a row still counts as a partner of
+    its neighbour."""
+    listed, unlisted = _run_kif(True), _run_kif(False)
+    assert len(unlisted) == len(listed) - 1
+    faint_l = _nearest(listed, PAIR[1])
+    faint_u = _nearest(unlisted, PAIR[1])
+    assert float(faint_l['qfit_group']) < float(faint_l['qfit']) * (1 - 1e-3)
+    assert abs(float(faint_u['qfit_group']) - float(faint_l['qfit_group'])) < 1e-6
