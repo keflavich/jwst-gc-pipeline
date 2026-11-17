@@ -5099,22 +5099,39 @@ def _perframe_product_stub(ctx, iter_, label_=''):
             f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic{label_}')
 
 
-def _final_phase_frame_products(ctx, frame_kwargs):
+def _final_phase_frame_products(ctx, frame_kwargs, merge_label=None):
     """``(model path, catalogue path)`` of the final real phase's products for
     the frame ``ctx`` prepares, for the m8 forced fill's neighbour subtraction.
 
     The phase is the frame kwargs' ``satstar_label`` (the phase whose satstar
     products the fill subtracts).  The model is the star-only image of
     ``_save_manual_pass``; the catalogue is the unvetted per-frame table that
-    ``save_photutils_results`` wrote, with the same tokens."""
-    iter_ = _iteration_token(frame_kwargs['satstar_label'])
+    ``save_photutils_results`` wrote, with the same tokens.
+
+    ``merge_label`` is the label of the mosaic being filled.  The pair that
+    label's pass wrote (``naming.perframe_label_token``) is returned when its
+    model exists, else the legacy (untokened) pair, which a run from before
+    the label token wrote.  Another label's fit of the frame is never read:
+    the per-label readers' rule (``naming.choose_perframe_variants``)."""
+    phase = frame_kwargs['satstar_label']
+    iter_ = _iteration_token(phase)
     options = frame_kwargs['options']
     obs_ = _L._obs_token_from_options(options)
-    catalog = (f'{ctx.out_basepath}/{ctx.filtername}/'
-               f'{ctx.filtername.lower()}_{ctx.module}{obs_}{ctx.visitid_}'
-               f'{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
-               f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic.fits')
-    return f'{_perframe_product_stub(ctx, iter_)}_model.fits', catalog
+
+    def _pair(label_):
+        catalog = (f'{ctx.out_basepath}/{ctx.filtername}/'
+                   f'{ctx.filtername.lower()}_{ctx.module}{obs_}{ctx.visitid_}'
+                   f'{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+                   f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic'
+                   f'{label_}.fits')
+        return f'{_perframe_product_stub(ctx, iter_, label_)}_model.fits', catalog
+
+    label_ = perframe_label_token(phase, merge_label)
+    if label_:
+        own = _pair(label_)
+        if os.path.exists(own[0]):
+            return own
+    return _pair('')
 
 
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
@@ -11632,7 +11649,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
                 bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
                 nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
-                frame_products=_final_phase_frame_products,
+                frame_products=functools.partial(
+                    _final_phase_frame_products, merge_label=module),
                 nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
             # Partial fill writes one band only -> dedup waits for the merge
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
@@ -12982,7 +13000,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
                         bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
                         nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
-                        frame_products=_final_phase_frame_products,
+                        frame_products=functools.partial(
+                            _final_phase_frame_products, merge_label=module),
                         nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
                     _stamp_catalog_provenance(

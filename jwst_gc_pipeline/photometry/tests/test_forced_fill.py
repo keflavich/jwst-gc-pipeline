@@ -949,6 +949,52 @@ def test_final_phase_frame_products_follow_the_m7_writers():
                      f'_m7_daophot_basic_model.fits')
 
 
+def test_final_phase_frame_products_read_the_filled_labels_own_pass(tmp_path):
+    """The m8 fill of the ``merged`` mosaic subtracts the ``merged`` pass's m7
+    fit of the frame (the label-tokened names of #1343), falls back to the
+    legacy names when that pass's model is not there, and never reads another
+    label's fit."""
+    import os
+    from jwst_gc_pipeline.photometry import cataloging
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+    options = SimpleNamespace(
+        desaturated=False, bgsub=False, use_iter3_residual_bg=True, epsf=True,
+        blur=False, group=False, iteration_label=None, proposal_id='2221',
+        field='001')
+    (visitid_, vgroupid_, exposure_, desat, bgsub, epsf_, blur_, group_,
+     _) = L._predict_output_tokens(options, 1, 1, 3, 'm7')
+    bp = str(tmp_path)
+    ctx = SimpleNamespace(
+        out_basepath=bp, filtername='F405N', module='nrcalong',
+        proposal_id='2221', field='001', inst_token='nircam', pupil='f405n',
+        visitid_=visitid_, vgroupid_=vgroupid_, exposure_=exposure_,
+        desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group_)
+    kw = {'options': options, 'satstar_label': 'm7'}
+    stem = (f'{bp}/F405N/pipeline/jw02221-o001_t001_nircam_f405n-f405n-'
+            f'nrcalong{visitid_}{vgroupid_}{exposure_}{bgsub}{epsf_}'
+            f'_m7_daophot_basic')
+    legacy = (f'{stem}_model.fits',
+              L._predict_tblfilename(bp, 'F405N', 'nrcalong', options,
+                                     1, 1, 3, 'm7', 'daophot', 'basic'))
+    own = (f'{stem}_lblmerged_model.fits',
+           L._predict_tblfilename(bp, 'F405N', 'nrcalong', options, 1, 1, 3,
+                                  'm7', 'daophot', 'basic',
+                                  merge_label='merged'))
+    os.makedirs(os.path.dirname(stem), exist_ok=True)
+
+    # nothing written yet, and only ANOTHER label's model on disk: legacy pair
+    open(f'{stem}_lblnrca_model.fits', 'w').close()
+    assert cataloging._final_phase_frame_products(
+        ctx, kw, merge_label='merged') == legacy
+    # the label's own model written: its own (tokened) pair
+    open(own[0], 'w').close()
+    assert cataloging._final_phase_frame_products(
+        ctx, kw, merge_label='merged') == own
+    assert own[1].endswith('_m7_daophot_basic_lblmerged.fits')
+    # no merge label (the legacy single-pass caller): legacy pair, unchanged
+    assert cataloging._final_phase_frame_products(ctx, kw) == legacy
+
+
 def test_nbrsub_and_nrand_are_wired_through_the_cli_and_both_m8_call_sites():
     import inspect
     import os
@@ -956,7 +1002,9 @@ def test_nbrsub_and_nrand_are_wired_through_the_cli_and_both_m8_call_sites():
     src = inspect.getsource(cataloging.run_manual_pipeline)
     assert src.count("nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False))") == 2
     assert src.count("nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0)") == 2
-    assert src.count('frame_products=_final_phase_frame_products') == 2
+    # both m8 call sites name the products of the label being filled (#1343)
+    assert src.count('frame_products=functools.partial(') == 2
+    assert src.count('_final_phase_frame_products, merge_label=module)') == 2
     cli = os.path.join(os.path.dirname(cataloging.__file__),
                        'crowdsource_catalogs_long.py')
     with open(cli) as fh:
