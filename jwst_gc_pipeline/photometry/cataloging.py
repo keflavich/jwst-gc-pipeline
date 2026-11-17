@@ -4163,8 +4163,16 @@ def _load_ramp_cube(crf_path):
                                           else np.asarray(gdq, dtype=int))
 
 
+def _frame_variants_of_paths(frames):
+    """Frame variant tokens of frame paths (``satstar_frame_variant``), or ``None``."""
+    from jwst_gc_pipeline.photometry.satstar_phase_selection import (
+        normalise_frame_variants, satstar_frame_variant)
+    return normalise_frame_variants(
+        {satstar_frame_variant(f) for f in frames} - {''})
+
+
 def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
-                                field=None, phase=None):
+                                field=None, phase=None, frame_variants=None):
     """Satstar catalogs of the partner band that ``--satstar-partner-seed`` reads.
 
     The partner's consolidated catalog when it exists; otherwise its
@@ -4173,6 +4181,11 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     ``phase`` being fit, or the exposure's latest earlier phase, as
     ``load_satstar_catalog`` reads them.  Reading every phase on disk seeded
     old runs' positions, including a later phase left from a previous run.
+
+    ``frame_variants`` is the frame variant(s) of the frames being fit
+    (``satstar_frame_variant``): only per-exposure catalogs fit on those frames
+    seed, as in ``load_satstar_catalog`` (#1194).  The consolidated catalog
+    is read as it stands.
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         consolidated_satstar_cache_path, satstar_catalog_in_observation,
@@ -4190,7 +4203,8 @@ def _partner_satstar_seed_files(basepath, partner, proposal_id=None,
     if pscope:
         files = [f for f in files
                  if satstar_catalog_in_observation(f, proposal_id, pscope)]
-    files, report = select_satstar_phase_files(files, phase=phase)
+    files, report = select_satstar_phase_files(
+        files, phase=phase, frame_variants=frame_variants)
     print(f"[manual] partner-band satstar seeds ({partner}): "
           f"{format_phase_report(report)}", flush=True)
     return files
@@ -4264,6 +4278,23 @@ def _default_nircam_satstar_lock_env(environ, sat_ext_nircam):
     if 'NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2' not in environ:
         environ['NIRCAM_SATSTAR_LOCK_MIN_AREA_ARCSEC2'] = (
             '0.5' if sat_ext_nircam else '0')
+
+
+def _truly_lost_fit_products(dqarr, truly_lost, instrument):
+    """Fit-mask pixels and near-saturation-veto DQ for ``--truly-lost-saturation-in-fit``.
+
+    Returns ``(fit_mask_add, dq_for_satveto)``.  ``fit_mask_add`` is the
+    ``truly_lost`` set plus every non-SATURATED bad flag
+    (``_bad_dq_bitmask(..., keep_recovered_saturation=True)``).
+    ``dq_for_satveto`` is a copy of ``dqarr`` with SATURATED cleared outside
+    ``truly_lost``, for ``_filter_near_saturation``; ``dqarr`` is not modified.
+    """
+    sat_bit = dqarr.dtype.type(_L.dqflags.pixel['SATURATED'])
+    fit_mask_add = np.asarray(truly_lost, dtype=bool) | (
+        (dqarr & _L._bad_dq_bitmask(
+            instrument, keep_recovered_saturation=True)) != 0)
+    dq_for_satveto = np.where(truly_lost, dqarr, dqarr & ~sat_bit)
+    return fit_mask_add, dq_for_satveto
 
 
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
@@ -4455,6 +4486,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
     mask = np.isnan(data) | bad
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
+    tl_in_fit = bool(getattr(options, 'truly_lost_saturation_in_fit', False))
+    sat_bit = int(_L.dqflags.pixel['SATURATED'])
     if dqarr is not None:
         # TRULY-LOST vs recovered saturation.  The cal/crf SATURATED flag marks
         # any pixel saturated in ANY ramp group, but a late-group saturation with
@@ -4475,13 +4508,16 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         #     recomputes `(dq & SATURATED)` itself, so the near-sat veto still
         #     fires on recovered pixels.
         # Both pinned in photometry/tests/test_truly_lost_saturation.py.
+        # `--truly-lost-saturation-in-fit` (default off, #567) extends the
+        # restriction to the fit mask and to the DQ handed to the veto.
         # How much this removes is a property of the REDUCTION, not of the
         # instrument: every band reduced with jwst <= 1.20.2 has SATURATED and
         # DO_NOT_USE coextensive (no-op), while current products keep a median
         # 15.7% of the mask on both NIRCam and MIRI.  See
         # scripts/analysis/truly_lost_saturation_census.py.
         dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
-        is_saturated = _L.truly_lost_saturated_mask(dqarr)
+        truly_lost = _L.truly_lost_saturated_mask(dqarr)
+        is_saturated = truly_lost
         # A real saturated core sits at/near the detector saturation level; but
         # JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated
         # sources (e.g. W51 F480M star RA=290.929589 Dec=+14.504683: DQ=6
@@ -4500,9 +4536,25 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         data_ = data.copy()
         data_[is_saturated] = np.nan
         mask |= is_saturated
-        mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+        if tl_in_fit:
+            # Opt-in (#567): the fit mask and the near-sat veto see only the
+            # truly-lost set.  `truly_lost` is taken before the data floor so
+            # the SATURATED fallback inside truly_lost_saturated_mask (frames
+            # with no DO_NOT_USE saturation) is honoured and sub-floor core
+            # pixels are not released.
+            fit_add, dq_for_satveto = _truly_lost_fit_products(
+                dqarr, truly_lost, instrument)
+            mask |= fit_add
+            print(f"[manual] truly-lost-saturation-in-fit: fit mask keeps "
+                  f"{int(truly_lost.sum())} of "
+                  f"{int(((dqarr & sat_bit) != 0).sum())} SATURATED px "
+                  f"(TLSATFIT=T)", flush=True)
+        else:
+            mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+            dq_for_satveto = dqarr
     else:
         data_ = data
+        dq_for_satveto = dqarr
     # MIRI detector-edge detection guard: daofind otherwise fires on the sharp
     # good/bad boundary GRADIENT at the edge-glow rim, injecting spurious "stars"
     # at the footprint border into the per-frame -> MERGED catalog.  These are
@@ -4605,7 +4657,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         _partner = _pmap.get(filtername.lower())
         if _partner:
             _pfiles = _partner_satstar_seed_files(
-                basepath, _partner, proposal_id, field, phase=satstar_label)
+                basepath, _partner, proposal_id, field, phase=satstar_label,
+                frame_variants=_frame_variants_of_paths([original_filename]))
             _parts = []
             for _pf in _pfiles:
                 try:
@@ -4763,7 +4816,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             if sm.shape == nan_replaced_data.shape:
                 finite_model = np.where(np.isfinite(sm), sm, 0.0)
                 if dqarr is not None:
-                    was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+                    if tl_in_fit:
+                        # `--truly-lost-saturation-in-fit` (#567): the flag
+                        # un-masks the recovered pixels so the fit reads them;
+                        # filling them from the satstar model (0 away from an
+                        # accepted satstar) would hand the fit zeros instead of
+                        # their valid rate.  Only the truly-lost set is filled.
+                        was_sat = np.asarray(truly_lost, dtype=bool)
+                    else:
+                        was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
                     if handoff_restore is not None:
                         # keep the handed-off stars' measured cores
                         was_sat = was_sat & ~handoff_restore
@@ -4781,8 +4842,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group,
         exposure_=exposure_, visitid_=visitid_, vgroupid_=vgroupid_,
         inst_token=inst_token, im1=im1, ww=ww, data=data, err=err, bad=bad,
-        dqarr=dqarr, mask=mask, nan_replaced_data=nan_replaced_data,
-        dao_psf_model=dao_psf_model, grouper=grouper,
+        dqarr=dqarr, dq_for_satveto=dq_for_satveto,
+        truly_lost_in_fit=(tl_in_fit and dqarr is not None), mask=mask,
+        nan_replaced_data=nan_replaced_data, dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         satstar_rejected_path=satstar_rejected_path,
         handoff_xy=handoff_xy, handoff_radius=handoff_radius,
@@ -5019,6 +5081,11 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     # by default, so its trees can hold catalogs from both regimes
     result.meta['HNDOFFSA'] = (bool(getattr(ctx, 'handoff_unaccepted_sat', False)),
                                'unaccepted SATURATED comps handed to daophot')
+    # --truly-lost-saturation-in-fit (#567) changes the fitted pixels under the
+    # SAME per-frame product names, so the header is where the A and B arms of
+    # the #418 comparison are told apart
+    result.meta['TLSATFIT'] = (bool(getattr(ctx, 'truly_lost_in_fit', False)),
+                               'fit mask/veto use truly-lost saturation only')
 
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
@@ -5238,7 +5305,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             dao_psf_model=ctx.dao_psf_model, init_params=seed,
             aperture_radius_pix=ctx.aperture_radius_pix,
             localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
-            grouper=ctx.grouper, options=options, dq=ctx.dqarr,
+            grouper=ctx.grouper, options=options,
+            dq=getattr(ctx, 'dq_for_satveto', ctx.dqarr),
             satstar_model_subtracted=(ctx.satstar_model_subtracted
                                       if ctx.satstar_model_subtracted is not None
                                       else np.zeros(ctx.data.shape)),
@@ -7173,7 +7241,7 @@ def _never_cofit_duplicates(sc, support, flux, cofit_positions, *,
 
 
 def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
-                             phase=None):
+                             phase=None, frame_variants=None):
     """Per-exposure satstar fit positions for :func:`_never_cofit_duplicates`.
 
     One SkyCoord per per-exposure satstar run: the accepted
@@ -7189,15 +7257,18 @@ def _satstar_cofit_positions(pipeline_dir, proposal_id=None, field=None,
     it.  Pooling every phase on disk let an older run's detections decide
     whether two rows were ever fit side by side.
 
+    ``frame_variants`` is the frame variant(s) of the frames the merge reads,
+    as for ``load_satstar_catalog`` (#1194).
+
     The positions are the ``'positions'`` of :func:`_satstar_cofit_runs`.
     """
     return [run['positions'] for run in _satstar_cofit_runs(
         pipeline_dir, proposal_id=proposal_id, field=field, phase=phase,
-        frame_shapes=False)]
+        frame_variants=frame_variants, frame_shapes=False)]
 
 
 def _satstar_cofit_runs(pipeline_dir, proposal_id=None, field=None,
-                        phase=None, frame_shapes=True):
+                        phase=None, frame_variants=None, frame_shapes=True):
     """Per-exposure satstar runs, as read by :func:`_satstar_cofit_positions`.
 
     One dict per run (one frame at one phase), in the order
@@ -7220,6 +7291,9 @@ def _satstar_cofit_runs(pipeline_dir, proposal_id=None, field=None,
     ``SATSTAR_INFIELD_DEDUP='cofit_residual'`` reads the residual and the
     frame (:func:`_satstar_residual_distinct_pairs`) and the pixel
     positions (:func:`_satstar_edge_only_rows`).
+
+    ``frame_variants`` selects the runs as in :func:`_satstar_cofit_positions`
+    (#1194).
     """
     from jwst_gc_pipeline.photometry.merge_catalogs import (
         satstar_obs_scope, satstar_catalog_in_observation)
@@ -7238,10 +7312,11 @@ def _satstar_cofit_runs(pipeline_dir, proposal_id=None, field=None,
         files = [f for f in files
                  if satstar_catalog_in_observation(f, proposal_id, obs_scope)]
     accepted, _acc_report = select_satstar_phase_files(
-        [f for f in files if f.endswith('_satstar_catalog.fits')], phase=phase)
+        [f for f in files if f.endswith('_satstar_catalog.fits')], phase=phase,
+        frame_variants=frame_variants)
     rejected, _ = select_rejected_for_catalogs(
         [f for f in files if f.endswith('_satstar_rejected.fits')], accepted,
-        phase=phase)
+        phase=phase, frame_variants=frame_variants)
     print(f"  satstar co-fit positions: "
           f"{format_phase_report(_acc_report)}", flush=True)
     files = sorted(accepted + rejected)
@@ -12174,13 +12249,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         _cofit_runs = _satstar_cofit_runs(
                             os.path.join(cut_bp, filt, 'pipeline'),
                             proposal_id=proposal_id, field=field,
-                            phase=merge_label)
+                            phase=merge_label,
+                            frame_variants=_frame_variants_of_paths(
+                                frame_cache.get((module, filt), [])))
                         _cofit = [_r['positions'] for _r in _cofit_runs]
                     else:
                         _cofit = _satstar_cofit_positions(
                             os.path.join(cut_bp, filt, 'pipeline'),
                             proposal_id=proposal_id, field=field,
-                            phase=merge_label)
+                            phase=merge_label,
+                            frame_variants=_frame_variants_of_paths(
+                                frame_cache.get((module, filt), [])))
                 _ext_note = ('; extended-emission target, off-FOV rows only'
                              if str(target).lower() in _EXTENDED_EMISSION_TARGETS
                              else '')
