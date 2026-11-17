@@ -260,6 +260,22 @@ rejection**.
   noise limit. On by default (`--no-forced-fill-m8` disables); full-frame only;
   writes a sibling `..._resbgsub_m8` catalog and leaves m7 as it is. The result is then
   de-duplicated to `..._resbgsub_m8_dedup.fits` (`--no-m8-dedup` to skip).
+  The dedup table records which pre-dedup row supplied each band
+  (`dedup_src_<band>`, `dedup_band_swapped_<band>`, `dedup_primary`,
+  `dedup_pos_spread_mas`; indices refer to the sibling `..._m8` file of the same
+  run, named in the `DEDUPSRC` header key). The header also carries `DEDUPN0`
+  (row count of that m8 file, so a reader can tell whether a later rewrite of
+  the m8 moved the indices), `DEDUPRAT` (`--m8-dedup-winner-emag-ratio`, when
+  set) and `DEDUPRES` (the bands and mas of `--m8-dedup-band-resolve-mas` that
+  were applied, when the guard is active). `n_filt_independent` is recomputed
+  from `independently_detected_<band>` on the rows that took a band from
+  another row. Both options are checked when the command line is read (a
+  malformed or non-positive value stops the run at start); a band named in
+  `--m8-dedup-band-resolve-mas` that the table does not have, or that has no
+  `skycoord_<band>` column, is dropped with a warning, and the guard is
+  reported OFF when none is left. `m8_merge_partials.py` takes the same two
+  options as `--dedup-winner-emag-ratio` and `--dedup-band-resolve-mas`; pass
+  the values the cataloging run used.
 
 ### Merge + vet (per-phase barrier)
 
@@ -427,17 +443,24 @@ still run after m6.
 | `--manual-crossband-seed-min-filters` | 2 | 2 | 2 | 2 |
 | `--manual-crossband-seed-snr-min` (on flux / flux_err, the per-frame S/N) | 5.0 | 5.0 | | |
 | `--manual-crossband-seed-qfit-max` | 0.2 | 0.2 | | |
+| `--manual-crossband-seed-min-frac` (seed health, #981: warn when the smallest per-band fraction of good m6 detections kept in the seed is below this) | 0.3 | 0.3 | | |
+| `--manual-crossband-seed-collapse-action` (`warn` or `raise`; `raise` throws `CrossbandSeedCollapsedError` after the seed and its `.health.json` are written) | `warn` | `warn` | | |
 | `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--manual-m7-seed-own-band-companion-max-ratio` (in [0, 1]; 1.0 = cut every fainter source in the radius, 0 = no cut) | 0.1 | 0.1 | | |
 | `--manual-crossband-ecsv-all-modules` | off | off | off | off | write the cross-band table's `.ecsv` twin for nrca/nrcb too; off writes it for the merged module only, or for every module when the run has no merged module (a disjoint field, MIRI). The FITS table is written for every module either way |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
 | `--no-m8-dedup` (`m8_dedup`) | `True` | on | on | on |
+| `--m8-dedup-winner-emag-ratio` (`m8_dedup_winner_emag_ratio`, e.g. 0.8) | `None` | off | off | off | the primary row keeps its own band measurement unless the other member's emag is below ratio times the primary's |
+| `--m8-dedup-band-resolve-mas` (`m8_dedup_band_resolve_mas`, a number or `f212n=60,...`) | `None` | off | off | off | rows resolved in a band (independent detections further apart than this) are not merged |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
 | `--mergedcat-render-procs` / `--forced-fill-procs` (forked processes over the frames of the merged-catalog render / of the m8 fill; output identical to the serial loop, #1230) | 1 / 1 | serial (set per job through the submitters' `EXTRA_ARGS`) | | |
+| `--forced-fill-bkg-scatter` (`forced_fill_bkg_scatter`; adds each m8 source's annulus scatter in excess of the crf ERR (1.4826 MAD at 2.5-4.5 FWHM, inner radius floored at 4 px, `median(ERR^2)` subtracted) to the crf ERR in quadrature; writes `forced_bkg_sigma_<filter>` (per pixel) and `forced_bkg_nframes_<filter>`; changes `forced_snr`, `flux_ulim`, `emag_ab` of promoted rows; #1120) | off | crf ERR only | | |
+| `--forced-fill-nbrsub` (`forced_fill_nbrsub`; fits each m8 frame with its m7 star-only model removed and the m7 sources within 40 mas of a target added back; needs the m7 per-frame `_model.fits` and catalogue, a frame without both is fitted unsubtracted and dropped from the combine of every target that has a subtracted frame, a target with none keeps its fit and upper limit but is not promoted; writes `forced_nbrsub_<filter>`, `forced_near_m7_sep_<filter>`; #1284) | off | raw frame, neighbours left in | | |
+| `--forced-fill-nrand` (`forced_fill_nrand`; N random blank positions per band, 1-2 FWHM from random rows; every target's error is scaled by the half-width of their 16-84 percentile flux/error range, at least 1, one factor per band and catalogue; scales `forced_snr`, `flux_ulim`, the detection cut, `emag_ab` and `mag_*_ulim`; writes `forced_err_scale_<filter>`, `forced_snr_raw_<filter>`; needs `--forced-fill-nbrsub` (warns without it); #1284) | 0 | formal error | | |
 | `--each-suffix` | `destreak_o001_crf` | per-reduction | | |
 | `--cutout-region` / `--cutout-label` / `--cutout-size-arcsec` | `''`/`''`/5.0 | full-frame | | |
 | `--inject-stars` / `--inject-seed` | `''`/0 | off (cutout-only; reference-field truth, `injection.py`) | | |

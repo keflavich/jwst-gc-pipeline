@@ -28,6 +28,7 @@ import contextlib
 import copy
 import functools
 import glob
+import json
 
 import numpy as np
 import yaml.representer
@@ -55,7 +56,7 @@ from jwst_gc_pipeline.photometry.requested_filters import (
     RequestedFilterHasNoFramesError, assert_requested_filters_have_frames)
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
-from jwst_gc_pipeline.atomic_io import write_table_atomic
+from jwst_gc_pipeline.atomic_io import atomic_write, write_table_atomic
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
@@ -5094,6 +5095,36 @@ def _resid_nan_satstar_applies(iteration_label):
     return iteration_label in _resid_nan_satstar_passes()
 
 
+def _perframe_product_stub(ctx, iter_):
+    """Path stem of a manual pass's per-frame residual and model images
+    (``{stub}_residual.fits``, ``{stub}_model.fits``); ``iter_`` is the
+    iteration token.  The PSF token is ``ctx.epsf_``, so a reader that builds
+    ``ctx`` the way the writer did finds the writer's files."""
+    return (f'{ctx.out_basepath}/{ctx.filtername}/pipeline/'
+            f'{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
+            f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
+            f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+
+
+def _final_phase_frame_products(ctx, frame_kwargs):
+    """``(model path, catalogue path)`` of the final real phase's products for
+    the frame ``ctx`` prepares, for the m8 forced fill's neighbour subtraction.
+
+    The phase is the frame kwargs' ``satstar_label`` (the phase whose satstar
+    products the fill subtracts).  The model is the star-only image of
+    ``_save_manual_pass``; the catalogue is the unvetted per-frame table that
+    ``save_photutils_results`` wrote, with the same tokens."""
+    iter_ = _iteration_token(frame_kwargs['satstar_label'])
+    options = frame_kwargs['options']
+    obs_ = _L._obs_token_from_options(options)
+    catalog = (f'{ctx.out_basepath}/{ctx.filtername}/'
+               f'{ctx.filtername.lower()}_{ctx.module}{obs_}{ctx.visitid_}'
+               f'{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+               f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic.fits')
+    return f'{_perframe_product_stub(ctx, iter_)}_model.fits', catalog
+
+
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """Write the per-frame catalog (``save_photutils_results``) + residual +
     model for one manual pass, with the manual ``_m{N}`` iteration token.  The
@@ -5151,10 +5182,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
             print(f"[{iteration_label}] residual: {int(_nanm.sum())} DQ-SATURATED px "
                   f"under accepted satstar models set to NaN (not measured)",
                   flush=True)
-    stub = (f'{bp}/{ctx.filtername}/pipeline/{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
-            f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
-            f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
-            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+    stub = _perframe_product_stub(ctx, iter_)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_residual.fits', residual)
     _L.save_residual_datamodel(ctx.filename, f'{stub}_model.fits', modsky)
     return saved
@@ -5942,12 +5970,133 @@ def _check_crossband_dva_consistency(states, label='m7 crossband seed'):
         raise RuntimeError(msg)
 
 
+class CrossbandSeedCollapsedError(RuntimeError):
+    """The m7 cross-band seed confirmed too small a fraction of the smallest
+    band's good detections (``manual_crossband_seed_collapse_action='raise'``)."""
+
+
+#: Seed files whose collapse warning this process has already printed.  Every
+#: m7 (module, filter) iteration rebuilds the same seed, so the message would
+#: otherwise repeat once per iteration.
+_CROSSBAND_SEED_COLLAPSE_WARNED = set()
+
+
+def _crossband_seed_health(n_good, n_in_seed, n_seed, ras, decs, snrs, filtidx,
+                           flist, *, max_sep_mas, min_frac):
+    """Health of a cross-band seed: per-band confirmed fraction and a coarse
+    band-to-band offset.
+
+    The fraction of a band is ``n_in_seed[band] / min(n_good)``, capped at 1:
+    how many of its good detections sit in a cluster the seed kept, over the
+    size of the *shallowest* band (``n_good`` and ``n_in_seed`` are accumulated
+    across modules by the caller).  The common denominator is deliberate: a
+    star can only be confirmed if the shallowest band detects it, so dividing a
+    deeper band by its own, larger ``n_good`` would flag every pair of unequal
+    depth as collapsed although every shallow-band star is confirmed.  A
+    cluster can hold several detections of one band, hence the cap.  ``frac``
+    is the smallest band fraction, so one band registered away from the others
+    flags the seed even when the rest agree (with three bands a pooled
+    ``n_seed / min(n_good)`` would not).  A
+    single-filter target has nothing to confirm against, so its fraction is None
+    and it is never flagged.
+
+    The offset is measured between the worst band and the highest median-S/N
+    other band by offset-histogram stacking in a 0.3 arcsec window
+    (``astrometry_offsets.measure_offset``, ``sweep=False``), as (second minus
+    first, the pair ordered by median S/N) in mas with dRA carrying the cos(dec)
+    factor.  It is a diagnostic: the histogram peak is only meaningful when the
+    offset lies inside that window, so it is recorded only when the measurement
+    reports a coherent peak (``offset_ok``); otherwise the offset is None and
+    ``offset_ok`` False.  The authority on registration is the m7 cross-filter
+    checkpoint.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    health = dict(n_good={k: int(v) for k, v in n_good.items()},
+                  n_in_seed={k: int(n_in_seed.get(k, 0)) for k in n_good},
+                  n_seed=int(n_seed), max_sep_mas=float(max_sep_mas),
+                  min_frac=float(min_frac), frac=None, band_frac=None,
+                  worst_band=None, collapsed=False,
+                  offset_filters=None, offset_dra_mas=None,
+                  offset_ddec_mas=None, offset_npairs=None, offset_ok=None,
+                  offset_contrast=None, offset_window_edge_fraction=None)
+    bands = [k for k, v in n_good.items() if v > 0]
+    worst = None
+    if len(bands) >= 2:
+        n_ref = float(min(n_good[k] for k in bands))
+        band_frac = {k: min(1.0, float(n_in_seed.get(k, 0)) / n_ref)
+                     for k in bands}
+        worst = min(bands, key=lambda k: band_frac[k])
+        health['band_frac'] = band_frac
+        health['worst_band'] = worst
+        health['frac'] = band_frac[worst]
+        health['collapsed'] = bool(health['frac'] < min_frac)
+    if len(flist) >= 2:
+        med = [(float(np.nanmedian(snrs[filtidx == k])) if np.any(filtidx == k)
+                else -np.inf) for k in range(len(flist))]
+        rank = [int(k) for k in np.argsort(-np.asarray(med), kind="stable")]
+        if worst is None:
+            pair = rank[:2]
+        else:
+            kw = flist.index(worst)
+            pair = sorted([kw, next(k for k in rank if k != kw)], key=rank.index)
+        k1, k2 = pair
+        m1, m2 = filtidx == k1, filtidx == k2
+        if m1.any() and m2.any():
+            res = measure_offset(
+                SkyCoord(ras[m1] * u.deg, decs[m1] * u.deg),
+                SkyCoord(ras[m2] * u.deg, decs[m2] * u.deg),
+                maxsep=0.3 * u.arcsec, bin_arcsec=0.01, min_pairs=200,
+                sweep=False)
+            if res is not None:
+                health['offset_filters'] = [flist[k1], flist[k2]]
+                health['offset_npairs'] = int(res['npairs'])
+                health['offset_ok'] = bool(res['ok'])
+                health['offset_contrast'] = float(res['contrast'])
+                health['offset_window_edge_fraction'] = float(
+                    res['window_edge_fraction'])
+                if res['ok']:
+                    health['offset_dra_mas'] = float(res['dra'])
+                    health['offset_ddec_mas'] = float(res['ddec'])
+    return health
+
+
+def _crossband_seed_health_message(health):
+    """One-line description of a collapsed seed, naming the counts and offset."""
+    counts = ', '.join(f"{k}={v}" for k, v in sorted(health['n_good'].items()))
+    fracs = ', '.join(f"{k}={v:.3f}"
+                      for k, v in sorted(health['band_frac'].items()))
+    msg = (f"WARNING [m7] crossband seed collapsed: {health['n_seed']} positions "
+           f"confirmed from good m6 detections ({counts}); confirmed fraction "
+           f"of the smallest band's good detections ({fracs}); worst band "
+           f"{health['worst_band']} {health['frac']:.3f} < {health['min_frac']:g} "
+           f"at a {health['max_sep_mas']:g} mas match radius.")
+    if health['offset_dra_mas'] is not None:
+        a, b = health['offset_filters']
+        msg += (f" Measured {b}-{a} offset (diagnostic, 0.3 arcsec window): "
+                f"dRA*cos(dec)={health['offset_dra_mas']:.1f} mas, "
+                f"dDec={health['offset_ddec_mas']:.1f} mas "
+                f"({health['offset_npairs']} pairs).")
+    elif health['offset_ok'] is False:
+        a, b = health['offset_filters']
+        msg += (f" No coherent {b}-{a} offset peak inside the 0.3 arcsec "
+                f"window (offset larger than the window, or unregistered); no "
+                f"offset is reported.")
+    msg += (" The bands are probably mis-registered by more than the match "
+            "radius; repair the reference tie (issues #921, #1198) rather "
+            "than widening the radius.  The m7 cross-filter checkpoint and "
+            "registration_failsafes.py --scan are the authority on "
+            "registration.")
+    return msg
+
+
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                           min_filters=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],
                           snr_min=MANUAL_DEFAULTS['manual_crossband_seed_snr_min'],
                           qfit_max=MANUAL_DEFAULTS['manual_crossband_seed_qfit_max'],
-                          dedup_radius_mas=30.0):
+                          dedup_radius_mas=30.0,
+                          min_frac=MANUAL_DEFAULTS['manual_crossband_seed_min_frac'],
+                          collapse_action=MANUAL_DEFAULTS['manual_crossband_seed_collapse_action']):
     """Cross-filter seed for m7 (iter7): STRINGENT -- only positions independently
     confirmed (S/N > snr_min AND qfit < qfit_max) in >= ``min_filters`` filters,
     clustered within ``max_sep_mas``.
@@ -5978,6 +6127,21 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     vetting floor uses flux / flux_err_prop (``manual_ext_snr_floor_propagated``).
     The seed's stricter definition is deliberate: a seed position is force-fit in
     every band, so it requires a detection that is significant in one frame.
+
+    Seed health (issue #981): bands registered worse than ``max_sep_mas`` apart
+    confirm almost nothing (gc-treasury has two NIRCam bands, so one band offset
+    by 66-272 mas collapsed the seed on o111, o113, o063 and o138).  For each
+    band the build counts the fraction of its good detections that sit in a
+    kept cluster (at most 1; the smallest over bands is ``SEEDFRAC``, so with
+    three or more bands one mis-registered band is flagged too).  Below
+    ``manual_crossband_seed_min_frac`` (0.3) it prints a ``WARNING [m7]
+    crossband seed collapsed`` line with the counts and, when the offset
+    measurement finds a coherent peak, a coarse band offset.  The numbers
+    go into the seed table meta (SEEDFRAC, SEEDCOLL, SEEDNGD, SEEDOFFX/Y) and a
+    ``crossband_seed_manual<obs>.health.json`` beside it.
+    ``manual_crossband_seed_collapse_action='raise'`` raises
+    ``CrossbandSeedCollapsedError`` instead of continuing.  There is no
+    wider-radius fallback: the repair is the reference tie.
     """
     from astropy.coordinates import SkyCoord
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
@@ -5986,12 +6150,19 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     snr_min = float(getattr(options, 'manual_crossband_seed_snr_min', snr_min))
     qfit_max = float(getattr(options, 'manual_crossband_seed_qfit_max', qfit_max))
     max_sep_mas = float(getattr(options, 'manual_crossband_seed_max_sep_mas', max_sep_mas))
+    min_frac = float(getattr(options, 'manual_crossband_seed_min_frac', min_frac))
+    collapse_action = str(getattr(options, 'manual_crossband_seed_collapse_action',
+                                  collapse_action))
+    if collapse_action not in ('warn', 'raise'):
+        raise ValueError(f"manual_crossband_seed_collapse_action must be 'warn' or "
+                         f"'raise', got {collapse_action!r}")
 
     # collect GOOD (independently-confirmed) detections from each filter's m6.
     # The path spelling lives in `crossband_seed_inputs` so the fan-out resume's
     # staleness check reads exactly the list this loop consumes.
     ras = []; decs = []; filtidx = []; snrs = []
     flist = []
+    n_good = {}   # good detections per filter, summed over modules
     dva_states = {}
     for module, filt, p in crossband_seed_inputs(cut_bp, modules, filternames,
                                                  options):
@@ -6010,6 +6181,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
         if key not in flist:
             flist.append(key)
         k = flist.index(key)
+        n_good[key] = n_good.get(key, 0) + int(good.sum())
         ras.extend(np.atleast_1d(sc.ra.deg)[good])
         decs.extend(np.atleast_1d(sc.dec.deg)[good])
         snrs.extend(snr[good])
@@ -6043,16 +6215,32 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     for i, r in enumerate(roots):
         members[r].append(i)
     seed_ra = []; seed_dec = []; nfilt = []; confl = []
+    n_in_seed = {}   # good detections per filter inside a kept cluster
     for r, mem in members.items():
         mem = np.array(mem)
         ufilt = np.unique(filtidx[mem])
         if len(ufilt) < min_filters:
             continue
+        for k in filtidx[mem]:
+            n_in_seed[flist[k]] = n_in_seed.get(flist[k], 0) + 1
         # seed position = highest-SNR member of the cluster
         best = mem[np.nanargmax(snrs[mem])]
         seed_ra.append(ras[best]); seed_dec.append(decs[best])
         nfilt.append(len(ufilt))
         confl.append(','.join(sorted(flist[k] for k in ufilt)))
+    out = crossband_seed_file(cut_bp, options)
+    health = _crossband_seed_health(n_good, n_in_seed, len(seed_ra), ras, decs,
+                                    snrs, filtidx, flist,
+                                    max_sep_mas=max_sep_mas, min_frac=min_frac)
+    # the JSON is written first so that an empty or raising build leaves it
+    with atomic_write(out.replace('.fits', '.health.json')) as _tmp:
+        with open(_tmp, 'w') as _fh:
+            json.dump(health, _fh, indent=1, sort_keys=True)
+    if health['collapsed']:
+        _msg = _crossband_seed_health_message(health)
+        if out not in _CROSSBAND_SEED_COLLAPSE_WARNED:
+            print(_msg, flush=True)
+            _CROSSBAND_SEED_COLLAPSE_WARNED.add(out)
     if not seed_ra:
         raise ValueError(f"m7 crossband seed: 0 positions confirmed in >={min_filters} filters "
                          f"(from {n} good detections) -- loosen manual_crossband_seed_min_filters")
@@ -6060,12 +6248,20 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     seed['skycoord'] = SkyCoord(np.array(seed_ra) * u.deg, np.array(seed_dec) * u.deg)
     seed['n_filt_confirmed'] = np.array(nfilt, dtype='i4')
     seed['confirming_filters'] = np.array(confl)
-    out = crossband_seed_file(cut_bp, options)
+    if health['frac'] is not None:
+        seed.meta['SEEDFRAC'] = health['frac']
+        seed.meta['SEEDCOLL'] = health['collapsed']
+        seed.meta['SEEDNGD'] = min(v for v in n_good.values() if v > 0)
+    if health['offset_dra_mas'] is not None:
+        seed.meta['SEEDOFFX'] = health['offset_dra_mas']
+        seed.meta['SEEDOFFY'] = health['offset_ddec_mas']
     # every m7 shard rebuilds this same path -- see write_table_atomic
     write_table_atomic(seed, out)
     print(f"[m7] wrote STRINGENT crossband seed {out} (n={len(seed)} confirmed in "
           f">={min_filters} filters @ {max_sep_mas:g} mas, SNR>{snr_min}, qfit<{qfit_max}; "
           f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
+    if health['collapsed'] and collapse_action == 'raise':
+        raise CrossbandSeedCollapsedError(_crossband_seed_health_message(health))
     return out
 
 
@@ -8285,8 +8481,13 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
             out = m8_path.replace('.fits', '_dedup.fits')
     _stage = 'dedup'
     try:
-        from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
-        dedup_merged_catalog(m8_path, out)
+        from jwst_gc_pipeline.photometry.dedup_catalog import (
+            dedup_merged_catalog, parse_band_resolve_mas)
+        dedup_merged_catalog(
+            m8_path, out,
+            winner_emag_ratio=getattr(options, 'm8_dedup_winner_emag_ratio', None),
+            band_resolve_mas=parse_band_resolve_mas(
+                getattr(options, 'm8_dedup_band_resolve_mas', None)))
         print(f"manual [{label}]: m8 dedup -> {out}", flush=True)
         _stage = 'spike flag'
         try:
@@ -8388,7 +8589,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
-        path = _pick_refcat(cands, field=field)
+        path = _pick_refcat(cands, field=field, proposal=proposal_id)
         if (gaia_fallback and not path
                 and not _refcat_is_required(proposal_id, field)):
             # A field outside the VVV footprint carries only the Gaia seed
@@ -8399,7 +8600,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
             gcands = sorted(
                 p for p in glob.glob(f"{basepath}/catalogs/gaia_refcat*.fits")
                 if _GAIA_REFCAT_RE.match(os.path.basename(p)))
-            path = _pick_refcat(gcands, field=field)
+            path = _pick_refcat(gcands, field=field, proposal=proposal_id)
             if path:
                 print(f"astrom checkpoint: no gaia_virac2_refcat under "
                       f"{basepath}/catalogs; using the Gaia-only seed refcat",
@@ -8419,6 +8620,12 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
         return load_reference_catalog(path)
     where = f"{basepath}/catalogs"
     if _refcat_is_required(proposal_id, field):
+        from jwst_gc_pipeline.photometry.naming import SHARED_TREE_PROPOSALS
+        # Proposals that share one directory are told apart by proposal, not
+        # observation: an `_o<NNN>` name is the same for both (#818).
+        build_token = (f"--proposal-token {proposal_id}"
+                       if str(proposal_id) in SHARED_TREE_PROPOSALS
+                       else f"--obs-token {field}")
         msg = (f"astrom checkpoint: no reference catalog under {where} for "
                f"proposal {proposal_id} observation {field}, whose alignment "
                f"config declares the VIRAC2 frame.  Without it the checkpoints "
@@ -8427,7 +8634,7 @@ def _astrom_checkpoint_refcat(basepath, field, proposal_id=None, *,
                f"green.  Build one with\n"
                f"  python -m jwst_gc_pipeline.reduction.build_gaia_virac2_refcat_byquery "
                f"--base {basepath} --epoch <YYYY.Y> --ra <deg> --dec <deg> "
-               f"--radius <deg> [--obs-token {field}]\n"
+               f"--radius <deg> [{build_token}]\n"
                f"or point ASTROM_REFCAT at an existing one.  Set "
                f"{ALLOW_CONSENSUS_ONLY_ENV}=1 to run without an absolute tie "
                f"(the result is not releasable).")
@@ -11253,7 +11460,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 prepare_frame=_prepare_frame_for_photometry,
                 frame_arg_builder_for=_builder_for,
                 nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
-                n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1))
+                n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
+                bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
+                nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
+                frame_products=_final_phase_frame_products,
+                nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
             # Partial fill writes one band only -> dedup waits for the merge
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
             if not _m8_partial:
@@ -12580,7 +12791,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         prepare_frame=_prepare_frame_for_photometry,
                         frame_arg_builder_for=_builder_for,
                         nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)),
-                        n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1))
+                        n_procs=int(getattr(options, 'forced_fill_procs', 1) or 1),
+                        bkg_scatter=bool(getattr(options, 'forced_fill_bkg_scatter', False)),
+                        nbrsub=bool(getattr(options, 'forced_fill_nbrsub', False)),
+                        frame_products=_final_phase_frame_products,
+                        nrand=int(getattr(options, 'forced_fill_nrand', 0) or 0))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
                     _stamp_catalog_provenance(
                         _m8, 'm8', options,

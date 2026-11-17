@@ -286,6 +286,25 @@ gc2211) needs it: an untokened catalog is handed to every observation alike,
 and for pointings arcminutes apart that is the wrong sky — the way gc2211 o023
 took a −9.28″ correction.
 
+A directory shared by two proposals (ngc6334: 7213 and 6778, which also share
+observation `001`) needs `--proposal-token <PPPP>` instead, which stamps
+`_j<PPPP>` before any observation token (`..._epoch2024.68_j6778.fits`).
+`pick_refcat(cands, field, proposal=...)` prefers `_j<proposal>_o<NNN>`, then
+`_j<proposal>`, then `_o<NNN>`, then an untokened file, and never falls back to
+another proposal's `_j` file.  `_j<proposal>` outranks `_o<NNN>` even for the
+matching observation, because the proposal fixes the epoch and footprint and an
+observation number alone does not (7213 and 6778 are both `001`).  It refuses
+(naming the files and the fix, rename or `ASTROM_REFCAT`) several `_j<proposal>`
+files with no observation token for one proposal, and, for a proposal in
+`naming.SHARED_TREE_PROPOSALS`, several untokened candidates or several
+`_o<NNN>` candidates for the run's observation; before this, the newest-sorting
+name won and 6778 was tied to 7213's epoch-2026.30 file (#818).  Proposal ids
+are 4 or 5 digits (`_j6778`, `_j10678`); `--proposal-token` rejects any other
+spelling.  On a shared tree build with `--proposal-token`, not `--obs-token`:
+the `_o<NNN>` name is the same for both proposals.  Among several `_j<P>_o<NNN>`
+(or several `_o<NNN>` off the shared tree) the last in sorted order wins, as
+before.  The ngc6334 `fields.yaml` entries name the `_j6778` / `_j7213` files.
+
 `ALLOW_CONSENSUS_ONLY_ASTROMETRY=1` runs without one, for a deliberate first
 look at a field whose catalog has not been built.  It never lets a run borrow
 another observation's catalog: `pick_refcat` refuses that separately, override
@@ -308,6 +327,47 @@ Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting
 checkpoint.  "m2..m5" of the plan = merge tokens m3..m6 here.  "m6
 cross-filter" = the m7 cross-band merge.
+
+## The m7 cross-band seed health check (issue #981)
+
+`_build_crossband_seed` confirms a position only when `min_filters` bands detect
+it within `manual_crossband_seed_max_sep_mas` (30 mas). On a two-band target
+such as gc-treasury (F212N, F480M), bands registered worse than that radius
+confirm almost nothing: o111, o113, o063 and o138 sat 66-272 mas apart and the
+seed held only a small fraction of the good detections (about 0.003-0.05 on the
+collapsed tiles checked, 0.69-0.82 on the healthy ones; 7 tiles, measured with
+the earlier pooled `n_seed / min(n_good)` form; not re-measured on all 68).
+On the 68 two-band gc-treasury tiles the pooled form gives 0.63-0.82 while a
+per-band count over each band's *own* `n_good` gives 0.28-0.63 (six tiles, o042,
+o043, o045, o069, o070 and o076, at 0.282-0.298, under the 0.3 floor), because
+the band with more good detections (F212N on 65 of the 68 tiles, F480M on 3)
+has detections the other band can never confirm. The
+two forms therefore agree only for bands of equal depth, and the per-band count
+uses the smallest band's `n_good` for every band (below).
+
+For each band the build counts the detections (summed over modules) that sit in
+a cluster the seed kept and divides by the smallest band's good-detection count,
+capping at 1. The smallest
+band fraction is the seed's health, so with three or more bands a single
+mis-registered band is flagged even when the others agree with each other (a
+pooled seed-size over smallest-band-count would not see it). Below
+`manual_crossband_seed_min_frac` (0.3) the build prints one
+`WARNING [m7] crossband seed collapsed` line per process, naming the counts, the
+per-band fractions and the worst band. A coarse offset between the worst band
+and the highest-S/N other band (offset-histogram stacking in a 0.3 arcsec
+window; skipped under 200 pairs) is printed and stored only when the
+measurement reports a coherent peak; a pair registered further apart than the
+window gives the highest noise bin, which is reported as "no coherent peak",
+with `offset_ok` False and the contrast in the JSON. The numbers are stored in
+the seed table meta (`SEEDFRAC`, `SEEDCOLL`, `SEEDNGD`, `SEEDOFFX`, `SEEDOFFY`)
+and in `crossband_seed_manual<obs>.health.json` beside the seed.
+`manual_crossband_seed_collapse_action` is `warn` (default) or `raise`
+(`CrossbandSeedCollapsedError`, after the files are written).
+
+There is no wider-radius fallback: the repair is the reference tie (#921,
+#1198). The offset is a diagnostic confined to its window. The m7 cross-filter
+checkpoint above and `registration_failsafes.py --scan` remain the authority on
+registration; the seed check stops earlier, before the m7 compute is spent.
 
 ## The cross-filter residual field (m7, measurement only)
 
@@ -544,12 +604,72 @@ than five independent checks would be.
       of such starved cells is tested against the same two bars once their summed
       expectation reaches `min_stars` — no new tunable.
 
+    **The prediction is bounded by the reference count too (issue #1191).**
+    A pair needs a reference partner, and `local_residual_map` keeps a pair
+    only when that partner is unique, so a cell's pairs are bounded by its
+    reference stars, not by its JWST sources.  The per-source rate over-predicts
+    where JWST resolves far more stars per reference star than the field at
+    large (the Sgr A* nuclear cluster: on the sgra F212N consensus, cells (4,1)
+    and (5,1) held 13 and 20 tight pairs against 72 and 67 predicted per source,
+    while their tight pairs per reference star, 0.034 and 0.042, sat within the
+    0.034-0.056 of the neighbouring columns).  Each
+    cell's expectation is therefore `min(n_sources * rate_per_source,
+    n_ref * rate_per_reference)`, on both the tight and the all-pairs arm, with
+    `n_ref` the reference stars inside the footprint grid
+    (`n_ref_in_footprint`, `coverage_rate_ref_all`, `coverage_rate_ref_tight`).
+    The minimum only lowers a prediction, so no cell that is covered without it
+    becomes uncovered.  A single-cell entry of `uncovered_cells` records `n_ref`,
+    `expected_pairs_src`, `expected_pairs_ref` and `ref_bound_applied` (covered
+    cells have no entry, and group entries carry none of the four).  A cell that was uncovered on
+    the source count and that the reference count leaves too thin to judge
+    (fewer than `min_stars` expected pairs) is no longer called displaced; it is
+    listed in `ref_bound_untestable_cells` and counted in
+    `n_ref_bound_untestable` (as a share of the source cells,
+    `ref_bound_untestable_fraction`; the limit used is `ref_untestable_limit`;
+    an entry of `ref_bound_untestable_cells` holds only `ix`, `iy`,
+    `n_sources` and `n_ref`).  When those cells exceed
+    `REGION_REFERENCE_UNTESTABLE_FRACTION` (15%) of the source cells the map is
+    `clean=False` with `ref_too_sparse` set and the reason "reference too
+    sparse to test coverage"; like an uncovered cell, that verdict is excluded
+    from the bulk-dominance and small-bulk exemptions.
+    `same_star_region_map(..., ref_bound_coverage=False)` reproduces the
+    source-only prediction.
+
     Stated limit: a displaced region whose cells cannot between them predict
     `min_stars` (40) pairs is not separable from noise by a matched-pair
     statistic and is NOT caught (a 2% corner of a footprint predicts ~24 pairs
     and reads clean).  `n_skipped` / `skipped_expected_pairs` record how much of
     the field got no coverage verdict, so a `clean=True` over silently unchecked
-    cells is distinguishable from one over a field that was checked;
+    cells is distinguishable from one over a field that was checked.  The
+    reference bound adds to this limit: where a cell's reference count predicts
+    fewer than `min_stars` pairs (the thin-reference nuclear-cluster core), a
+    displaced region is NOT caught either.  At nuclear-cluster density (sgra F212N
+    cell (4,1): 8640 sources, roughly 4 per arcsec²) the all-pairs arm cannot
+    stand in, because a displaced JWST-dense region finds chance partners for
+    most of its few reference stars; at lower crowding it does fire (a 100″
+    block at 2 extra JWST stars per field star, reference thinned to 0.25, is
+    reported uncovered on the all-pairs arm in synthetic maps).
+    **Accepted recall cost of the bound (decision of 2026-11-14).**  The bound is
+    a minimum of two noisy predictions, so it is biased low even in an
+    uncrowded field: a cell that keeps 30-35% of its pairs moves from uncovered
+    to covered, so the effective retention bar sits a few points below the 30%
+    `REGION_COVERAGE_FRACTION`.  Measured on synthetic uniform fields (a
+    displaced box of 15, 30, 45 or 70″, 3″ past the match radius; 0.04-0.25
+    stars/arcsec², reference completeness 0.25-1; 15 seeds; not real data),
+    the maps flagged not-clean fell from 692 to 648 of 1620 injected maps
+    (44 lost, 0 gained, about 6% of the detections).  By box: 15″ and 30″ are
+    never detected beyond the control level by either prediction; 45″ falls
+    from 232 to 190 of 405; 70″ from 392 to 390 of 405.  The false-positive
+    rate is unchanged (34 of 405 undisplaced controls are dirty with and
+    without the bound).  A cell-sized or larger displaced region stays caught
+    (287 of 288 displaced crowded-block maps).  "No covered cell becomes
+    uncovered" therefore does not mean detection is unchanged: a few cells that
+    were tested and covered also become unchecked (counted in `n_skipped`, and
+    outside the guard above, which counts only previously uncovered cells).
+    `n_uncovered` counts entries, not regions: when the tight arm, starved by
+    the bound, adds a group entry over cells the all-pairs arm already lists
+    singly, it can read one higher than without the bound (29 of 1440
+    synthetic crowded-block maps); the set of uncovered cells never grows;
   * `histogram-grid` — `measure_offset_grid`, used on a swept or otherwise
     unverified tie, where matched-pair statistics have no standing and the
     histogram is the only estimator that works, **and** whenever the region map

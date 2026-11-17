@@ -5377,6 +5377,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
+    parser.add_option('--manual-crossband-seed-min-frac', type=float,
+                      dest='manual_crossband_seed_min_frac', default=MANUAL_DEFAULTS['manual_crossband_seed_min_frac'],
+                      help=('Seed health (#981): the m7 cross-band seed is flagged as '
+                            'collapsed when any band has fewer than this fraction of '
+                            'its good m6 detections inside a kept cluster (bands '
+                            'mis-registered by more than the match radius).  '
+                            'Default %default.'),
+                      metavar='manual_crossband_seed_min_frac')
+    parser.add_option('--manual-crossband-seed-collapse-action', type='choice',
+                      choices=['warn', 'raise'],
+                      dest='manual_crossband_seed_collapse_action', default=MANUAL_DEFAULTS['manual_crossband_seed_collapse_action'],
+                      help=("What a collapsed m7 cross-band seed does: 'warn' prints "
+                            "a WARNING and continues; 'raise' stops the run "
+                            'before the m7 compute is spent.  Default %default.'),
+                      metavar='manual_crossband_seed_collapse_action')
     parser.add_option('--manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
                       action='store_true',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
@@ -5501,6 +5516,25 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'merges split a single star into two reference rows; the '
                             'dedup collapses complementary-coverage pairs while '
                             'preserving resolved binaries.'))
+    parser.add_option('--m8-dedup-winner-emag-ratio',
+                      dest='m8_dedup_winner_emag_ratio',
+                      default=None, type='float',
+                      help=('Winner hysteresis for the m8 dedup (#1278): a '
+                            'merged row keeps its primary row\'s own measurement '
+                            'of a band unless the other member\'s emag_ab is '
+                            'below RATIO times the primary\'s (e.g. 0.8).  '
+                            'Default: off, the lowest-emag member always wins.'),
+                      metavar='RATIO')
+    parser.add_option('--m8-dedup-band-resolve-mas',
+                      dest='m8_dedup_band_resolve_mas',
+                      default=None,
+                      help=('Resolved-in-band guard for the m8 dedup (#1278): two '
+                            'rows that a band detects independently at '
+                            'skycoord_<band> positions further apart than this '
+                            'are not merged whatever their magnitudes.  A number '
+                            '(all bands) or BAND=MAS,... (e.g. f212n=60).  '
+                            'Default: off.'),
+                      metavar='MAS')
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')
@@ -5753,7 +5787,55 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'order, so the m8 catalog is identical to the serial '
                             'path (#1230).  Each process adds one prepared '
                             'frame to the memory in use.'))
+    parser.add_option('--forced-fill-bkg-scatter', dest='forced_fill_bkg_scatter',
+                      default=False, action='store_true',
+                      help=('Add each m8 forced-fill source\'s local background '
+                            'scatter (1.4826 MAD of the frame data in a 2.5-4.5 '
+                            'FWHM annulus, inner radius at least 4 pixels, with '
+                            'median ERR^2 subtracted) to the per-pixel crf ERR '
+                            'in quadrature, so forced_snr, flux_ulim, emag_ab '
+                            'and the detection cut rest on the larger error.  '
+                            'Writes forced_bkg_sigma_<filter> (per pixel) and '
+                            'forced_bkg_nframes_<filter>.  Default off: the crf '
+                            'ERR holds no term for background structure and '
+                            'the m8 limits on bright extended emission are '
+                            'deeper than the local noise (#1120).'))
+    parser.add_option('--forced-fill-nbrsub', dest='forced_fill_nbrsub',
+                      default=False, action='store_true',
+                      help=('Fit each m8 forced-fill frame with its own m7 '
+                            'star-only model removed, and add back the m7 '
+                            'sources within 40 mas of a target, so the other '
+                            'stars of the band stop contributing to the fit.  '
+                            'Needs the m7 per-frame model and catalogue; a '
+                            'frame without both is fitted unsubtracted and '
+                            'left out of the combine of any target that has '
+                            'a subtracted frame; a target with none is not '
+                            'promoted.  Writes forced_nbrsub_<filter> and '
+                            'forced_near_m7_sep_<filter>.  Default off '
+                            '(#1284).'))
+    parser.add_option('--forced-fill-nrand', dest='forced_fill_nrand',
+                      default=0, type='int',
+                      help=('Fit N random blank positions per band in the m8 '
+                            'forced fill and scale every target\'s error by '
+                            'the 16-84 percentile half-width of their '
+                            'flux/error (at least 1), so forced_snr, '
+                            'flux_ulim and the detection cut rest on the '
+                            'measured scatter.  Writes forced_err_scale_ and '
+                            'forced_snr_raw_<filter>.  Default 0 = off; needs '
+                            '--forced-fill-nbrsub (warns without it) '
+                            '(#1284).'))
     (options, args) = parser.parse_args()
+
+    # The m8 dedup runs at the end of the m8 phase, inside a handler that logs
+    # a failure and carries on; a malformed option would cost the dedup product
+    # only after the whole fill.  Reject it here instead (#1278).
+    from jwst_gc_pipeline.photometry.dedup_catalog import (
+        check_winner_emag_ratio, parse_band_resolve_mas)
+    try:
+        check_winner_emag_ratio(options.m8_dedup_winner_emag_ratio)
+        parse_band_resolve_mas(options.m8_dedup_band_resolve_mas)
+    except ValueError as _dedup_err:
+        parser.error(f"--m8-dedup-*: {_dedup_err}")
 
     # Instrument override (NIRISS): filter names are shared with NIRCam, so the
     # instrument must be stated explicitly.  Set the process-global env override
