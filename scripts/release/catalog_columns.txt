@@ -82,8 +82,15 @@ Position and cross-match
 Flux and magnitudes
   flux_{filter}
       PSF-fit flux, weighted mean over exposures, in the image units summed
-      over the PSF: MJy/sr x pixels. Multiply by the pixel solid angle in
-      steradians to get Jy (flux_jy_{filter} is that conversion).
+      over the PSF: MJy/sr x pixels. Each exposure's flux was first scaled
+      by its own detector's pixel area (PIXAR_SR) relative to a reference
+      area, so the pixel in this unit is the reference pixel: 0.031" on a
+      side for NIRCam short-wave filters, 0.063" long-wave, 0.11" MIRI. Its
+      solid angle is the header keyword <nnn>PIXA in deg^2 (212PIXA for
+      F212N; <nnn>PXDG carries the same value). Multiply by that solid
+      angle, not by the PIXAR_SR of a mosaic, to get Jy
+      (flux_jy_{filter} is that conversion). Catalogs built before the
+      per-detector correction have no <nnn>PIXA keyword; see "Known issues".
   flux_err_{filter}
       Weighted mean of the per-exposure flux errors: the uncertainty of a
       single exposure, same units as flux_{filter}.
@@ -301,3 +308,10 @@ Known issues
   sqrt(nmatch_good_{filter}) to get the propagated error.
 * modelsub_bkg_rms and modelsub_bkg_npix are averages over exposures even
   though their names carry no _avg suffix.
+* Catalogs built before the per-detector pixel-area correction (#1238) have
+  no <nnn>PIXA keyword. Their PSF fluxes were converted to Jy with one pixel
+  area for every detector, so each NIRCam short-wave detector is off by up
+  to 34 mmag from its own area (mean about 12 mmag on brick F212N, which
+  the correction makes fainter); long-wave filters by up to 3.5 mmag. Their
+  pixel scale keyword (PIXSCALE) is the mosaic's 0.0312", not the 0.0310"
+  reference.

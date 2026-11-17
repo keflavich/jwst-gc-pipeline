@@ -281,6 +281,11 @@ sbatch --dependency=afterok:$jid --export=ALL,TARGET=brick \
        scripts/reduction/submit_merge.sbatch
 ```
 
+For a target that merges one observation at a time (gc-treasury, gc1266,
+gc3571; `naming.PER_OBS_MERGED_PROPOSALS`) add `FIELD=<observation>` to both
+`--export` lists; the script passes it on as `--field`, and the all-filter merge
+raises without it rather than pool every pointing's mosaic.
+
 Stage 1's array leaves `MODULES` at its default, `nrca,nrcb,merged` — three
 mosaics per filter, where the worked example above builds only `merged`. Set
 `MODULES=merged` to match it.

@@ -24,7 +24,8 @@ from jwst_gc_pipeline.photometry.psf_channel import (
 from jwst_gc_pipeline.photometry.wingcal import (
     bucket_se as wingcal_bucket_se, interp_wingcal_ratio,
     MIN_RATIO as WINGCAL_MIN_RATIO, passes_se_gate as wingcal_passes_se_gate,
-    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se)
+    relative_scatter_floor as wingcal_rel_floor, wingcal_max_se,
+    WING_MULT_TABLE, wing_multiplier_ratio)
 from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 from photutils.psf import GriddedPSFModel
 
@@ -1319,6 +1320,12 @@ def satstar_fit_switches(env=None):
       clipped by the image edge or two cores merge into one invalid region the
       accepted-star positions are wrong and the veto can return MORE centres
       than the plain search (synthetic scenes, ``test_satstar_deblend_psf_veto``).
+    * ``SATSTAR_DEBLEND_ORDER`` (default OFF): with the ZEROFRAME deblend,
+      the seeds of one component are fitted largest ZF-saturated core first
+      (``order_key``), then the unsaturated peaks in detection order.  Every
+      seed of a component carries the component's ``sat_area``, so the
+      ``-sat_area`` sort alone leaves the order inside a component at the
+      raster order of its cores (#1094).  ``sat_area`` itself is unchanged.
     * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
       ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
       recovered-core cap and the PSF fraction below which it is skipped
@@ -1343,6 +1350,7 @@ def satstar_fit_switches(env=None):
         'r_header': _env_switch('SATSTAR_ZF_R_HEADER', cap_on, env),
         'zf_flat': _env_switch('SATSTAR_ZF_FLAT', False, env),
         'seed_core_dq': _env_switch('SATSTAR_SEED_CORE_DQ', True, env),
+        'deblend_order': _env_switch('SATSTAR_DEBLEND_ORDER', False, env),
         'qfit_local_gate': qloc_gate and qloc_r > 0,
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
@@ -1359,7 +1367,8 @@ def satstar_fit_switches(env=None):
 #: band would still compute the ``qfit_local`` column and carry a different
 #: cache key from a run that never exported the gate.
 SATSTAR_OPTIN_ENV = ('SATSTAR_ZF_KEEP_FINITE', 'SATSTAR_OBS_PK_FROM_CRF',
-                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R')
+                     'SATSTAR_QFIT_LOCAL_GATE', 'SATSTAR_QFIT_LOCAL_R',
+                     'SATSTAR_DEBLEND_ORDER')
 _OPTIN_BANDPASS_RE = re.compile(r'^F\d{3,4}(W2|[WMN])$')
 
 
@@ -1595,6 +1604,72 @@ def apply_uncapped_flux(base_tab, filtername, env=None):
     return base_tab
 
 
+def satstar_wing_mult_filters(env=None):
+    """Bandpasses whose satstar CATALOG flux gets the wing multiplier of
+    ``photometry.wingcal.WING_MULT_TABLE``, from ``SATSTAR_WING_MULT_FILTERS``
+    (#1036).
+
+    Comma- and/or space-separated bandpass names, case-insensitive (returned
+    upper-case); unset or blank -> empty, i.e. no behaviour change.  The
+    variable changes the catalog flux and the satstar cache key, so a name
+    that has no table entry raises ``ValueError`` rather than switching the
+    correction off without a word."""
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_WING_MULT_FILTERS') or ''
+    scope = [tok.upper() for tok in raw.replace(',', ' ').split()]
+    bad = [tok for tok in scope if tok not in WING_MULT_TABLE]
+    if bad:
+        raise ValueError(
+            f"SATSTAR_WING_MULT_FILTERS={raw!r}: {bad} have no wing "
+            f"multiplier; available: {sorted(WING_MULT_TABLE)}")
+    return frozenset(scope)
+
+
+def apply_wing_multiplier(base_tab, filtername, env=None):
+    """Opt-in wing multiplier (#1036): divide the satstar CATALOG flux of a
+    listed bandpass by ``wing_multiplier_ratio(wingcal_rmask)``.
+
+    On wd2 F150W the stars with a masked core of r_mask >= 4.5 px read about
+    0.3-0.4 mag bright against the narrowband predictions, and the frame
+    wing self-calibration (C about 1.0-1.05) does not reach that size.  When
+    ``filtername`` is listed in ``SATSTAR_WING_MULT_FILTERS`` (see
+    ``satstar_wing_mult_filters``), ``flux_fit`` and ``flux_err`` are divided
+    by the ratio and the ratio is recorded in ``wingmult_ratio``.  The column
+    is added only for listed bandpasses, so the default catalog schema (and
+    per-frame catalogs cached before this switch) is unchanged.
+
+    The ratio stays out of ``wingcal_ratio``: the pooled fallback in
+    ``merge_catalogs.apply_pooled_wingcal`` reads ``wingcal_ratio == 1.0`` as
+    "per-frame calibration skipped".  ``flux_fit_raw``, ``flux_fit_precap``,
+    the satstar model and the residual are untouched.  Out-of-field
+    (``outside_fov_seed``) rows are skipped for the reason given in
+    ``apply_uncapped_flux``.  Frames whose bandpass is listed carry ``wm`` in
+    ``satstar_fit_switch_signature``."""
+    if base_tab is None:
+        return base_tab
+    if str(filtername).upper() not in satstar_wing_mult_filters(env):
+        return base_tab
+    n = len(base_tab)
+    ratio = np.ones(n)
+    if n and 'wingcal_rmask' in base_tab.colnames:
+        ratio = wing_multiplier_ratio(
+            np.asarray(base_tab['wingcal_rmask'], dtype=float), filtername)
+        if 'outside_fov_seed' in base_tab.colnames:
+            ratio = np.where(np.asarray(base_tab['outside_fov_seed'], dtype=bool),
+                             1.0, ratio)
+        if (ratio != 1.0).any():
+            base_tab['flux_fit'] = np.asarray(base_tab['flux_fit'],
+                                              dtype=float) / ratio
+            if 'flux_err' in base_tab.colnames:
+                base_tab['flux_err'] = np.asarray(base_tab['flux_err'],
+                                                  dtype=float) / ratio
+            print(f"wing multiplier: {filtername}: {int((ratio != 1.0).sum())}/"
+                  f"{n} satstar catalog flux(es) divided by the wing "
+                  f"multiplier (max {np.max(ratio):.3f})", flush=True)
+    base_tab['wingmult_ratio'] = ratio
+    return base_tab
+
+
 def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
                                  env=None):
     """Cache key for the ``satstar_fit_switches`` of one frame.
@@ -1673,6 +1748,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
         # never runs it and keeps its key.  Left out when off, so the default
         # key is the one before the veto existed.
         parts.append(f"dv{sw['deblend_psf_margin']:g}")
+    if sw['deblend_order'] and deblend_with_zeroframe:
+        # Reorders the seeds of a deblended component (#1094); acts only
+        # where the ZEROFRAME deblend runs.
+        parts.append('do')
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
@@ -1685,7 +1764,8 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sf:
         parts.append(sf)
     # Single-group (G1-only) pixels flagged from the ramp change the seeds and
-    # the fit on frames that have any; a catalog fitted without it is stale.
+    # the fit on frames that get flagged ('g1': the auto gate said biased, or
+    # G1ONLY_SAT_DQ=1); a catalog fitted without it is stale there.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1 = g1only_dq.signature(filename)
     if g1:
@@ -1715,6 +1795,18 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
             _bp = ''
         if _bp in satstar_seed_require_sat_dq_filters(env):
             parts.append('sd')
+    if satstar_wing_mult_filters(env):
+        # SATSTAR_WING_MULT_FILTERS changes the per-frame catalog
+        # flux_fit/flux_err (not the model) of the listed bandpasses (#1036).
+        # Same per-frame bandpass rule as 'uf'; the default (empty list) and
+        # every unlisted band keep their keys.
+        try:
+            with fits.open(filename) as fh:
+                _bp = _frame_bandpass(fh[0].header)
+        except OSError:
+            _bp = ''
+        if _bp in satstar_wing_mult_filters(env):
+            parts.append('wm')
     return '_'.join(parts)
 
 
@@ -2926,6 +3018,20 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     recovered[rim_mask] = recov[rim_mask]
     deep_core_mask = sat & ~sat_recoverable
     return recovered, rim_mask, deep_core_mask, Kglobal
+
+
+def sort_source_records(source_records, deblend_order=False):
+    """Sort satstar seed records in place into fit order: largest saturated
+    component first (``sat_area``).  With ``deblend_order`` the stable second
+    key is the deblender's ``order_key`` (core radius, 0 for a peak; #1094),
+    largest first; records without one count as 0.  Without it the order inside
+    a component is the order the records arrived in."""
+    if deblend_order:
+        source_records.sort(key=lambda s: (-int(s.get('sat_area') or 0),
+                                           -float(s.get('order_key') or 0.0)))
+    else:
+        source_records.sort(key=lambda s: -int(s.get('sat_area') or 0))
+    return source_records
 
 
 def stamp_seed_kinds(source_records, seed_kinds):
@@ -4222,7 +4328,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # Subtracting the brighter star's PSF before fitting the fainter one
     # removes wing contamination at the cost of one PSF-model evaluation
     # per source.
-    source_records.sort(key=lambda s: -int(s.get('sat_area') or 0))
+    # SATSTAR_DEBLEND_ORDER (#1094): the stars of one deblended component share
+    # its sat_area, so the sort above leaves them in raster order of their
+    # cores.  The stable second key puts the larger cores (and then the
+    # unsaturated peaks, order_key 0, in detection order) first.
+    sort_source_records(source_records,
+                        deblend_order=satstar_fit_switches()['deblend_order'])
 
     if outside_star_pixels is not None:
         for xy in outside_star_pixels:
@@ -6389,6 +6500,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             severity_floor=float(_sev_floor or 0.0))
         # Opt-in uncapped catalog flux (#1186): catalog only, model unchanged.
         base_tab = apply_uncapped_flux(base_tab, get_filtername(header))
+        # Opt-in F150W wing multiplier (#1036): catalog only, model unchanged.
+        base_tab = apply_wing_multiplier(base_tab, get_filtername(header))
         # The per-source loop above works in stamp coordinates; from here on
         # the table is a catalog, so x_fit/y_fit/x_init/y_init become detector
         # pixels, the stamp values keep their own *_cutout columns, and id is
@@ -7043,10 +7156,12 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     """
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
-    # Single-group (G1-only) NIRCam pixels carry a ~0.75x rate with clean DQ;
-    # flag them SATURATED|DO_NOT_USE (+ NaN) from the sibling _ramp.fits so
-    # the finder seeds them and the first-read recovery rebuilds them.
-    # In memory, idempotent; G1ONLY_SAT_DQ=0 disables.  See g1only_dq.py.
+    # Single-group (G1-only) NIRCam pixels carry a 0.75x rate with clean DQ on
+    # frames whose ramp fit divided G1 by TGROUP; flag them SATURATED|DO_NOT_USE
+    # (+ NaN) from the sibling _ramp.fits so the finder seeds them and the
+    # first-read recovery rebuilds them.  G1ONLY_SAT_DQ=auto (default) decides
+    # per frame from the data.  In memory, idempotent; G1ONLY_SAT_DQ=0
+    # disables.  See g1only_dq.py.
     from jwst_gc_pipeline.reduction import g1only_dq
     g1only_dq.apply_to_hdul(fh, filename, label='satstar')
     data = fh['SCI'].data
