@@ -802,6 +802,19 @@ fitter reads it) adds `cs<NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC>` to the key, so
 catalogs fitted before the cap read only the seed's share of a blended
 component are refit once.
 
+The PSF is a cache key too.  With `PSF_EPSF_CORE_DIR` set, NIRCam satstar fits
+use the hybrid PSF (ePSF core inside 10 px, STPSF outside 12 px; see
+`PHOTOMETRY_PIPELINE.md`), and every satstar catalog records `PSFMODEL`
+(`STPSF`, or `STPSF+EPSFCORE` for a hybrid fit) and, for a hybrid fit, `EPSFSHA` (sha256 of the core file).
+`load_or_make_satstar_catalog` compares `EPSFSHA` with the core the run would use
+before it looks at `SATRECOV`/`SATFITSW` (including when `recovery_signature` is
+`None`), so enabling the variable, or editing a core in place, refits the
+affected filter's catalogs once, and an STPSF run does not adopt a hybrid
+catalog.  The extended (`force_union`) catalogs go through the same check; the
+script that writes them (`force_union`) is not in this repo, so whether it copies
+`EPSFSHA` is unchecked, and one that does not would be refit on every hybrid call.  The
+cross-phase content key carries `psf_core=<sha>` only when a core applies.
+
 ---
 
 ## 8. Key files

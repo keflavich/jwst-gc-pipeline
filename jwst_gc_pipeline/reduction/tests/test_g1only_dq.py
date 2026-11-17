@@ -266,7 +266,10 @@ def _write_gate_pair(tmp_path, *, biased, core=6, nframes=NFRAMES, tframe=TFRAME
                          fits.ImageHDU(np.ones_like(sci), name='ERR'),
                          fits.ImageHDU(np.zeros((N2, N2), np.uint32), name='DQ'),
                          fits.ImageHDU(np.ones_like(sci), name='VAR_POISSON')])
-    for k, v in (('INSTRUME', 'NIRCAM'), ('TELESCOP', 'JWST'), ('DATE-OBS', '2022-08-28')):
+    # a real NIRCam crf names its detector and bandpass; satstar_content_key
+    # reads them for the PSF core signature (#1208)
+    for k, v in (('INSTRUME', 'NIRCAM'), ('DETECTOR', 'NRCA1'), ('FILTER', 'F212N'),
+                 ('PUPIL', 'CLEAR'), ('TELESCOP', 'JWST'), ('DATE-OBS', '2022-08-28')):
         hdul[0].header[k] = v
     _readout(hdul[0].header, nframes, tframe, tgroup, readpatt)
     crf = os.path.join(tmp_path, f'{stem}_destreak_o001_crf.fits')
