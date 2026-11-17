@@ -687,8 +687,16 @@ def fwhm_table_path(instrument=None):
 _BAD_DQ_FLAGS_NIRCAM = ('DO_NOT_USE', 'SATURATED')
 _BAD_DQ_FLAGS_MIRI = ('DO_NOT_USE', 'SATURATED', 'NON_SCIENCE', 'PERSISTENCE')
 
-def _bad_dq_bitmask(instrument):
+def _bad_dq_bitmask(instrument, *, keep_recovered_saturation=False):
+    """Bitmask of DQ flags dropped from photometry for ``instrument``.
+
+    ``keep_recovered_saturation`` omits SATURATED (the any-group flag) so that
+    pixels recovered by the ramp fit stay fittable; the truly-lost core is then
+    masked through ``truly_lost_saturated_mask`` and DO_NOT_USE instead (#567).
+    """
     flags = _BAD_DQ_FLAGS_MIRI if str(instrument).upper() == 'MIRI' else _BAD_DQ_FLAGS_NIRCAM
+    if keep_recovered_saturation:
+        flags = tuple(f for f in flags if f != 'SATURATED')
     bm = 0
     for f in flags:
         bm |= int(dqflags.pixel[f])
@@ -5125,6 +5133,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "(e.g. W51 F480M, peak ~355 vs true saturation >1e4).  "
                           "-1 (default) = per-filter auto (NIRCam table; MIRI/unlisted "
                           "-> mask all); 0 = mask all SATURATED; >0 = explicit floor."))
+    parser.add_option("--truly-lost-saturation-in-fit",
+                    dest="truly_lost_saturation_in_fit",
+                    action="store_true", default=False,
+                    help=("Restrict the manual-path fit mask and the near-saturation "
+                          "veto to truly-lost saturation (SATURATED & DO_NOT_USE) "
+                          "instead of the any-group SATURATED flag, so pixels "
+                          "recovered by the ramp fit stay fittable (#418, #567).  "
+                          "Default off: the fit mask and the veto use every "
+                          "SATURATED pixel, as before.  Applies to the "
+                          "manual/cataloging path only; the legacy crowdsource "
+                          "step, the injection-recovery tests and the "
+                          "cross-exposure coverage mask keep the raw flag.  "
+                          "Recorded per frame as catalog header TLSATFIT.  The "
+                          "two arms write the same product names and "
+                          "--skip-if-done markers do not record the arm: run "
+                          "this arm in its own basepath."),
+                    )
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=MANUAL_DEFAULTS['manual_group_min_sep_fwhm'],
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
@@ -5341,6 +5366,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
+    parser.add_option('--manual-crossband-seed-min-frac', type=float,
+                      dest='manual_crossband_seed_min_frac', default=MANUAL_DEFAULTS['manual_crossband_seed_min_frac'],
+                      help=('Seed health (#981): the m7 cross-band seed is flagged as '
+                            'collapsed when any band has fewer than this fraction of '
+                            'its good m6 detections inside a kept cluster (bands '
+                            'mis-registered by more than the match radius).  '
+                            'Default %default.'),
+                      metavar='manual_crossband_seed_min_frac')
+    parser.add_option('--manual-crossband-seed-collapse-action', type='choice',
+                      choices=['warn', 'raise'],
+                      dest='manual_crossband_seed_collapse_action', default=MANUAL_DEFAULTS['manual_crossband_seed_collapse_action'],
+                      help=("What a collapsed m7 cross-band seed does: 'warn' prints "
+                            "a WARNING and continues; 'raise' stops the run "
+                            'before the m7 compute is spent.  Default %default.'),
+                      metavar='manual_crossband_seed_collapse_action')
     parser.add_option('--manual-m7-seed-own-band', dest='manual_m7_seed_own_band',
                       action='store_true',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band'],
