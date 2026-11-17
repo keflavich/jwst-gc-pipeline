@@ -198,6 +198,21 @@ The PSF model is STPSF by default.  The opt-in hybrid PSF (empirical core,
 STPSF wings; `jwst_gc_pipeline.photometry.epsf_hybrid`) is enabled with
 `git clone https://github.com/JWST-GC/epsfs && export PSF_EPSF_CORE_DIR=<checkout>`;
 its catalogs carry the `_hybpsf` filename token and `PSFMODEL`/`EPSFCORE`/`EPSFSHA`.
+The satstar fits use the same hybrid for NIRCam: `saturated_star_finding.get_psf`
+applies the core to the frame's grid (the large grid that `get_saturated_stars`
+loads for forced and MIRI sources stays STPSF), so a small saturated core
+(N_sat of about 40-100) is fit with the PSF the unsaturated stars see.  Every
+satstar catalog now carries `PSFMODEL` (`STPSF` by default); a hybrid run adds
+`EPSFSHA` (the sha256 of the core file), `EPSFCORE`, `EPSFR0`/`EPSFR1` and
+`EPSFDIR`, restricted to the frame's own detector.  The cache check
+(`load_or_make_satstar_catalog`) compares `EPSFSHA` with the core the run would
+use before the other checks, so **switching `PSF_EPSF_CORE_DIR` on, or editing a
+core file in place, refits the cached satstar catalogs of that filter once**
+(catalogs written before this carry no `EPSFSHA` and read as STPSF).  Filters
+and programs with no core keep their caches.  The cross-phase content key
+(`satstar_cache.satstar_content_key`) adds `psf_core=<sha>` only when a core
+applies, so every STPSF key is unchanged.  This is a consistency change; no
+photometric improvement has been measured for it (the o081 A/B is open, #1208).
 
 Post-fit, in order: **overshoot QC** (rendered model peak vs local data peak; if
 `model_peak > 1.2 × data_peak` the free-position fit walked off the star →
@@ -436,6 +451,7 @@ still run after m6.
 | `--m8-dedup-winner-emag-ratio` (`m8_dedup_winner_emag_ratio`, e.g. 0.8) | `None` | off | off | off | the primary row keeps its own band measurement unless the other member's emag is below ratio times the primary's |
 | `--m8-dedup-band-resolve-mas` (`m8_dedup_band_resolve_mas`, a number or `f212n=60,...`) | `None` | off | off | off | rows resolved in a band (independent detections further apart than this) are not merged |
 | `--no-m8-spike-flag` (`m8_spike_flag`; env `M8_SPIKE_FLAG=0`) | `True` | on | on | on |
+| env `M8_CMD_DEFAULT=0` (skips the `oksep_pass` / `cmd_default` columns on m7 (with its `_qualcuts*` subsets), m8 and m8_dedup, and in `m8_merge_partials.py`; only the exact value `0` skips; #1283) | unset | columns written | | |
 | `--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only` | off | monolith | | |
 | `--manual-start-phase` / `--manual-stop-after-phase` | `''` | full run | | |
 | `--parallel-workers` / `--parallel-chunk-size` | 1 / 100 | every submitter sets workers to the task's CPU allocation | | |
@@ -548,6 +564,14 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
   same columns, `--no-spike-flag` there).  `spike_wedge` is close to random
   placement in the brick broad-band catalog and in arches (see the
   `flag_spike_artifacts` docstring), so use it as a soft flag in those fields.
+  m7 (with its `_qualcuts*` subsets), m8 and m8_dedup also carry the boolean
+  columns `oksep_pass` (more than one non-wide band with `sep_<band>` below
+  0.1") and `cmd_default` (`oksep_pass` AND `n_filt_independent >= 2`), with the
+  test named in the `CMDDEF` header card (`photometry/cmd_default.py`; #1283).
+  Tables already on disk get them from `scripts/reduction/add_cmd_default_flag.py`.
+  With `--no-m8-dedup`, or when the dedup fails, the raw m8 table is left
+  without the columns (the flag step runs inside the dedup step); run the
+  backfill script on it.
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed).

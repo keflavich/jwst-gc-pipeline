@@ -3959,7 +3959,7 @@ def _check_bg_frame_suffix(bg_header, frame_suffix, label=''):
                        f"subtract it anyway.")
 
 
-def _satstar_recovery_signature(options):
+def _satstar_recovery_signature(options, filename=None):
     """A compact string identifying every option that changes the per-exposure
     satstar FIT.  It is stamped into the per-exposure satstar catalog (meta key
     ``SATRECOV``) and checked when that cache is reused, so toggling one of
@@ -3991,10 +3991,18 @@ def _satstar_recovery_signature(options):
     filter of brick alone stay valid for every run that does not ask for the
     deblend.  The token carries a version: ``_dbl2`` since the deblender
     resolves stars in large blended components (#1081), so deblended catalogs
-    seeded by the earlier deblender (``_dbl1``) are refit."""
+    seeded by the earlier deblender (``_dbl1``) are refit.
+
+    With ``filename`` given, the deblend token is written only for a frame that
+    has a sibling ``_ramp.fits``: ``get_saturated_stars`` deblends from the
+    ZEROFRAME and fits a frame without one with the legacy seeding, so such a
+    frame carries the same stamp whether or not the option is set (#1196)."""
     zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
     ramp = bool(getattr(options, 'satstar_ramp_recover', False))
     deblend = bool(getattr(options, 'deblend_satstars', False))
+    if deblend and filename is not None:
+        from jwst_gc_pipeline.reduction.saturated_star_finding import _find_ramp_for
+        deblend = _find_ramp_for(filename) is not None
     if not zf and not ramp:
         base = "off"
     else:
@@ -4744,7 +4752,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # forces a rebuild.  (Diagnosed on brick 2026-07: a full recovery re-run
         # left the m8 satstar mags byte-identical because the 07-25 caches were
         # reused.)
-        recovery_signature=_satstar_recovery_signature(options))
+        recovery_signature=_satstar_recovery_signature(options, filename))
     satstar_rejected_path = filename.replace(
         '.fits', f'{satstar_file_suffix}_satstar_rejected.fits')
     # Satstar implied-peak-gate hand-off (#925), NIRCam, all targets: the gate
@@ -8356,6 +8364,43 @@ def _resolve_crossband_ref_filter(options, filternames):
     return pick
 
 
+def _maybe_annotate_cmd_default(paths, label='m8'):
+    """Add ``oksep_pass`` / ``cmd_default`` to each existing table in ``paths`` (#1283).
+
+    Skipped when ``M8_CMD_DEFAULT=0`` is set.  A failure on one table is
+    logged and the others still run; the rewrite is atomic, so a table is
+    either annotated or left as it was.  Returns the paths that were annotated.
+    """
+    if os.environ.get('M8_CMD_DEFAULT', '1') == '0':
+        return []
+    from astropy.io.registry import IORegistryError
+    from jwst_gc_pipeline.photometry.cmd_default import annotate_cmd_default
+    done = []
+    for _p in paths:
+        if not (_p and os.path.exists(_p)):
+            continue
+        try:
+            annotate_cmd_default(_p)
+        except (OSError, KeyError, ValueError, IndexError, TypeError,
+                IORegistryError) as _cex:
+            print(f"manual [{label}]: cmd_default flag FAILED ({_p}): {_cex}",
+                  flush=True)
+            continue
+        done.append(_p)
+    return done
+
+
+def _annotate_cmd_default_m7(xb_path, label='m7'):
+    """``_maybe_annotate_cmd_default`` on a cross-band table and its ``_qualcuts*`` subsets.
+
+    Every subset the merge wrote is matched by glob, so the field's oksep
+    suffix (whatever proposal number it carries) needs no spelling here.
+    """
+    return _maybe_annotate_cmd_default(
+        [xb_path] + sorted(glob.glob(f"{xb_path[:-len('.fits')]}_qualcuts*.fits")),
+        label)
+
+
 def _maybe_flag_m8_spikes(dedup_path, m8_path, options, label='m8'):
     """Add the diffraction-spike flag columns to an m8_dedup file (#1035).
 
@@ -8424,6 +8469,10 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
             # Catalog-level diffraction-spike flag (#1035): adds flag columns
             # to the dedup file, never removes rows.  Best-effort.
             _maybe_flag_m8_spikes(out, m8_path, options, label)
+            # Default CMD selection as columns on the full tables (#1283),
+            # computed on the finished dedup table and the raw m8.
+            _stage = 'cmd_default flag'
+            _maybe_annotate_cmd_default([m8_path, out], label)
         finally:
             # Runs whether or not the flag step raised, so a flag failure
             # cannot skip the brick anti-clobber copy.  The stage label is
@@ -12661,6 +12710,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             except (OSError, ValueError, KeyError) as _pex:
                 print(f"manual [{last_phase}]: copying the independent-detection "
                       f"flags onto the _qualcuts subsets failed ({_pex})", flush=True)
+            # Default CMD selection (#1283): oksep_pass / cmd_default on the
+            # merged table and its subsets, after n_filt_independent exists.
+            _annotate_cmd_default_m7(_xb, last_phase)
             # Last step of the post-annotation block (after any column added
             # to the FITS): the ECSV twin carries the FITS table's columns.  It
             # is written even when annotation failed, without the flags.

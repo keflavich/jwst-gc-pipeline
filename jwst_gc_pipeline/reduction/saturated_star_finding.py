@@ -28,6 +28,8 @@ from jwst_gc_pipeline.photometry.wingcal import (
     WING_MULT_TABLE, wing_multiplier_ratio)
 from jwst_gc_pipeline.photometry.psf_fitting import annulus_scatter_sigma
 from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
+from jwst_gc_pipeline.photometry.epsf_hybrid import (
+    maybe_apply_epsf_core, psf_provenance_meta, stpsf_detector_name)
 from photutils.psf import GriddedPSFModel
 
 
@@ -155,6 +157,14 @@ def _satstar_psf_fov_pixels(header):
     the grid)."""
     detector = header.get('DETECTOR', '').upper()
     return 1024 if detector in ('NRCALONG', 'NRCBLONG', 'NRCA5', 'NRCB5') else 512
+
+
+def _psf_provenance_detector(header):
+    """The stpsf detector whose core ``get_psf`` applied for this frame; None
+    for the merged module, where it is read from the grid's own metadata."""
+    if header.get('MODULE') == 'merged':
+        return None
+    return stpsf_detector_name(header['DETECTOR'])
 
 
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
@@ -310,6 +320,23 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
             # that is some sort of average of the PSF model grid.
             # There's no way to do it _right_ right without going back to the original data,
             # which is untenable with this approach.  It's a huge project.
+
+    # Opt-in hybrid PSF (PSF_EPSF_CORE_DIR; photometry/epsf_hybrid.py, #1208):
+    # the unsaturated fits in get_psf_model use the ePSF core inside 10 px, so
+    # the satstar fits must too, or a step appears at the saturation boundary
+    # for the small cores whose usable pixels start inside ~12 px.  The same
+    # grid object comes back when the variable is unset or has no core for this
+    # detector/filter.  The detector is passed explicitly (None only for the
+    # merged module, whose grid may be one of a per-detector list): with None
+    # and no ``detector`` in the grid metadata the core is skipped with a
+    # warning, which would reproduce the bug silently.  The large grid that
+    # get_saturated_stars loads for forced and MIRI sources stays STPSF: MIRI
+    # has no core, and a NIRCam forced source's core lies off the frame, where
+    # the hybrid equals STPSF beyond 12 px.
+    if instrument.upper() == 'NIRCAM':
+        big_grid = maybe_apply_epsf_core(
+            big_grid, None if module == 'merged' else stpsf_detector_name(detector),
+            filtername, program=header.get('PROGRAM'))
 
     return big_grid
 
@@ -2570,6 +2597,33 @@ def stamp_zeroframe_provenance(target, prov):
     return target
 
 
+def stamp_deblend_stats(target, stats):
+    """Write the ZEROFRAME deblend counts onto a header or table meta (#1196).
+
+    ``DBLNCMP`` counts the components the deblender ran on, ``DBLNSPL`` those
+    it split into more than one star (after the PSF veto), ``DBLFAIL`` those
+    whose deblend raised and kept their centroid and ``DBLNVET`` the residual
+    peaks the PSF veto rejected (0 when ``SATSTAR_DEBLEND_PSF_MARGIN`` is off).
+    Nothing is written when ``stats`` is None, so a frame fitted without the
+    deblend carries none of them.  A ``fits.Header`` target gets
+    ``(value, comment)`` cards; a plain dict (a table's ``meta``) gets the
+    bare integers, which is what a read of the written file returns.
+    """
+    if stats is None:
+        return target
+    cards = (('DBLNCMP', int(stats.get('n_components', 0)),
+              'components the ZEROFRAME deblend ran on'),
+             ('DBLNSPL', int(stats.get('n_split', 0)),
+              'components split into >1 star'),
+             ('DBLFAIL', int(stats.get('n_failed', 0)),
+              'components whose deblend raised'),
+             ('DBLNVET', int(stats.get('n_vetoed', 0)),
+              'secondary peaks the PSF veto rejected'))
+    for key, value, comment in cards:
+        target[key] = (value, comment) if isinstance(target, fits.Header) else value
+    return target
+
+
 def zeroframe_row_provenance(prov, rim, sources, src_label, comp_slice=None):
     """Per-source ZEROFRAME columns ``(zf_fit, zf_rim_in_core, zf_nrim_src)``.
 
@@ -4146,6 +4200,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # this block is skipped and the behaviour is identical to before (one seed per
     # component at its refined centroid).
     _deblend_big_grid = None
+    _dbl_stats = None
     if zeroframe is not None and zeroframe_deblend:
         from .satstar_deblend import build_deblended_source_records
         _inst_repl = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
@@ -6477,6 +6532,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # pixels, the stamp values keep their own *_cutout columns, and id is
         # a running index (#949).
         base_tab = finalize_satstar_columns(base_tab)
+        stamp_deblend_stats(base_tab.meta, _dbl_stats)
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
@@ -7255,6 +7311,12 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         _zf_prov = getattr(builtins, 'satstar_zf_provenance', None)
         stamp_zeroframe_provenance(header, _zf_prov)
         satstar_table.meta.update(header)
+        # Which PSF the fit used (PSFMODEL / EPSFSHA / ...), so a hybrid-run
+        # catalog is not mistaken for an STPSF one (#1208).  After the fit, so
+        # get_psf has populated the record; restricted to this frame's
+        # detector, as the process may have applied others.
+        satstar_table.meta.update(psf_provenance_meta(
+            get_filtername(header), detector=_psf_provenance_detector(header)))
         # Stamp the saturated-core recovery config so load_or_make_satstar_catalog
         # can tell whether a cached catalog matches this run's recovery settings
         # (see _satstar_recovery_signature); without it a recovery toggle silently

@@ -531,7 +531,17 @@ flux, trading depth for a brighter saturation ceiling:
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
   ~N_group higher) resolves the individual cores → one seed per star. Auto-
-  degrades to legacy when a frame has no sibling `_ramp.fits`. The plain peak
+  degrades to legacy when a frame has no sibling `_ramp.fits`, and the cache
+  stamp (`SATRECOV`) then omits the `_dbl2` token for that frame; the
+  `SATFITSW` stamp likewise omits its `dv<margin>` token for such a frame. A
+  missing scikit-image raises `ImportError` (from `build_deblended_source_records`
+  and from a direct `deblend_blob_zeroframe` call), which stops the frame's
+  photometry task, and only for a `--deblend-satstars` run on a frame that has
+  a ramp. The satstar catalogue meta carries `DBLNCMP` (components deblended),
+  `DBLNSPL` (split into more than one star, after the PSF veto), `DBLFAIL`
+  (deblend raised, centroid kept) and `DBLNVET` (residual peaks the PSF veto
+  rejected; 0 when `SATSTAR_DEBLEND_PSF_MARGIN` is off) for a frame the deblend
+  ran on.
   search also reads a PSF ring or spike bead of one bright star as a companion
   when a catalogue source sits on it; the opt-in `SATSTAR_DEBLEND_PSF_MARGIN`
   (default 0 = off) fits the accepted stars with PSF stamps and keeps only the
@@ -791,6 +801,19 @@ A cap-on run (`NIRCAM_SATSTAR_RECOVERED_CAP=1`, read as an integer like the
 fitter reads it) adds `cs<NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC>` to the key, so
 catalogs fitted before the cap read only the seed's share of a blended
 component are refit once.
+
+The PSF is a cache key too.  With `PSF_EPSF_CORE_DIR` set, NIRCam satstar fits
+use the hybrid PSF (ePSF core inside 10 px, STPSF outside 12 px; see
+`PHOTOMETRY_PIPELINE.md`), and every satstar catalog records `PSFMODEL`
+(`STPSF`, or `STPSF+EPSFCORE` for a hybrid fit) and, for a hybrid fit, `EPSFSHA` (sha256 of the core file).
+`load_or_make_satstar_catalog` compares `EPSFSHA` with the core the run would use
+before it looks at `SATRECOV`/`SATFITSW` (including when `recovery_signature` is
+`None`), so enabling the variable, or editing a core in place, refits the
+affected filter's catalogs once, and an STPSF run does not adopt a hybrid
+catalog.  The extended (`force_union`) catalogs go through the same check; the
+script that writes them (`force_union`) is not in this repo, so whether it copies
+`EPSFSHA` is unchecked, and one that does not would be refit on every hybrid call.  The
+cross-phase content key carries `psf_core=<sha>` only when a core applies.
 
 ---
 

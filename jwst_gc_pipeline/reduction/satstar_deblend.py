@@ -23,8 +23,21 @@ from scipy.spatial import cKDTree
 try:
     from skimage.feature import peak_local_max
     _HAVE_SKIMAGE = True
-except Exception:
+except ImportError:
     _HAVE_SKIMAGE = False
+
+
+def _require_skimage():
+    """Raise ``ImportError`` when scikit-image is missing (#1196).
+
+    The secondary peak search needs ``peak_local_max``; without it a blob would
+    come back as its core centres only, which reads as "no blends".
+    """
+    if not _HAVE_SKIMAGE:
+        raise ImportError(
+            "the ZEROFRAME satstar deblend needs scikit-image "
+            "(skimage.feature.peak_local_max); install it or run without "
+            "--deblend-satstars")
 
 
 def robust_zf_ceiling(zeroframe, phys_max=1e6):
@@ -304,7 +317,11 @@ def deblend_blob_zeroframe(zeroframe, data, sources, label_id, sl, fwhm_pix,
     psf_margin : float
         Fraction of the model at a residual peak that the peak must exceed; 0
         or less also keeps the plain peak search.
+
+    Raises ``ImportError`` when scikit-image is missing (see
+    ``_require_skimage``).
     """
+    _require_skimage()
     area = int((sources[sl] == label_id).sum())
     r_sat = max(1.0, np.sqrt(area / np.pi))
     y0 = max(0, sl[0].start - pad); y1 = min(data.shape[0], sl[0].stop + pad)
@@ -585,12 +602,18 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
     Parameters mirror ``deblend_blob_zeroframe``.  ``zeroframe`` is the ZEROFRAME
     (frame zero) array from the matching ``_ramp.fits`` (raw DN).
 
-    ``stats``, when a dict, is filled with ``n_failed`` (components whose
-    deblend raised and kept the refined centroid, with the first error in
-    ``first_error``) and ``psf_veto`` (components per PSF-veto status) and ``n_vetoed`` (residual
-    peaks above the noise threshold that the PSF margin rejected, summed over
-    the components).
+    ``stats``, when a dict, is filled with ``n_components`` (components the
+    deblender was run on), ``n_split`` (of those, the ones that returned more
+    than one star), ``n_failed`` (components whose deblend raised and kept the
+    refined centroid, with the first error in ``first_error``), ``psf_veto``
+    (components per PSF-veto status) and ``n_vetoed`` (residual peaks above the
+    noise threshold that the PSF margin rejected, summed over the components).
+
+    Raises ``ImportError`` when scikit-image is missing: the secondary peak
+    search needs it, and without it every component would come back as its
+    core centres only, which reads as "no blends" in the catalogue.
     """
+    _require_skimage()
     slices = ndimage.find_objects(sources)
     ceiling = robust_zf_ceiling(zeroframe)
     records = []
@@ -603,6 +626,8 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
             records.append({'com': com, 'label': label_id, 'forced': False,
                             'sat_area': area})
             continue
+        if stats is not None:
+            stats['n_components'] = stats.get('n_components', 0) + 1
         try:
             centers, info = deblend_blob_zeroframe(
                 zeroframe, data, sources, label_id, sl, fwhm_pix,
@@ -627,6 +652,8 @@ def build_deblended_source_records(saturated, sources, coms, sizes_by_label,
             keys = [0.0]
         else:
             keys = info['order_key']
+            if stats is not None and len(centers) > 1:
+                stats['n_split'] = stats.get('n_split', 0) + 1
         for c, key in zip(centers, keys):
             records.append({'com': (float(c[0]), float(c[1])), 'label': label_id,
                             'forced': False, 'sat_area': area,
