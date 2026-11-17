@@ -281,3 +281,17 @@ def test_production_call_sites_pass_the_phase(module, func, keyword, value):
     calls = _keyword_calls(module, func)
     assert calls, f'no call to {func}'
     assert [c.get(keyword) for c in calls] == [value] * len(calls)
+
+
+def test_cofit_runs_call_sites_pass_phase_and_frame_variants():
+    """``SATSTAR_INFIELD_DEDUP=cofit_residual`` reads ``_satstar_cofit_runs``
+    directly, and ``_satstar_cofit_positions`` forwards to it, so both calls
+    carry the merge's phase and frame variant (#983, #1194)."""
+    calls = sorted(((c.get('phase'), c.get('frame_variants'))
+                    for c in _keyword_calls(C, '_satstar_cofit_runs')),
+                   key=str)
+    assert calls == sorted([
+        ('merge_label',
+         "_frame_variants_of_paths(frame_cache.get((module, filt), []))"),
+        ('phase', 'frame_variants'),
+    ], key=str)
