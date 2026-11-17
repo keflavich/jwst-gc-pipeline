@@ -69,6 +69,7 @@ def _write_frames(basepath, nrows_per_frame):
     for i, n in enumerate(nrows_per_frame, start=1):
         t = _skeleton(n)
         t.meta['FILENAME'] = f'/x/frame{i}_crf.fits'
+        t.meta['pixscale'] = 0.11   # the per-frame writer stamps it (#1238)
         t.write(d / f'f770w_mirimage_o003_visit001_vgroup02103_exp{i:05d}'
                     f'_m2_daophot_basic.fits')
 
