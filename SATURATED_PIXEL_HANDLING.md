@@ -158,7 +158,7 @@ gates on data *severity*:
 | satstar **seeding** | starts from the full any-group `SATURATED` mask (≥3-px clusters, `JUMP_DET` disambiguated, per-filter wing data floor), then a severity gate **removes** components and three blocks **add** seeds — see below | `find_saturated_stars` |
 | satstar **fit** | the current source's saturated component **dilated** by the adaptive mask buffer, plus other sources' saturated pixels — for a **forced / off-FOV** source the *whole* saturated mask is dilated as one mask for all sources, and wing self-cal is skipped. With a ZEROFRAME anchor `zf_deep_core` is substituted for `saturated` and goes through the same dilation. The mask also carries `cutout == 0` and `isnan(cutout)`, and `data` is zeroed where `VAR_POISSON` is NaN — which is *why* truly-lost pixels are excluded in practice. | `get_saturated_stars` |
 | daophot fit mask | any-group `SATURATED` (the `_bad_dq_bitmask` OR re-adds every `SATURATED` pixel, so the per-filter `SAT_SEVERITY_FLOOR` narrows only the pixels set to NaN in the detection image, not the fit mask). With `--truly-lost-saturation-in-fit` (default off, #567): `SATURATED & DO_NOT_USE` only, taken before the floor, plus the non-`SATURATED` bad flags | `_prepare_frame_for_photometry` (`cataloging.py`) |
-| `_filter_near_saturation` veto | the **raw** any-group `SATURATED` bit from `ctx.dqarr`, recomputed inside the veto; drops fits within `near_sat_dist_pix` (1.0 px on NIRCam). **This veto uses the unnarrowed bit.** With `--truly-lost-saturation-in-fit` the manual path hands the veto a copy of the DQ with `SATURATED` cleared outside the truly-lost set (`ctx.dq_for_satveto`); `ctx.dqarr` stays raw | `crowdsource_catalogs_long.py` |
+| `_filter_near_saturation` veto | the **raw** any-group `SATURATED` bit from `ctx.dqarr`, recomputed inside the veto; drops fits within `near_sat_dist_pix` (1.0 px on NIRCam). **This veto uses the unnarrowed bit.** With `--truly-lost-saturation-in-fit` the manual path hands the veto a copy of the DQ with `SATURATED` cleared outside the truly-lost set (`ctx.dq_for_satveto`); `ctx.dqarr` stays raw. Opt-in `SATPROX_SEEDED_COMPANION` (default off) exempts a fit at a seed-catalog position when every SATURATED pixel that close is one the hand-off restored to the fit and the fit has finite `flux_fit > 0` and `qfit` (`crowdsource_catalogs_long.py::_seeded_companion_mask`) | `crowdsource_catalogs_long.py` |
 
 `_unrecoverable = isnan(VAR_POISSON)` feeds the per-pixel flag image (bit 1 =
 saturated-but-recovered, bit 2 = unrecoverable), centroid refinement, and the
@@ -274,6 +274,83 @@ to `DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
 (truly-lost pixels only in the fit mask, and in the DQ the veto reads) so the B arm
 of the #418 comparison can be produced; it is not a default and is not evidence that
 the restriction is safe.
+
+---
+
+## 2c. Single-group (G1-only) pixels — `G1ONLY_SAT_DQ` (NIRCam)
+
+A pixel whose ramp has exactly one usable group (group 1 good, every later
+group SATURATED) gets its rate from group 1 alone, and the crf DQ stays clean
+there (SATURATED reaches the rate DQ only when all groups saturate). Group 1
+is the mean of NFRAMES frames, so its effective exposure time is
+`t1 = (NFRAMES+1)·TFRAME/2`, not TGROUP. Which time the ramp fit used depends
+on the stcal code that ran Detector1:
+
+| Detector1 | ramp | single-group rate | m (below) |
+|---|---|---|---|
+| jwst 1.14.1 (stcal 1.7.3, python OLS), NGROUPS=2 | `fit_2_group`: group 1 / group_time | G1/TGROUP (0.75x for BRIGHT2) | 1 |
+| jwst 1.14.1 (stcal 1.7.3), NGROUPS>2 | `fit_single_read`: group 1 / one_groups_time | G1/t1 (correct) | r |
+| jwst 1.21 (stcal 1.18, C fitter), any NGROUPS | `is_0th` (0th group the only good one, its GROUPDQ 0) → one_group_time | G1/t1 (correct) | r |
+
+(Code read from the installed stcal 1.7.3 and 1.18.0. jwst 1.12.1, used for
+cloudc 2221, was not read; its NGROUPS=2 frame measures m = 0.99, the biased
+value. The table describes code paths; the gate below measures each frame.)
+
+`r = TGROUP / t1` is 1.333 for BRIGHT2 and 3.333 for SHALLOW2.
+
+Measured m (median; 5-95%) on one frame each:
+
+| frame | readout | Detector1 | m | 5-95% | n px | gate |
+|---|---|---|---|---|---|---|
+| brick 2221 o001 F182M nrcb4 | BRIGHT2, NG=2 | 1.14.1 | 1.000 | 0.972-1.037 | 1538 | flag |
+| brick 2221 o001 F410M nrcblong | BRIGHT2, NG=2 | 1.14.1 | 0.998 | 0.963-1.060 | 22724 | flag |
+| cloudc 2221 o002 F182M nrcb1 | BRIGHT2, NG=2 | 1.12.1 | 0.991 | 0.960-1.063 | 2589 | flag |
+| gc-treasury 10678 o105 F480M nrcblong | BRIGHT2, NG=4 | 1.21 | 1.344 | 1.291-1.447 | 35242 | skip |
+| gc-treasury 10678 o078 F480M nrcblong | BRIGHT2, NG=4 | 1.21 | 1.357 | 1.271-1.448 | 44530 | skip |
+| gc-treasury 10678 o105 F212N nrcb4 | BRIGHT2, NG=4 | 1.21 | 1.325 | 1.281-1.383 | 1670 | skip |
+| gc-treasury 10678 o105 F212N nrcb1 | BRIGHT2, NG=4 | 1.21 | 1.325 | 1.288-1.432 | 1476 | skip |
+| brick 1182 o004 F200W nrcb1 | SHALLOW2, NG=7 | 1.14.1 | 3.287 | 3.189-3.533 | 31811 | skip |
+| sgrb2 5365 o001 F182M nrcb1 | SHALLOW2, NG=3 | 1.18.0 | 3.317 | 3.212-3.573 | 5875 | skip |
+
+`reduction/g1only_dq.py` reads GROUPDQ from the sibling `_ramp.fits` and, on
+frames that need it, ORs `SATURATED | DO_NOT_USE` into the frame DQ at the
+single-group pixels and sets SCI/ERR/VAR_* to NaN there. The satstar finder
+then seeds them, daophot masks them (`truly_lost_saturated_mask`), and the
+satstar first-read recovery rebuilds the core from group 0. It is applied in
+`write_perexposure_crf` (persisted in the crf) and in memory by cataloging's
+`load_data` and satstar's `remove_saturated_stars`; the satstar fit-switch
+key and cache content key carry `'g1'` for flagged frames only.
+
+**The gate.** `G1ONLY_SAT_DQ=auto` (default; also when unset) decides per
+frame. It fits `SCI = C·(G2−G1)/TGROUP + B` on clean pixels (GROUPDQ 0 in all
+groups, crf DQ clean) through two robust points (median of the faint half,
+median of pixels with G2−G1 ≥ 200 DN in the top 10%), then takes the median of
+`m = (SCI − B) / ((G1/TGROUP)·C)` over single-group pixels with G1 ≥ 200 DN.
+m < (1+r)/2 → flag; otherwise skip. B absorbs destreak / background offsets:
+subtracting the median sky, a sky-scaled gradient, or adding 5× sky moves m
+by ≤ 0.03 on every frame above.
+
+Fallbacks: fewer than 20 measurable pixels, fewer than 100 bright reference
+pixels, no ramp SCI, no NFRAMES/TFRAME, or a non-finite m → **flag** (the pre-gate behaviour;
+such frames have few single-group pixels). r < 1.05 (NFRAMES=1, where
+G1/TGROUP is correct under either timing) → skip. A crf header that already
+carries `G1ONLYDC` reuses that decision (a flagged crf has NaN where m is
+measured); `G1ONLYDQ > 0` without `G1ONLYDC` (flagged before the gate) →
+flag. An m farther than (r−1)/4 from both 1 and r prints a WARNING
+(`G1OnlyAmbiguousWarning`) and still decides at the midpoint.
+
+Header keys: `G1ONLYDQ` (px flagged; 0 on skip), `G1ONLYDC` (flag/skip),
+`G1ONLYWY` (source: reason), `G1ONLYM` (median m), `G1ONLYN` (px used),
+`G1ONLYR` (r). One log line per application, e.g.
+`G1-only DQ (load_data): <file>: skip 36567 single-group px: m=1.344
+(n=35242, 5-95% 1.291-1.447) r=1.333 [measured: m>=1.167: unbiased]`.
+
+Effect of the choice on gc-treasury F480M (m7, one full frame, e4 nrcblong):
+flagging the unbiased o105 / o078 frames (`G1ONLY_SAT_DQ=1`) gives 52865 /
+49601 rows against 53004 / 49732 unflagged, with about 97 / 103 bright
+(F ≥ 1e4) stars per frame left without a row. `auto` skips both frames and
+returns 53004 / 49732 rows, identical in every column to the unflagged run
+(F212N o105 nrcb4: 46271 unflagged, 46237 flagged, 46271 auto).
 
 ---
 
@@ -542,7 +619,8 @@ these flag sets would remove the footgun of setting them individually.)*
   `_infield_dedup_settings`: NIRCam reads `SATSTAR_INFIELD_DEDUP` — `cofit`
   (default; collapse only rows that no per-exposure satstar run fit side by side,
   `_never_cofit_duplicates`; every collapsed set has all its pairs within 1.0″
-  and never co-fit), `none` (keep all), or `legacy` (1.0″
+  and never co-fit), `cofit_residual` (opt-in, below), `none` (keep all), or
+  `legacy` (1.0″
   friends-of-friends over every row, which deleted distinct stars, #972). MIRI and
   NIRISS read `SATSTAR_INFIELD_DEDUP_MIRI` / `SATSTAR_INFIELD_DEDUP_NIRISS`
   (default `legacy`; the co-fit rule is unvalidated there). The instrument is
@@ -550,6 +628,30 @@ these flag sets would remove the footgun of setting them individually.)*
   NIRISS, else the module token / `GC_INSTRUMENT_OVERRIDE` / filter name.
   `run_manual_pipeline` rejects a bad value of any of the three variables at
   entry. The extended-emission targets always collapse off-FOV rows only.
+- **`SATSTAR_INFIELD_DEDUP=cofit_residual`** (opt-in): the satstar finder fits
+  one star per saturated DQ component, so two stars that share a component in
+  every frame are never fit side by side and `cofit` collapses them
+  (gc-treasury 10678 m7 o078 + o043: about 21 of the 32 collapsed F480M rows
+  are such stars, at 0.2–1.0″). In this mode a never-co-fit pair is
+  kept as two stars when, in the accepted runs that fit only the better-ranked
+  member (by support, then flux), the frame's `*_satstar_residual.fits` at the
+  other member holds ≥ `SATSTAR_INFIELD_RESID_RATIO_MIN` (default 0.5) of its
+  peak above the local background **and**, summed within 3 px,
+  ≥ `SATSTAR_INFIELD_RESID_FLUX_MIN` (default 0.25) of its fitted flux, both in
+  the same run (`_satstar_residual_distinct_pairs`). The member must sit
+  ≥ 20 px inside the frame. Pairs without such a measurement keep the `cofit`
+  answer, and a missing, unreadable, truncated or wrongly shaped residual/frame
+  is logged and falls back to `cofit` for the pairs it would have measured. A
+  row whose every fit lies within 10 px of the science area, i.e. within 14 px
+  of the array edge (4 reference pixels + 10), is ranked last when a collapsed
+  set picks its survivor (`_satstar_edge_only_rows`), so an edge-truncated fit no
+  longer outranks the interior fit of the same star. On those two observations
+  the mode restores 21 F480M and 41 F212N rows and swaps the survivor in 1 / 9
+  edge-truncated sets. The peak test alone would keep 103 F212N rows, 62 with
+  < 0.1 of their flux left (rows whose every fit is at an edge, where the
+  neighbour's model is negligible). The 0.25 flux threshold was tuned on those
+  two observations only (kept rows ≥ 0.29, rejected ≤ 0.067) and is untested
+  on other fields or filters.
 - **Products**: `*_satstar_{catalog,model,residual,flags}.fits`. The flags image
   is a uint8 bitmask — bit 1 partly saturated (recoverable), bit 2 totally
   saturated (NaN-variance core), bit 4 included in an accepted satstar fit.
@@ -648,6 +750,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_MIN_LOST_CORE` | 5 | min truly-lost core size (px) |
 | `SATSTAR_SUBFLOOR_SEED_FRAC` | 0.35 | sub-floor seeding fraction |
 | `SATSTAR_SEED_REQUIRE_SAT_DQ_FILTERS` | unset (off) | bandpasses (comma/space-separated, e.g. `F212N`) whose peak-based and sub-floor seeds must hold a DQ-SATURATED pixel; others are unaffected, a non-bandpass name raises, listed bands carry `sd` in the satstar cache key (#991) |
+| `SATSTAR_WING_MULT_FILTERS` | unset (off) | bandpasses (comma/space-separated; only `F150W` has a table entry in `photometry/wingcal.py::WING_MULT_TABLE`, any other name raises) whose satstar catalog `flux_fit`/`flux_err` are divided by a ratio that ramps from 1 at `wingcal_rmask` 3.5 px to 10^(0.4·0.275) ≈ 1.29 at 5 px; the ratio is recorded in `wingmult_ratio` (listed bands only), the model, residual, `flux_fit_raw` and `wingcal_ratio` are unchanged, and listed bands carry `wm` in the satstar `SATFITSW` cache key (#1036). `satstar_content_key` hashes every `SATSTAR*` variable, so setting this one also changes the content key of unlisted bands (it feeds only the opt-in cross-phase reuse). The ratio is kept out of `wingcal_ratio`, so `apply_pooled_wingcal` still divides rows with `wingcal_ratio == 1.0` by the pooled C(r) on top of it; whether the 0.275 mag amplitude was measured before or after wing self-cal/pooled calibration is not established. Fitted on wd2 F150W against narrowband predictions; see the issue for the open evidence questions |
 | `SATSTAR_COMPONENT_OVERLAP_FRAC` / `…_MIN_PX` | (see code) / 250 | merge overlapping saturated components |
 | `SATSTAR_WINGCAL` | 1 | wing self-calibration (`apply_wing_selfcal`) |
 | `SATSTAR_WINGCAL_MAX_SE` | 0.05 | largest standard error (1.2533 madstd/√n) of a C(r) bucket that wing self-calibration applies, per-frame and pooled; ≤ 0 disables the gate. madstd is floored at the fractional scatter of the smallest r_mask bucket (≥ 5 stars) times the bucket ratio, and C(r) is anchored at C(0) = 1 (#1041) |
@@ -665,9 +768,11 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_SEED_CORE_DQ` | 1 (**on**) | leave NaN-variance pixels carrying OUTLIER, DEAD, HOT, WARM, LOW_QE, RC, TELEGRAPH, NO_LIN_CORR, NO_SAT_CHECK, NO_GAIN_VALUE, NO_FLAT_FIELD, UNRELIABLE_BIAS, OTHER_BAD_PIXEL or REFERENCE_PIXEL out of the core that `_refine_coms_by_data` centres a seed on (`seed_saturation_core`), then the pieces of fewer than 3 px that remain (a HOT clump on a gc-treasury F480M star's peak otherwise left a 2-px edge pair to win, #1101); 0 restores the seed that an OUTLIER pair or a WARM/HOT clump on a star's edge moved 2.4–3.6 px off wd2 stars (#1098) |
 | `SATSTAR_DEBLEND_PSF_MARGIN` | 0 (**off**) | with `--deblend-satstars`, a secondary peak of the ZEROFRAME residual must exceed this fraction of the PSF model of the accepted stars at its position (`satstar_deblend._psf_veto_peaks`, #1195); needs a gridded in-FOV PSF, falls back to the plain peak search above 5000 saturated px, under 30 fit px, above 40 model stars, when the fit fails or the stamp is degenerate (NaN, zero, negative); keys the cache as `dv<margin>` only for frames whose deblend runs (sibling `_ramp.fits`); can split more than the plain search where a saturated core is clipped by the image edge or two cores merge; set `OMP_NUM_THREADS=1` |
 | `SATSTAR_QFIT_LOCAL_GATE` / `…_R` / `…_MAX` | 0 / 0 (10 when the gate is on) / 5.0 (the box qfit cap; 1.0 before #1058) | qfit over r < R px as a `qfit_local` column; with the gate on, NIRCam in-FOV fits of components carrying SATURATED DQ in the frame's own DQ are judged on it (whatever their `seed_kind`: a severity-dropped SAT component re-seeded as `subfloor` counts), and components with no SATURATED pixel keep the box qfit, which on sgra F405N kept thousands of unsaturated stars out of the satstar channel |
-| `SATSTAR_OPTIN_FILTERS` | (unset: every bandpass) | bandpasses (`F480M` or `F480M,F405N`) that keep the opt-in fit switches `SATSTAR_ZF_KEEP_FINITE`, `SATSTAR_OBS_PK_FROM_CRF`, `SATSTAR_QFIT_LOCAL_GATE` and `SATSTAR_QFIT_LOCAL_R`; for any other bandpass those four are unset for the whole per-frame fit (`satstar_optin_scoped` on `load_or_make_satstar_catalog`), so the frame fits and keys its cache (`SATFITSW`) as if they were never exported.  A chain takes one environment, so gc-treasury sets the switches once with `SATSTAR_OPTIN_FILTERS=F480M`; a malformed name raises |
+| `SATSTAR_DEBLEND_ORDER` | 0 | with the ZEROFRAME deblend, fit the seeds of one component largest ZF-saturated core first, then the unsaturated peaks in detection order.  The deblended seeds of a component all carry its `sat_area`, so the `-sat_area` sort leaves their order at the raster order of the cores; this adds the core radius (`order_key`) as a second sort key.  `sat_area` is unchanged.  The satstar cache key gains `do` on deblended frames.  Not yet measured on wd2: whether any over-bright row has a larger-core neighbour fitted after it is the census of #1094 |
+| `SATSTAR_OPTIN_FILTERS` | (unset: every bandpass) | bandpasses (`F480M` or `F480M,F405N`) that keep the opt-in fit switches `SATSTAR_ZF_KEEP_FINITE`, `SATSTAR_OBS_PK_FROM_CRF`, `SATSTAR_QFIT_LOCAL_GATE`, `SATSTAR_QFIT_LOCAL_R` and `SATSTAR_DEBLEND_ORDER`; for any other bandpass those five are unset for the whole per-frame fit (`satstar_optin_scoped` on `load_or_make_satstar_catalog`), so the frame fits and keys its cache (`SATFITSW`) as if they were never exported.  A chain takes one environment, so gc-treasury sets the switches once with `SATSTAR_OPTIN_FILTERS=F480M`; a malformed name raises |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
 | `DAOPHOT_HANDOFF_UNACCEPTED_SAT` / `DAOPHOT_HANDOFF_DATA_FLOOR` | on for the targets in `_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS` (gc-treasury), off elsewhere; an export wins / 0 | NIRCam only: hand every SATURATED component without an accepted satstar to daophot and return its valid-rate late-group pixels to the fit; limited to the bandpasses in `DAOPHOT_HANDOFF_FILTERS` when that is set; recorded per frame as catalog header `HNDOFFSA` |
+| `SATPROX_SEEDED_COMPANION` | off | NIRCam m3..m7 daophot passes on frames whose hand-off restored pixels: a fit within 0.5 px of a seed-catalog position (the pass's `prev_seed_catalog`) is exempt from the `_filter_near_saturation` veto when its nearest SATURATED pixel NOT restored to the fit (`_handoff_restore_pixels`) is more than `near_sat_dist_pix` away and it has finite `flux_fit > 0` and finite `qfit`. Keeps companions 4-5 px from a handed-off bright star whose restored late-group footprint reaches within 1 px of them (gc-treasury F480M); fresh, unseeded fits on the restored footprint stay vetoed (`cataloging.py::_seeded_companion_kwargs`). On/off values follow the hand-off convention; an unknown value raises |
 | `DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE` | 0 (off) | m3..m7 daophot pass: seeds whose 3x3 data peak exceeds this multiple of the frame's median local noise are fit first and their model is subtracted before the detection that builds the seed, so faint neighbours within ~14 px of a bright daophot-fit star are not lost to the bright star's inflated local-noise map (the satstar channel already subtracts its stars first); the bright seeds plus the residual detections then go to the one full fit; non-numeric, negative or non-finite raises (#991) |
 | `GC_RESID_NAN_SATSTAR_FOOTPRINT` / `GC_RESID_NAN_SATSTAR_PASSES` / `GC_RESID_NAN_SATSTAR_MIN_MODEL` | off / `m7` / 20 | report the DQ-SATURATED pixels under an accepted satstar's subtracted model (model > `…_MIN_MODEL` MJy/sr) as NaN in the per-frame `*_daophot_basic_residual.fits` written by the manual passes listed in `…_PASSES` (`m1` … `m7`, comma- or space-separated; the m3–m6 residuals seed the next pass and have not been run with NaN in them). The pass's catalog, `_model.fits` and `modelsub_bkg` columns are written from the unmasked arrays (`_save_manual_pass`, `_satstar_footprint_nan_mask`); the residual i2d, its smoothed background and the merged-catalog residual inherit the NaN.  The on/off switch follows the hand-off convention; an unknown pass label or a bad `…_MIN_MODEL` raises |
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
@@ -678,6 +783,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_FP_*` (11 vars: `_REJECT`, `_REJECT_RATIO`, `_REJECT_MIN_N`, `_REJECT_BRIGHTFRAC`, `_FLUXRATIO`, `_MERGE_MAX_ARCSEC`, `_COMP_ARCSEC`, `_BIG_ARCSEC`, `_BIGCORE_ARCSEC`, `_BIGCORE_MERGE_ARCSEC`, `_USE_ANCHOR`) | see `merge_catalogs.py` | false-positive rejection / merging at consolidation |
 | `SATSTAR_PIXSCALE_ARCSEC` | 0.063 | pixel scale used by those radii (no `FP_` in the name) |
 | `STPSF_PATH` | (required) | WebbPSF grid data (set before import) |
+| `G1ONLY_SAT_DQ` | `auto` | NIRCam single-group (G1-only) pixels → SATURATED\|DO_NOT_USE + NaN from the sibling `_ramp.fits`: `auto` flags only frames whose measured m = SCI/(G1/TGROUP) is nearer 1 (biased ramp fit) than r = TGROUP/((NFRAMES+1)·TFRAME/2) (see §2c); `1`/`force` flags every frame; `0`/`off` (or empty) disables; any other value raises |
 
 The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table above
 covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
@@ -717,6 +823,7 @@ cross-phase content key carries `psf_core=<sha>` only when a core applies.
 |---|---|
 | `reduction/saturated_star_finding.py` | detection, PSF fitting, accept gate, ZEROFRAME recovery, off-FOV reconciliation |
 | `reduction/satstar_deblend.py` | ZEROFRAME core deblending (crowded fields) |
+| `reduction/g1only_dq.py` | single-group (G1-only) pixel flag and its per-frame `auto` gate (§2c) |
 | `reduction/PipelineRerunNIRCAM-LONG.py` / `PipelineMIRI.py` | Detector1 → `_ramp.fits` (ZEROFRAME/GROUPDQ); MIRI edge trim |
 | `photometry/cataloging.py` | per-frame satstar+daophot integration, `miri_tuning` schedule, artifact/coincidence gates |
 | `photometry/crowdsource_catalogs_long.py` | CLI options, manual m12→m8 pipeline |

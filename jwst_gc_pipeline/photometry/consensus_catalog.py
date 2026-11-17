@@ -30,6 +30,7 @@ See ``docs/JWST_CONSENSUS_CATALOG.md``.
 """
 import os
 import re
+import warnings
 
 import numpy as np
 from astropy import units as u
@@ -37,6 +38,7 @@ from astropy.coordinates import SkyCoord, search_around_sky
 from astropy.table import Table
 
 from .astrometry_offsets import measure_offset
+from .interframe_overlap import _confirm_tie, pairwise_overlap_offsets
 
 #: VIRAC2's astrometry is VVV Ks-monitoring; Ks is 2.15 um.  Closeness to it is
 #: the first thing that makes a JWST filter a good match.
@@ -87,6 +89,15 @@ _FILTER_RE = re.compile(r'^F(\d+)([NMW])(\d?)$', re.IGNORECASE)
 #: per-visit values are recorded in the output meta either way, which is what
 #: makes a FINE threshold choosable later.
 GROSS_INTER_VISIT_MAS = 100.0
+
+#: Two visits are only compared when each has at least this many stars inside
+#: the footprint-intersection box.  30 is the ``min_pairs`` default of the
+#: ``measure_offset`` call this replaced, so repeat visits of one field keep the
+#: protection they had.  Tiles of a mosaic share no sky, or a sliver of it, and
+#: a histogram over such a pair returns the geometric step between the tiles
+#: (cloudef 2092 o004: 59.2", 54.0", and a 1.15" alias for a sliver) rather than
+#: a registration error.
+MIN_VISIT_OVERLAP_STARS = 30
 
 
 class NoReferenceFilterError(ValueError):
@@ -222,8 +233,42 @@ def _visit_arrays(cons, n):
     return out
 
 
-def _measure_inter_visit(per_visit, visits, context=''):
-    """Each visit's bulk offset from the pooling anchor (the first visit).
+def _whole_catalog_tie(a, b, context=''):
+    """A pair's confirmed bulk offset from the WHOLE catalogs, or None.
+
+    The footprint-intersection box is the right place to measure a pair of
+    visits that are on a common frame, because it keeps the unrelated stars of
+    two tiles out of the histogram.  It is the wrong place when the shift is a
+    large fraction of the footprint: the box then holds mostly stars whose
+    partners lie OUTSIDE it, no true pair survives, and ``_confirm_tie``
+    rejects the peak (a 20" shift of a 36" square: box peak 2.3", unconfirmed).
+    The whole catalogs hold every true pair, so the same two-step test --
+    swept histogram, then narrow-window confirmation -- confirms it there.
+
+    The confirmation is what keeps this from re-creating #872.  Two disjoint
+    tiles peak at their geometric separation, but that peak holds no coherent
+    narrow-window core, so it is not confirmed and nothing is returned.
+    """
+    m = measure_offset(a, b, min_pairs=MIN_VISIT_OVERLAP_STARS, sweep=True,
+                       context=f'{context} whole catalog')
+    if m is None or not m['ok']:
+        return None
+    conf = _confirm_tie(a, b, m['dra'], m['ddec'], MIN_VISIT_OVERLAP_STARS,
+                        min(len(a), len(b)))
+    if conf is None:
+        return None
+    dra, ddec = m['dra'] + conf['dra'], m['ddec'] + conf['ddec']
+    return dict(dra_mas=float(dra), ddec_mas=float(ddec),
+                off_mas=float(np.hypot(dra, ddec)),
+                contrast=float(m['contrast']))
+
+
+def _measure_inter_visit(per_visit, visits, context='', gross_mas=None):
+    """Each visit's bulk offset from its first earlier OVERLAPPING neighbour.
+
+    Returns ``(records, pairs)``: one record per visit, and the per-pair
+    results ``pairwise_overlap_offsets`` produced (plus the whole-catalog
+    fallback below), which ``pool_visit_consensi`` gates on.
 
     Recorded, not applied.  ``pool_visit_consensi`` deliberately does not
     re-tie the visits -- each is already on the frame the checkpoint that built
@@ -232,35 +277,117 @@ def _measure_inter_visit(per_visit, visits, context=''):
     that are NOT on a common frame lands every shared star at the midpoint, so
     the premise has to be checked rather than assumed.
 
+    A tie is only measurable where two visits share sky.  The visits of a
+    tiling programme are disjoint tiles, and a histogram of two disjoint star
+    fields peaks at their geometric separation (``interframe_overlap``'s
+    ``_footprint_intersection`` describes the same failure).  Pairs are
+    therefore taken from ``pairwise_overlap_offsets``: the footprint-
+    intersection box must hold ``MIN_VISIT_OVERLAP_STARS`` stars of both
+    visits, the offset is measured on the intersection only, and a swept peak
+    that its narrow-window confirmation rejects is not ``measurable``.
+
+    Three states are kept apart, because only the first is "nothing to check":
+
+    * no shared footprint (or no star of one visit in it): ``NOT COMPARABLE``,
+      ``reason='no_overlap'``;
+    * shared footprint holding fewer than ``MIN_VISIT_OVERLAP_STARS`` stars of
+      one visit: ``OVERLAP TOO THIN``, ``reason='thin'`` -- a seam, or a large
+      shift on a small footprint, and the two look alike from the box;
+    * shared footprint, enough stars, no confirmed tie: ``NOT MEASURABLE``.
+
+    Neither of the last two may be passed over silently.  Each gets a
+    whole-catalog check (``_whole_catalog_tie``): a confirmed gross offset there
+    is a pair the box could not verify, ``pool_visit_consensi`` refuses it,
+    and a confirmed small one is a measurement like any other.  A large raw
+    box peak that nothing confirms is warned about.
+
     Measured with the density-immune offset histogram (``measure_offset``, with
     the window sweep), never a nearest-neighbour median.  Against a dense
     catalog the histogram peak over-reads by a few mas (see the
     ``histogram-vs-samestar-offset-bias`` note), which is why the gate this
     feeds is GROSS.
     """
+    if gross_mas is None:
+        gross_mas = GROSS_INTER_VISIT_MAS
     anchor = visits[0]
-    out = {anchor: dict(off_mas=0.0, dra_mas=0.0, ddec_mas=0.0,
-                        anchor=True, measured=True)}
-    for visit in visits[1:]:
-        res = measure_offset(_as_coord_array(per_visit[visit]['coords']),
-                             _as_coord_array(per_visit[anchor]['coords']),
-                             sweep=True,
-                             context=f'{context} visit {visit} vs {anchor}')
-        if res is None:
-            # Too few stars to form a histogram peak.  Reported as
-            # could-not-verify rather than folded into the gate as a 0: an
-            # unmeasurable tie is not a passing one, and the count lands in the
-            # output meta so a reader can see the check did not run.
+    anchor_rec = dict(off_mas=0.0, dra_mas=0.0, ddec_mas=0.0, anchor=True,
+                      measured=True, comparable=True, vs=None, reason=None)
+    if len(visits) == 1:
+        return {anchor: anchor_rec}, []
+
+    coords = {v: _as_coord_array(per_visit[v]['coords']) for v in visits}
+    pairs = pairwise_overlap_offsets(
+        coords, tol_mas=gross_mas,
+        min_overlap_pairs=MIN_VISIT_OVERLAP_STARS, sweep=True, context=context)
+    for p in pairs:
+        if p['overlap'] and p['measurable']:
+            continue
+        if min(p['n_a_in'], p['n_b_in']) == 0:
+            continue                      # no shared sky: nothing to verify
+        whole = _whole_catalog_tie(coords[p['a']], coords[p['b']],
+                                   context=f"{context} {p['a']}|{p['b']}")
+        if whole is not None:
+            p.update(whole, overlap=True, measurable=True, via='whole-catalog')
+            continue
+        raw = p['off_mas']
+        if raw is not None and raw > gross_mas:
+            warnings.warn(
+                f"visits {p['a']}|{p['b']}: the footprint-intersection peak "
+                f"({raw:.0f} mas, {p['n_overlap']} stars of each) is larger "
+                f"than the {gross_mas:g} mas gross gate but neither it nor a "
+                f"whole-catalog measurement is confirmed, so the pair is not "
+                f"gated. {context}".strip())
+    by_pair = {(p['a'], p['b']): p for p in pairs}
+
+    def shares_sky(p):
+        # ``overlap`` is False both for "no shared footprint" and for "shared
+        # footprint, too few pairs for a histogram peak"; only the first is
+        # NOT COMPARABLE.
+        return p['overlap'] or p['n_overlap'] >= MIN_VISIT_OVERLAP_STARS
+
+    def thin(p):
+        return (not shares_sky(p)) and min(p['n_a_in'], p['n_b_in']) > 0
+
+    out = {}
+    for i, visit in enumerate(visits):
+        earlier = [by_pair[(v, visit)] for v in visits[:i]
+                   if shares_sky(by_pair[(v, visit)])]
+        later = [by_pair[(visit, v)] for v in visits[i + 1:]
+                 if shares_sky(by_pair[(visit, v)])]
+        if not earlier and not later:
+            neighbours = ([by_pair[(v, visit)] for v in visits[:i]]
+                          + [by_pair[(visit, v)] for v in visits[i + 1:]])
+            reason = 'thin' if any(thin(p) for p in neighbours) else 'no_overlap'
             out[visit] = dict(off_mas=float('nan'), dra_mas=float('nan'),
                               ddec_mas=float('nan'), anchor=False,
-                              measured=False)
-            continue
-        out[visit] = dict(off_mas=float(res['off']),
-                          dra_mas=float(res['dra']),
-                          ddec_mas=float(res['ddec']),
-                          contrast=float(res.get('contrast', np.nan)),
-                          anchor=False, measured=True)
-    return out
+                              measured=False, comparable=False, vs=None,
+                              reason=reason)
+        elif not earlier:
+            # The first visit of an overlap chain: the reference its later
+            # neighbours are measured against.
+            out[visit] = dict(anchor_rec)
+        else:
+            # The first earlier neighbour that gave a tie; failing that, the
+            # first one, so the record says which pair could not be measured.
+            p = next((e for e in earlier if e['overlap'] and e['measurable']),
+                     earlier[0])
+            rec = dict(anchor=False, comparable=True, vs=p['a'], reason=None,
+                       raw_off_mas=p['off_mas'])
+            if p['overlap'] and p['measurable']:
+                # ``measure_offset`` returns the shift that moves the EARLIER
+                # visit onto this one.  The record is the shift that moves
+                # THIS visit onto the earlier one, which is the sign
+                # ``IV_<visit>`` has always carried.
+                rec.update(off_mas=p['off_mas'], dra_mas=-p['dra_mas'],
+                           ddec_mas=-p['ddec_mas'], contrast=p['contrast'],
+                           measured=True)
+            else:
+                # Not a passing tie: counted in IVNOMEAS and kept out of the
+                # gate, with the raw peak (when there is one) in the record.
+                rec.update(off_mas=float('nan'), dra_mas=float('nan'),
+                           ddec_mas=float('nan'), measured=False)
+            out[visit] = rec
+    return out, pairs
 
 
 def _group_across_visits(coords, origin, match_radius):
@@ -341,11 +468,17 @@ def pool_visit_consensi(per_visit, match_radius=0.2 * u.arcsec,
     it, and what the contributing positions' scatter was, so a consumer can
     both filter on redundancy and know the precision of what it is tying to.
 
-    Raises ``InterVisitOffsetError`` when a visit sits more than
-    ``gross_inter_visit_mas`` from the anchor: pooling visits that are not on a
+    Raises ``InterVisitOffsetError`` when two overlapping visits sit more than
+    ``gross_inter_visit_mas`` from each other: pooling visits that are not on a
     common frame puts every shared star at the midpoint of the disagreement,
-    and this catalog is meant to BE the thing other filters tie to.  The
-    measured per-visit offsets are written to the meta regardless.
+    and this catalog is meant to BE the thing other filters tie to.  Visits
+    that share no sky with another (the tiles of a mosaic) are not compared;
+    they are counted in ``IVNOOVL``, and visits whose shared footprint is too
+    thin to test in ``IVTHIN``.  A pair the footprint box cannot verify (a
+    large shift on a small footprint leaves no true pair in the box) is
+    re-measured on the whole catalogs, and refused if that confirms a gross
+    offset.  The measured per-visit offsets are written to the meta
+    regardless.
     """
     visits, coords_by_visit = [], {}
     for visit, cons in sorted(per_visit.items()):
@@ -359,20 +492,34 @@ def pool_visit_consensi(per_visit, match_radius=0.2 * u.arcsec,
     if not visits:
         raise ValueError('no visit consensus to pool')
 
-    inter_visit = (_measure_inter_visit(per_visit, visits, context=context)
-                   if len(visits) > 1 else
-                   {visits[0]: dict(off_mas=0.0, dra_mas=0.0, ddec_mas=0.0,
-                                    anchor=True, measured=True)})
-    measured = [v['off_mas'] for v in inter_visit.values() if v['measured']]
-    n_unmeasured = sum(1 for v in inter_visit.values() if not v['measured'])
-    worst = max(measured) if measured else float('nan')
-    if measured and worst > gross_inter_visit_mas:
-        bad = {k: round(v['off_mas'], 1) for k, v in inter_visit.items()
-               if v['measured'] and v['off_mas'] > gross_inter_visit_mas}
+    inter_visit, pairs = _measure_inter_visit(
+        per_visit, visits, context=context, gross_mas=gross_inter_visit_mas)
+    # The gate runs over every overlapping, measurable PAIR, not only the
+    # per-visit rows: a real misregistration between tiles 5 and 6 of a mosaic
+    # is not a disagreement with tile 1.
+    gated = [p for p in pairs if p['overlap'] and p['measurable']]
+    worst = (0.0 if len(visits) == 1 else
+             max((p['off_mas'] for p in gated), default=float('nan')))
+    n_unmeasured = sum(1 for v in inter_visit.values()
+                       if v['comparable'] and not v['measured'])
+    n_no_overlap = sum(1 for v in inter_visit.values()
+                       if v['reason'] == 'no_overlap')
+    n_thin = sum(1 for v in inter_visit.values() if v['reason'] == 'thin')
+    bad = {f"{p['a']}|{p['b']}": round(p['off_mas'], 1) for p in gated
+           if p['off_mas'] > gross_inter_visit_mas}
+    if bad:
+        # A pair the footprint box could not verify but the whole catalogs
+        # did: the shift is a large fraction of the footprint.
+        whole = sorted(f"{p['a']}|{p['b']}" for p in gated
+                       if p.get('via') and f"{p['a']}|{p['b']}" in bad)
         raise InterVisitOffsetError(
-            f'visits {bad} sit more than {gross_inter_visit_mas:g} mas from '
-            f'anchor visit {visits[0]}; pooling them would bake half of that '
-            f'into every star seen in both. {context}'.strip())
+            f'visit pairs {bad} sit more than {gross_inter_visit_mas:g} mas '
+            f'from each other where they overlap; pooling them would bake half '
+            f'of that into every star seen in both.'
+            + (f' {whole} could not be verified in the shared footprint (the '
+               f'shift is a large fraction of it) and were measured on the '
+               f'whole catalogs.' if whole else '')
+            + f' {context}'.rstrip())
 
     coords = SkyCoord(
         ra=np.concatenate([coords_by_visit[v].ra.deg for v in visits]) * u.deg,
@@ -425,12 +572,28 @@ def pool_visit_consensi(per_visit, match_radius=0.2 * u.arcsec,
     out.meta['IVMAXMAS'] = float(worst)
     out.meta['IVGROSS'] = float(gross_inter_visit_mas)
     out.meta['IVNOMEAS'] = int(n_unmeasured)
+    out.meta['IVNOOVL'] = int(n_no_overlap)
+    out.meta['IVTHIN'] = int(n_thin)
     for visit, res in inter_visit.items():
-        out.meta[f'IV_{visit}'] = (
-            'NOT MEASURABLE (too few stars for a histogram peak)'
-            if not res['measured'] else
-            f"off={res['off_mas']:.2f} dra={res['dra_mas']:+.2f} "
-            f"ddec={res['ddec_mas']:+.2f} mas")
+        if res['reason'] == 'thin':
+            text = (f'OVERLAP TOO THIN (fewer than {MIN_VISIT_OVERLAP_STARS} '
+                    f'stars of one visit in the footprint it shares; not checked)')
+        elif not res['comparable']:
+            text = ('NOT COMPARABLE (no footprint overlap with another '
+                    'visit)')
+        elif res['anchor']:
+            text = 'off=0.00 dra=+0.00 ddec=+0.00 mas (reference)'
+        elif not res['measured']:
+            raw = res.get('raw_off_mas')
+            text = (f"NOT MEASURABLE vs {res['vs']} (no confirmed tie from "
+                    f"the overlap stars"
+                    + (f"; unconfirmed peak {raw:.2f} mas" if raw is not None
+                       else '') + ')')
+        else:
+            text = (f"off={res['off_mas']:.2f} dra={res['dra_mas']:+.2f} "
+                    f"ddec={res['ddec_mas']:+.2f} mas vs {res['vs']} "
+                    f"(this visit -> {res['vs']})")
+        out.meta[f'IV_{visit}'] = text
     return out
 
 
