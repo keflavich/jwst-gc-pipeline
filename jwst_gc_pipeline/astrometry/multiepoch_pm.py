@@ -48,7 +48,8 @@ import astropy.units as u
 from astropy.time import Time
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    measure_offset, local_residual_map, GlobalTieNotVerifiedError)
+    measure_offset, local_residual_map, GlobalTieNotVerifiedError,
+    refusal_reason, DEFAULT_MIN_CONTRAST)
 
 # Reference epochs (decimal year)
 EPOCH_VIRAC = 2014.0      # VIRAC2 / VVV (II/387), Gaia-DR3 frame
@@ -392,8 +393,13 @@ def affine_tie(src_sc, src_mag, ref_sc, ref_mag, magcut=15.0, match_radius=0.2,
                                 confirm_windows=True,
                                 context=f"affine_tie(magcut={magcut:g}, n_src={len(ssc)}, n_ref={len(rsc)})")
     if global_res is None or not global_res.get('ok'):
-        reason = ("no window had enough pairs" if global_res is None else
-                 f"best contrast {global_res['contrast']:.1f} below the coherent-tie floor")
+        if global_res is None:
+            reason = "no window had enough pairs"
+        elif global_res.get('alias_rejected'):
+            reason = ("the peak did not reproduce at an independent window "
+                      "(footprint geometry, not a tie)")
+        else:
+            reason = refusal_reason(global_res, DEFAULT_MIN_CONTRAST)
         raise TieNotVerifiedError(
             f"affine_tie: no coherent density-immune bulk tie between src "
             f"(n={len(ssc)}) and ref (n={len(rsc)}) at magcut={magcut:g} -- {reason}. "
