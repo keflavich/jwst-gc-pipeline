@@ -424,6 +424,8 @@ still run after m6.
 | `--manual-crossband-seed-min-filters` | 2 | 2 | 2 | 2 |
 | `--manual-crossband-seed-snr-min` (on flux / flux_err, the per-frame S/N) | 5.0 | 5.0 | | |
 | `--manual-crossband-seed-qfit-max` | 0.2 | 0.2 | | |
+| `--manual-crossband-seed-min-frac` (seed health, #981: warn when the smallest per-band fraction of good m6 detections kept in the seed is below this) | 0.3 | 0.3 | | |
+| `--manual-crossband-seed-collapse-action` (`warn` or `raise`; `raise` throws `CrossbandSeedCollapsedError` after the seed and its `.health.json` are written) | `warn` | `warn` | | |
 | `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--manual-m7-seed-own-band-companion-max-ratio` (in [0, 1]; 1.0 = cut every fainter source in the radius, 0 = no cut) | 0.1 | 0.1 | | |
