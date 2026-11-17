@@ -38,7 +38,14 @@ the dedup output for pairs that dedup leaves split because the component is
 too large or contains a band-resolved pair.  The flag uses ``link_radius`` only, so a
 complementary pair that dedup links solely through the wider satstar radius is
 not flagged.
+
+The output records where each band of a merged row came from (``dedup_src_<band>``
+and related columns, see ``dedup_merged_catalog``), so a row that mixes two
+pre-dedup rows can be identified.
 """
+import os
+import warnings
+
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -94,6 +101,8 @@ def _band_columns(tbl, bands):
     allsuf = sorted(set(bands) | set(SYNTHETIC), key=len, reverse=True)
     byband = {b: [] for b in allsuf}
     for c in tbl.colnames:
+        if c.startswith('dedup_'):
+            continue  # provenance columns of an earlier dedup run
         for b in allsuf:
             if c.endswith('_' + b):
                 byband[b].append(c)
@@ -124,6 +133,127 @@ def _detection_mask(tbl, bands):
                   else np.zeros(len(tbl), bool))
         det[b] = finite & ~masked & ~filled
     return det
+
+
+def _check_mas(value, what):
+    """``value`` as a finite positive float (mas), else ``ValueError``.
+
+    A non-positive, NaN or infinite separation never blocks a link, so the
+    guard would be silently off while the run looks as if it were guarded.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what}: {value!r} is not a number") from None
+    if not np.isfinite(v) or v <= 0:
+        raise ValueError(f"{what}: {value!r} must be a finite number > 0 mas "
+                         f"(anything else would switch the guard off)")
+    return v
+
+
+def parse_band_resolve_mas(text):
+    """Parse and validate a ``band_resolve_mas`` value.
+
+    ``''``/``None`` -> ``None`` (guard off); ``'60'`` or ``60`` -> 60.0 (every
+    band); ``'f212n=60,f200w=50'`` -> ``{'f212n': 60.0, 'f200w': 50.0}``.  A
+    number or mapping that is already parsed is validated and returned.
+    Raises ``ValueError`` for a malformed string, an empty band name or a
+    separation that is not a finite number > 0, so a typo fails when the
+    options are read rather than after the run.
+    """
+    if text is None:
+        return None
+    if isinstance(text, dict):
+        if not text:
+            raise ValueError("band_resolve_mas: empty mapping")
+        out = {}
+        for band, val in text.items():
+            band = str(band).strip().lower()
+            if not band:
+                raise ValueError("band_resolve_mas: empty band name")
+            out[band] = _check_mas(val, f"band_resolve_mas[{band}]")
+        return out
+    if not isinstance(text, str):
+        return _check_mas(text, "band_resolve_mas")
+    text = text.strip()
+    if not text:
+        return None
+    if '=' not in text:
+        return _check_mas(text, "band_resolve_mas")
+    out = {}
+    for item in text.split(','):
+        band, sep, val = item.partition('=')
+        band = band.strip().lower()
+        if not sep or not band or '=' in val:
+            raise ValueError(f"band_resolve_mas: cannot read {item!r} in "
+                             f"{text!r}; expected BAND=MAS,BAND=MAS")
+        out[band] = _check_mas(val, f"band_resolve_mas[{band}]")
+    return out
+
+
+def check_winner_emag_ratio(ratio):
+    """``ratio`` as ``None`` or a finite float > 0, else ``ValueError``.
+
+    NaN, 0 and negative values make the primary keep every independent band
+    whatever the challenger's emag; a ratio above 1 is the default rule
+    (the best challenger's emag never exceeds the primary's), so it warns.
+    """
+    if ratio is None:
+        return None
+    try:
+        r = float(ratio)
+    except (TypeError, ValueError):
+        raise ValueError(f"winner_emag_ratio: {ratio!r} is not a number") from None
+    if not np.isfinite(r) or r <= 0:
+        raise ValueError(f"winner_emag_ratio: {ratio!r} must be a finite number "
+                         f"> 0 (use e.g. 0.8; omit it for the lowest-emag rule)")
+    if r > 1:
+        warnings.warn(f"winner_emag_ratio={r:g} > 1 reproduces the default "
+                      f"lowest-emag rule (the challenger's emag never exceeds "
+                      f"the primary's); use a value <= 1 for hysteresis",
+                      UserWarning, stacklevel=2)
+    return r
+
+
+def _band_resolve_thresholds(band_resolve_mas, tbl, bands):
+    """Map band -> resolved-in-band separation (mas) for bands that can be tested.
+
+    ``band_resolve_mas`` is ``None`` (guard off), a single number applied to
+    every band, or a mapping band -> mas (bands absent from the mapping are
+    not guarded).  A requested band that cannot be tested (not a band of this
+    table, or no ``skycoord_<band>`` SkyCoord column) is reported with a
+    warning and dropped, and the guard is reported as OFF when none is left.
+    """
+    band_resolve_mas = parse_band_resolve_mas(band_resolve_mas)
+    if band_resolve_mas is None:
+        return {}
+    if isinstance(band_resolve_mas, dict):
+        want = band_resolve_mas
+    else:
+        want = {b: band_resolve_mas for b in bands}
+    out = {}
+    dropped = []
+    for b, v in want.items():
+        col = f'skycoord_{b}'
+        if b not in bands:
+            dropped.append(f"{b} (not a band of this table: {', '.join(bands)})")
+        elif col not in tbl.colnames or not isinstance(tbl[col], SkyCoord):
+            dropped.append(f"{b} (no {col} SkyCoord column)")
+        else:
+            out[b] = v
+    if dropped:
+        msg = (f"[dedup] band_resolve_mas: not applied to "
+               f"{'; '.join(dropped)}")
+        if not out:
+            msg += "; the resolved-in-band guard is OFF"
+        warnings.warn(msg, UserWarning, stacklevel=2)
+    return out
+
+
+def _band_sep_mas(tbl, band, i, j):
+    """Separation (mas) between ``skycoord_<band>`` of rows ``i`` and ``j``."""
+    col = tbl[f'skycoord_{band}']
+    return col[i].separation(col[j]).to_value(u.mas)
 
 
 def _recompute_synthetic(tbl, bands, rows):
@@ -163,6 +293,38 @@ def _recompute_synthetic(tbl, bands, rows):
                     tbl[magcol][rows] = (logf + const)[rows]
             if fcol in tbl.colnames:
                 tbl[fcol][rows] = newflux[rows]
+
+
+def _position_spread_mas(tbl, bands, det, src, swapped_rows):
+    """Largest pairwise ``skycoord_<band>`` separation (mas) per row.
+
+    Only rows in ``swapped_rows`` (at least one band supplied by another row)
+    get a value; the others are 0.  Bands count when the supplying row is an
+    independent detection in that band.
+    """
+    n = len(tbl)
+    spread = np.zeros(n)
+    rows = np.flatnonzero(swapped_rows)
+    if rows.size == 0:
+        return spread
+    coords = {}
+    for b in bands:
+        col = f'skycoord_{b}'
+        if col not in tbl.colnames or not isinstance(tbl[col], SkyCoord):
+            continue
+        sel = src[b][rows]
+        ok = det[b][sel]
+        ra = np.where(ok, tbl[col].ra.deg[sel], np.nan)
+        dec = np.where(ok, tbl[col].dec.deg[sel], np.nan)
+        coords[b] = SkyCoord(ra * u.deg, dec * u.deg)
+    names = list(coords)
+    best = np.zeros(rows.size)
+    for k, a in enumerate(names):
+        for c in names[k + 1:]:
+            sep = coords[a].separation(coords[c]).to_value(u.mas)
+            best = np.fmax(best, sep)
+    spread[rows] = best
+    return spread
 
 
 def _band_state(tbl, bands):
@@ -338,6 +500,9 @@ def dedup_merged_catalog(in_path, out_path, *,
                          dmag_collision=0.1,
                          sat_dmag_collision=0.5,
                          max_component=4,
+                         winner_emag_ratio=None,
+                         band_resolve_mas=None,
+                         write_provenance=True,
                          verbose=True):
     """Collapse split-source duplicate rows in a cross-band merged catalog.
 
@@ -374,7 +539,54 @@ def dedup_merged_catalog(in_path, out_path, *,
         for the bands it applies to.
     max_component : int
         Connected components larger than this are left intact.
+    winner_emag_ratio : float or None
+        Hysteresis on the per-band winner (#1278).  By default each band of
+        the merged row is copied from the member with the lowest
+        ``emag_ab_<band>``, so a near-tie can move a band's position by
+        ~0.1" for no photometric gain.  With a ratio (e.g. 0.8) the primary
+        keeps its own measurement of a band when it is an independent
+        detection with a finite ``emag_ab_<band>``, unless the best
+        challenger's emag is below ``ratio * primary_emag``.  A primary
+        without an independent detection in the band still takes the best
+        challenger.  ``None`` keeps the lowest-emag rule.  Must be a finite
+        number > 0 (``ValueError`` otherwise: NaN, 0 and negative values would
+        make the primary keep every band); a value above 1 reproduces the
+        default rule and warns.
+    band_resolve_mas : float, dict or None
+        Resolved-in-band guard (#1278).  A band that detects both rows
+        independently with ``skycoord_<band>`` positions further apart than
+        this many mas counts as a collision and blocks the link whatever the
+        magnitude difference, in the pairwise test and in the whole-component
+        check.  A mapping gives a per-band value and leaves other bands
+        unguarded (the long-wavelength bands, with a PSF FWHM of ~0.16", are
+        too coarse for this test).  ``None`` disables the guard.  A value that
+        is not a finite number > 0 raises ``ValueError``; a requested band
+        that is not in the table or has no ``skycoord_<band>`` column is
+        dropped with a warning (and the guard is reported as OFF when none is
+        left), so a mistyped band cannot leave the guard silently off.
+    write_provenance : bool
+        Add ``dedup_primary`` (pre-dedup row index of the surviving row),
+        ``dedup_src_<band>`` (pre-dedup row index that supplied the band),
+        ``dedup_band_swapped_<band>`` (the band came from another row) and
+        ``dedup_pos_spread_mas`` (see below).  The indices refer to rows of
+        ``in_path``, the m8 file of the same run, and the output header key
+        ``DEDUPSRC`` names that file.  ``dedup_pos_spread_mas`` is the
+        largest pairwise separation between the output ``skycoord_<band>``
+        of the independently detected bands, for rows with at least one
+        swapped band, and 0 otherwise.  The header also records ``DEDUPN0``
+        (the row count of ``in_path``, so a reader can tell whether the
+        indices still match a rewritten m8), ``DEDUPRAT`` and ``DEDUPRES``
+        (the options, when set).
+
+    Notes
+    -----
+    ``n_filt_independent``, when present, is recomputed from the
+    ``independently_detected_<band>`` columns for the rows that took a band
+    from another row, since the scalar is not a ``_<band>`` column and would
+    otherwise keep the primary's pre-swap count (#1329).
     """
+    winner_emag_ratio = check_winner_emag_ratio(winner_emag_ratio)
+    band_resolve_mas = parse_band_resolve_mas(band_resolve_mas)
     t = Table.read(in_path)
     n0 = len(t)
     bands = real_bands(t)
@@ -387,10 +599,29 @@ def dedup_merged_catalog(in_path, out_path, *,
         link_radius=link_radius, sat_link_radius=sat_link_radius,
         dmag_collision=dmag_collision, sat_dmag_collision=sat_dmag_collision,
         verbose=verbose)
+    # resolved-in-band guard (#1278): a band that detects both rows
+    # independently with positions further apart than its threshold blocks
+    # the link whatever the magnitude difference
+    resolve = _band_resolve_thresholds(band_resolve_mas, t, bands)
+    resolved_any = np.zeros(len(i1), bool)
+    for b in bands:
+        if b not in resolve:
+            continue
+        both = det[b][i1] & det[b][i2]
+        if both.any():
+            resolved = np.zeros(len(i1), bool)
+            resolved[both] = _band_sep_mas(t, b, i1[both], i2[both]) > resolve[b]
+            resolved_any |= resolved
+    # pairs the magnitude test alone would link but a resolved band blocks
+    # (independent of the band order)
+    n_resolved_blocked = int((link & resolved_any).sum())
+    link &= ~resolved_any
     li1, li2 = i1[link], i2[link]
     if verbose:
         print(f"[dedup] {link.sum()} pairs pass the complementary/identical "
-              f"test", flush=True)
+              f"test" + (f" ({n_resolved_blocked} blocked only by the "
+                         f"resolved-in-band guard)" if resolve else ""),
+              flush=True)
 
     # --- connected components over linked pairs ---
     uf = _UnionFind(n0)
@@ -436,6 +667,11 @@ def dedup_merged_catalog(in_path, out_path, *,
                 if np.nanmax(mv) - np.nanmin(mv) >= comp_thresh:
                     unsafe = True
                     break
+                if b in resolve and any(
+                        _band_sep_mas(t, b, int(p), int(q)) > resolve[b]
+                        for k, p in enumerate(dm) for q in dm[k + 1:]):
+                    unsafe = True
+                    break
         if unsafe:
             skipped_binary += 1
             continue
@@ -450,6 +686,11 @@ def dedup_merged_catalog(in_path, out_path, *,
             # best detection = lowest emag (fallback: first)
             ev = emag[b][dm]
             winner = dm[np.nanargmin(ev)] if np.isfinite(ev).any() else dm[0]
+            if (winner != primary and winner_emag_ratio is not None
+                    and det[b][primary] and np.isfinite(emag[b][primary])
+                    and not emag[b][winner] < winner_emag_ratio * emag[b][primary]):
+                # near-tie: the primary keeps its own measurement of this band
+                winner = primary
             if winner != primary:
                 assign[b][0].append(primary)
                 assign[b][1].append(winner)
@@ -461,6 +702,8 @@ def dedup_merged_catalog(in_path, out_path, *,
     # --- apply band assignments (vectorised per column) ---
     byband = _band_columns(t, bands)
     changed = np.zeros(n0, bool)
+    # pre-dedup row index supplying each band of each row (own index unless swapped)
+    src = {b: np.arange(n0) for b in bands}
     for b in bands:
         prim, win = assign[b]
         if not prim:
@@ -468,10 +711,33 @@ def dedup_merged_catalog(in_path, out_path, *,
         prim = np.array(prim)
         win = np.array(win)
         changed[prim] = True
+        src[b][prim] = win
         for col in byband[b]:
             t[col][prim] = t[col][win]
 
     t['n_merged'] = n_merged_col
+    if 'n_filt_independent' in t.colnames and changed.any():
+        # the scalar is not a ``_<band>`` column, so the swap above left the
+        # primary's pre-swap count next to the winner's independently_detected_*
+        indep_cols = [c for c in t.colnames
+                      if c.startswith('independently_detected_')]
+        if indep_cols:
+            n_indep = np.sum([_arr(t, c, fill=False, dtype=bool)
+                              for c in indep_cols], axis=0)
+            t['n_filt_independent'][changed] = n_indep[changed]
+    if write_provenance:
+        t['dedup_primary'] = np.arange(n0)
+        for b in bands:
+            t[f'dedup_src_{b}'] = src[b]
+            t[f'dedup_band_swapped_{b}'] = src[b] != np.arange(n0)
+        t['dedup_pos_spread_mas'] = _position_spread_mas(t, bands, det, src, changed)
+        t.meta['DEDUPSRC'] = ('pre-dedup row indices refer to '
+                              + os.path.basename(str(in_path)))
+        t.meta['DEDUPN0'] = n0
+        if winner_emag_ratio is not None:
+            t.meta['DEDUPRAT'] = float(winner_emag_ratio)
+        if resolve:
+            t.meta['DEDUPRES'] = ','.join(f'{b}={v:g}' for b, v in resolve.items())
 
     out = t[~drop]
     # recompute synthetic line-sub bands only for rows whose fluxes changed
@@ -485,7 +751,8 @@ def dedup_merged_catalog(in_path, out_path, *,
         print(f"[dedup] merged {drop.sum()} rows into {ncomp} primaries; "
               f"kept {skipped_binary} components as resolved binaries, "
               f"{skipped_large} as too-large; "
-              f"{n0} -> {len(out)} rows; "
+              f"{n0} -> {len(out)} rows; {int(changed.sum())} kept rows take "
+              f"at least one band from another row; "
               f"{int(out['complementary_split'].sum())} rows flagged "
               f"complementary_split", flush=True)
     out.write(out_path, overwrite=True)
