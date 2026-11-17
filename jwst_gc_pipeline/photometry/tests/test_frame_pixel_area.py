@@ -398,3 +398,11 @@ def test_merge_individual_frames_rescales_the_frames_before_the_average(tmp_path
     assert 'PIXAREF' in out.meta
     area_sr = out.meta['PIXAREF'] / (180 / np.pi) ** 2
     np.testing.assert_allclose(_jy(out, area_sr, 'flux_fit'), TRUE_JY, rtol=1e-5)
+
+
+def test_satstar_dedup_token_is_past_fp7():
+    """The per-exposure pixel-area rescale (#1238) changes the consolidated
+    satstar fluxes, so its token must differ from every earlier one: fp6 and
+    fp7 (#949, x_fit/y_fit in detector pixels) caches would otherwise be served
+    to this build."""
+    assert MC._SATSTAR_DEDUP_ALG not in ('fp6', 'fp7')

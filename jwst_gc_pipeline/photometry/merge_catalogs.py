@@ -58,12 +58,14 @@ DEFAULT_MERGE_MODULES = 'merged'
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.dedup_catalog import flag_complementary_splits
 from jwst_gc_pipeline.photometry.frame_pixel_area import (
     PIXAREF_KEY, DEG2_PER_SR, apply_frame_pixel_area,
     apply_satstar_frame_pixel_area)
 from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
+from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
     format_phase_report, satstar_phase_rank, satstar_phase_selection_signature,
     select_rejected_for_catalogs, select_satstar_phase_files)
@@ -1811,6 +1813,11 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182']) + ABMAG_OFFSET, name='mag_ab_187m182')
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182'] / zeropoint187), name='mag_vega_187m182')
 
+        # Mark close row pairs whose bands are complementary, so m7 users can
+        # see rows that carry a mix of two stars' bands (#1124).  Additive:
+        # flux and magnitude columns are not touched.
+        flag_complementary_splits(basetable)
+
         basetable.meta = meta
         if '212PXDG' not in meta:
             print("WARNING: 212PXDG not present in metadata for this target")
@@ -3045,6 +3052,10 @@ def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
     the frame WCS is read once per frame, not once per catalog.
     """
     tbl = Table.read(filename)
+    # Per-exposure catalogs written before #949 carry stamp-local x_fit/y_fit
+    # and an id of 1 on every row; bring them to the detector-frame vintage
+    # here (idempotent), so the consolidated table is uniform.
+    tbl = finalize_satstar_columns(tbl)
     # Provenance for the ensemble statistics: which IMAGE this row was measured
     # in, and which pipeline iteration produced it.  Stamped here (the only
     # place that still knows the filename) and consumed by
@@ -3383,8 +3394,11 @@ def load_satstar_catalog(filtername, target='brick',
                                              proposal_id, field)
     if _primary is not None:
         print(f"Using saturated star catalog {_primary}")
-        _cat = apply_pooled_wingcal(Table.read(_primary), filtername,
-                                    basepath=basepath, phase=phase)
+        # In memory only (idempotent): a primary product written before #949
+        # is served in the same detector-frame vintage as the other paths.
+        _cat = apply_pooled_wingcal(
+            finalize_satstar_columns(Table.read(_primary)), filtername,
+            basepath=basepath, phase=phase)
         # cache_path=None: NEVER rewrite the raw pipeline satstar product on
         # a read path.  Persisting the wingcal-divided flux_fit would make the
         # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
@@ -3584,6 +3598,11 @@ def load_satstar_catalog(filtername, target='brick',
     # the aperture columns; cache_path=None here (the cache is written below).
     deduped = _ensure_satstar_aperture_photometry(
         deduped, filtername, target, basepath, cache_path=None)
+    # The per-exposure ids restart at 1 in every catalog and collide after the
+    # vstack and dedup; the consolidated table gets its own running index.
+    # The per-exposure provenance is in the exposure-key and iteration columns.
+    deduped = finalize_satstar_columns(deduped)
+    deduped['id'] = np.arange(1, len(deduped) + 1, dtype=np.int32)
     # record how many per-exposure catalogs this cache was built from, so a
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
@@ -3620,7 +3639,8 @@ def load_satstar_catalog(filtername, target='brick',
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
 # = footprint-scaled flux-consistent merge (default); opt-in component-anchor
 # merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
-_SATSTAR_DEDUP_ALG = 'fp7'  # fp7: per-exposure fluxes on one pixel area, PIXAREF in meta (#1238)
+_SATSTAR_DEDUP_ALG = 'fp8'  # fp8: per-exposure fluxes on one pixel area, PIXAREF in meta (#1238)
+#                              fp7: x_fit/y_fit detector pixels, unique id (#949)
 #                              fp6: flux_fit = per-exposure median (SATSTAR_FLUX_STAT)
 #                              fp5: per-exposure ensemble statistics on the kept row (#925)
 #                              fp4: sky columns re-projected onto the current GWCS (#193)
@@ -4252,7 +4272,8 @@ def _attach_satstar_ensemble(out, tbl, fin_idx, owner, kept_sorted):
         out['skycoord_fit'] = SkyCoord(new_ra * u.deg, new_dec * u.deg,
                                        frame=old.frame.name)
         # The pixel columns (x_fit/y_fit/xcentroid/ycentroid) stay the
-        # representative exposure's: they are detector-frame and no single
+        # representative exposure's: they are detector pixels (x_fit/y_fit
+        # since #949; the stamp values are in *_cutout) and no single
         # detector pixel represents an average over exposures.  Sky is the
         # ensemble's, pixels are one exposure's, and they now differ by the
         # shift reported here.
@@ -4817,6 +4838,24 @@ def _blank_for_dtype(dtype, length):
     return np.full(length, np.nan)
 
 
+def _continue_host_ids(satstar_toadd, cat):
+    """Number appended satstar rows after the host catalog's own ``id`` values.
+
+    A satstar table's ``id`` is a running index of that table (#949), so on an
+    appended row it would repeat an id the host catalog already uses.  Rows that
+    replace a host row keep the host's id.  No-op when either side has no
+    ``id`` column.  Mutates ``satstar_toadd`` in place.
+    """
+    if 'id' not in cat.colnames or 'id' not in satstar_toadd.colnames:
+        return
+    if not len(satstar_toadd):
+        return
+    host = np.ma.filled(np.ma.asarray(cat['id']).astype(float), np.nan)
+    last = int(np.nanmax(host)) if np.isfinite(host).any() else 0
+    satstar_toadd['id'] = (last + np.arange(1, len(satstar_toadd) + 1)
+                           ).astype(cat['id'].dtype)
+
+
 def _fill_satstar_added_columns(satstar_toadd, cat):
     """Give appended satstar rows every column ``cat`` has.
 
@@ -5116,14 +5155,22 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         print(satstar_cat.colnames)
         raise KeyError("Missing flux error column")
 
-    # x_fit/y_fit in satstar catalogs are CUTOUT-frame coordinates (the fit
-    # runs in a pad-centered stamp, so most rows read ~(pad, pad)); the
+    # Satstar catalogs written before #949 carry CUTOUT-frame x_fit/y_fit (the
+    # fit runs in a pad-centered stamp, so most rows read ~(pad, pad)); the
     # detector-frame positions live in xcentroid/ycentroid (= x_fit + cutout
-    # origin, the coordinates skycoord_fit is computed from).  Writing x_fit
-    # into the catalog's pixel columns silently corrupted the x/y of every
-    # replaced row.  Use the detector-frame columns whenever present.
+    # origin, the coordinates skycoord_fit is computed from).  Writing that
+    # x_fit into the catalog's pixel columns silently corrupted the x/y of
+    # every replaced row.  Current catalogs (XYFRAME = 'detector') hold the same
+    # values in x_fit and xcentroid, so reading xcentroid is right for both.
+    # Only a table with neither the XYFRAME stamp nor xcentroid falls through
+    # to a stamp-local x_fit, and that case is reported.
     _sat_xcol = 'xcentroid' if 'xcentroid' in satstar_cat.colnames else 'x_fit'
     _sat_ycol = 'ycentroid' if 'ycentroid' in satstar_cat.colnames else 'y_fit'
+    if (_sat_xcol == 'x_fit'
+            and str(satstar_cat.meta.get('XYFRAME', '')) != 'detector'):
+        print("WARNING: replace_saturated: satstar catalog has neither "
+              "xcentroid nor an XYFRAME stamp; its x_fit/y_fit are read as "
+              "detector pixels but are probably stamp-local (#949)", flush=True)
 
     # Record the daophot->satstar match separation BEFORE the position is
     # overwritten, so downstream users can cut on match quality (identity
@@ -5206,6 +5253,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd.rename_column(xerr_colname, 'dx')
             satstar_toadd.rename_column(yerr_colname, 'dy')
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:
@@ -5248,6 +5296,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
             satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
 
+        _continue_host_ids(satstar_toadd, cat)
         _fill_satstar_added_columns(satstar_toadd, cat)
         for colname in satstar_toadd.colnames:
             if colname not in cat.colnames:

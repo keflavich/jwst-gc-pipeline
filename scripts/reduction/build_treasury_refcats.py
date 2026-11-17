@@ -51,12 +51,21 @@ Usage
 ``--dry-run``, will be built).  A tile that failed or has no file is listed in
 a ``#`` comment line, which YAML ignores, so the block can be pasted as it is.
 
+``--emit-tiles`` prints the ``tiles:`` block (observation -> MAST
+``target_name``, i.e. ``GC_<n>``) with the fetch date.  It lists every selected
+tile, built or not, because the name comes from MAST and not from a build.
+It is printed before any build, and needs no ``--epoch``.  It does not skip the
+build step: add ``--dry-run`` to print the block and build nothing (with
+``--emit-tiles --dry-run`` alone, no per-tile command is formed, so a tile
+MAST gives no ``t_min`` does not need ``--epoch``).
+
 ``--dry-run`` prints the exact per-tile command and builds nothing.  Without it
 the tiles are built one subprocess at a time; this is a long query against
 VizieR (VIRAC2 II/387 + Gaia DR3), so run it as a batch job, not on a login
 node.  A tile whose catalog is already on disk is skipped unless ``--force``.
 """
 import argparse
+import datetime
 import glob
 import os
 import subprocess
@@ -391,6 +400,30 @@ def registry_block(tiles, epochs, paths=None):
     return '\n'.join(lines)
 
 
+def tiles_block(tiles, fetched):
+    """The fields.yaml ``tiles:`` block for the tiles given.
+
+    ``tile.target`` is MAST's ``target_name``, so the block records what MAST
+    calls each observation and does not assume ``GC_<n>`` equals observation
+    ``n``.  ``fetched`` is the date of the query (an ISO date string); it goes
+    into the header because a replan can renumber tiles.  No catalog is
+    consulted, so the block does not depend on any build having succeeded.
+    """
+    lines = [
+        '        # GC_<n> target per observation, from MAST target_name '
+        f'(fetched {fetched}).',
+        '        # This is the plan: it names a pointing and is not evidence '
+        'that the observation',
+        '        # executed.  Regenerate on replan with --emit-tiles.  The '
+        "'*' obsid wildcard",
+        '        # below is unchanged and still owns observations outside '
+        'this map.',
+        '        tiles:']
+    for tile in sorted(tiles, key=lambda t: t.obsid):
+        lines.append(f"          '{tile.obsid}': {tile.target}")
+    return '\n'.join(lines)
+
+
 def registrable_tiles(tiles, epochs, todo, failed, base, dry_run=False):
     """Split ``tiles`` into those that may be registered and those that may not.
 
@@ -451,6 +484,11 @@ def main(argv=None):
     ap.add_argument('--emit-registry', action='store_true',
                     help='print the fields.yaml reference_catalog block for '
                          'the selected tiles')
+    ap.add_argument('--emit-tiles', action='store_true',
+                    help='print the fields.yaml tiles block (observation -> '
+                         'MAST target_name) for the selected tiles, whether '
+                         'or not their catalogs build (add --dry-run to '
+                         'build nothing)')
     ap.add_argument('--tile-timeout', type=float,
                     default=DEFAULT_TILE_TIMEOUT_S, metavar='SECONDS',
                     help='wall clock for ONE tile subprocess (default '
@@ -476,6 +514,22 @@ def main(argv=None):
 
     print(f'{len(tiles)} tile(s) of proposal {args.proposal}; base {base}',
           flush=True)
+
+    # The tiles block needs only the fetched tiles (no epoch, no catalog), so it
+    # is printed before the build loop: build_command raises for a tile MAST
+    # gives no t_min (an unexecuted visit) when --epoch is missing, and that
+    # must not stop the block from printing.
+    if args.emit_tiles:
+        print('\n# fields.yaml: fields.gc-treasury.observations.'
+              f"'{args.proposal}'", flush=True)
+        print(tiles_block(tiles, datetime.date.today().isoformat()),
+              flush=True)
+        if args.dry_run and not args.emit_registry:
+            # Nothing else to show: the per-tile commands below need an epoch
+            # that this request does not supply.
+            print('\n--dry-run --emit-tiles: the MAST query ran; no build '
+                  'command was formed and nothing was written.', flush=True)
+            return 0
 
     epochs, todo, skipped = {}, [], []
     for tile in tiles:

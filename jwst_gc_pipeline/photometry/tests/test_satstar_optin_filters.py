@@ -20,7 +20,8 @@ from jwst_gc_pipeline.reduction.saturated_star_finding import (
     satstar_optin_in_scope, satstar_optin_scope, satstar_optin_scoped)
 
 ON = {'SATSTAR_ZF_KEEP_FINITE': '1', 'SATSTAR_OBS_PK_FROM_CRF': '1',
-      'SATSTAR_QFIT_LOCAL_GATE': '1', 'SATSTAR_QFIT_LOCAL_R': '10'}
+      'SATSTAR_QFIT_LOCAL_GATE': '1', 'SATSTAR_QFIT_LOCAL_R': '10',
+      'SATSTAR_DEBLEND_ORDER': '1'}
 
 
 @pytest.fixture(autouse=True)
