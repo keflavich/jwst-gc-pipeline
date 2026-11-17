@@ -418,6 +418,7 @@ still run after m6.
 | `--satstar-artifact-sigK` | 3.0 | 3.0 | 3.0 | 3.0 |
 | `--satstar-oversub-clamp-percentile` | 10.0 | 10 | 10 | 10 |
 | `--deblend-satstars` | off | off (on for gc2211) | | off |
+| `SATSTAR_DEBLEND_PSF_MARGIN` (env, with `--deblend-satstars`) | 0 (off) | 0 | | 0 |
 | `--satstar-zeroframe-recover` | off | off | | off |
 | `--satstar-zeroframe-dilate` | 3 | 3 | | |
 | `--manual-crossband-seed-dedup-mas` | 30.0 | 30 | 30 | 30 |
