@@ -41,6 +41,23 @@ import astropy.units as u
 
 from . import multiepoch_pm as M
 
+# Run defaults, chosen 2026-11-18 from the Sgr B2 5365 x 10678 completeness
+# census (each is reverted per run by --assign nearest, --rescue-inflated-err 0,
+# --flux-ratio-cap 0.10, which reproduce the earlier tables):
+#   mincost  keeps the claimant of a contested ref row whose position and flux
+#            fit, where 'nearest' drops every claimant (4.3% of the Sgr B2 src
+#            stars);
+#   rescue   uses rows whose flux_err fails the S/N cut but whose flux is
+#            >= 8 x the local noise (photutils flag-16 group fits that lost
+#            their covariance); pairs with a rescued row stay non-trustworthy;
+#   cap 0.5  a companion fainter than half the star's flux no longer
+#            disqualifies it from 'trustworthy' (0.10 before).
+# The cap leaves comp_flux_ratio / src_comp_flux_ratio in the table, so a
+# consumer can re-threshold; pm.meta records ASSIGN, RESCUE_K, flux_ratio_cap.
+DEFAULT_ASSIGN = 'mincost'
+DEFAULT_RESCUE_K = 8.0
+DEFAULT_FLUX_RATIO_CAP = 0.5
+
 
 def _col(t, base, filt):
     """Return column name: bare `base` if present, else `base_{filt}`."""
@@ -71,7 +88,18 @@ def _sat_flags(t, filt):
     return np.asarray(v, bool)
 
 
-def _load_one(path, filt, epoch, sn_cut, obs_index):
+def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None):
+    """One catalog's usable rows as a dict (sc, ex, ey, flux, mag, sat, flux_noise, ...).
+
+    A row is usable when ``flux / flux_err > sn_cut``.  With ``rescue_k`` it is
+    also usable when ``flux >= rescue_k * flux_noise`` -- ``flux_noise`` being
+    the local noise of ``multiepoch_pm.local_flux_noise`` -- although its own
+    ``flux_err`` fails the cut: a group fit that exhausted its LM budget loses
+    its parameter covariance (photutils flags bit 16) and reports a ``flux_err``
+    that makes even a star at 8x the local noise read S/N < 5.  Those rows come
+    back with ``err_rescued`` True (the key is present only when ``rescue_k`` is
+    given).
+    """
     t = Table.read(path)
     sat = _sat_flags(t, filt)
     sc_col = _col(t, 'skycoord', filt)
@@ -84,16 +112,39 @@ def _load_one(path, filt, epoch, sn_cut, obs_index):
     flux_err = np.asarray(t[fe_col], float)
     ex, ey = M.std_columns_to_arcsec(t, filt, dec_deg=sc.dec.deg,
                                      apply_cosdec=M.STD_RA_APPLY_COSDEC)
-    ok = (np.isfinite(sc.ra.deg) & np.isfinite(flux) & (flux > 0) &
-          np.isfinite(flux_err) & (flux_err > 0) & (flux / flux_err > sn_cut))
-    return dict(sc=sc[ok],
-                ex=np.where(np.isfinite(ex[ok]), ex[ok], 0.005),
-                ey=np.where(np.isfinite(ey[ok]), ey[ok], 0.005),
-                flux=flux[ok], mag=-2.5 * np.log10(flux[ok]), sat=sat[ok],
-                epoch=epoch, n=int(ok.sum()), obs_index=obs_index)
+    flux_noise = M.local_flux_noise(sc.ra.deg, sc.dec.deg, flux, flux_err)
+    finite = np.isfinite(sc.ra.deg) & np.isfinite(flux) & (flux > 0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        healthy = np.isfinite(flux_err) & (flux_err > 0) & (flux / flux_err > sn_cut)
+        rescued = (finite & ~healthy & (flux >= rescue_k * flux_noise)
+                   if rescue_k is not None else np.zeros(len(t), bool))
+    ok = finite & (healthy | rescued)
+    cat = dict(sc=sc[ok],
+               ex=np.where(np.isfinite(ex[ok]), ex[ok], 0.005),
+               ey=np.where(np.isfinite(ey[ok]), ey[ok], 0.005),
+               flux=flux[ok], mag=-2.5 * np.log10(flux[ok]), sat=sat[ok],
+               flux_noise=flux_noise[ok],
+               epoch=epoch, n=int(ok.sum()), obs_index=obs_index)
+    if rescue_k is not None:
+        cat['err_rescued'] = rescued[ok]
+    return cat
 
 
-def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05):
+def _stack(cats, keep=None):
+    """Concatenate the per-row arrays the PM builder reads from several ``_load_one``
+    dicts (``err_rescued`` only when every dict has it), then apply ``keep``."""
+    keys = ['ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index']
+    if all('err_rescued' in c for c in cats):
+        keys.append('err_rescued')
+    out = {}
+    for k in keys:
+        arr = (np.concatenate([np.full(c['n'], c[k]) for c in cats]) if k == 'obs_index'
+               else np.concatenate([c[k] for c in cats]))
+        out[k] = arr if keep is None else arr[keep]
+    return out
+
+
+def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05, rescue_k=None):
     """Load one or more per-obs/per-field catalogs, keep one filter's usable
     (S/N > sn_cut) sources, concatenate. Works for both the bare-column
     single-filter vetted catalogs (skycoord/flux/...) and the suffixed
@@ -109,27 +160,23 @@ def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05):
     Source-association dedup here, not a correction -- no reduce derived
     from the match, just which duplicate rows are kept.
     """
-    cats = [_load_one(p, filt, epoch, sn_cut, i) for i, p in enumerate(paths)]
+    cats = [_load_one(p, filt, epoch, sn_cut, i, rescue_k=rescue_k) for i, p in enumerate(paths)]
     sc = concatenate([c['sc'] for c in cats]) if len(cats) > 1 else cats[0]['sc']
-    obs_index = np.concatenate([np.full(c['n'], c['obs_index']) for c in cats])
-    ex = np.concatenate([c['ex'] for c in cats])
-    ey = np.concatenate([c['ey'] for c in cats])
-    flux = np.concatenate([c['flux'] for c in cats])
-    mag = np.concatenate([c['mag'] for c in cats])
-    sat = np.concatenate([c['sat'] for c in cats])
-    if len(cats) > 1:
-        keep = _dedup_mask(sc, dedup_radius)
-        sc, ex, ey, flux, mag, sat, obs_index = (
-            sc[keep], ex[keep], ey[keep], flux[keep], mag[keep], sat[keep],
-            obs_index[keep])
-    return dict(sc=sc, ex=ex, ey=ey, flux=flux, mag=mag, sat=sat,
-               epoch=epoch, n=int(len(sc)), obs_index=obs_index)
+    prefer = (np.concatenate([c['err_rescued'] for c in cats]).astype(np.int64)
+              if all('err_rescued' in c for c in cats) else None)
+    keep = _dedup_mask(sc, dedup_radius, prefer=prefer) if len(cats) > 1 else None
+    if keep is not None:
+        sc = sc[keep]
+    return dict(sc=sc, epoch=epoch, n=int(len(sc)), **_stack(cats, keep))
 
 
-def _dedup_mask(sc, radius):
+def _dedup_mask(sc, radius, prefer=None):
     """Boolean mask keeping one row per CONNECTED COMPONENT of positions in
     ``sc`` within ``radius`` (arcsec) of each other -- the lowest-indexed
-    row of each component.
+    row of each component.  With ``prefer`` (a per-row integer, lower wins)
+    the kept row is the one with the lowest ``prefer`` and, among those, the
+    lowest index; the rescue option passes its rescued flag so that a row
+    added by the rescue never displaces a healthy duplicate of the same star.
 
     A single-nearest-neighbour version of this (each row paired only with
     its own closest other row) can leave two rows of the same 3+-row group
@@ -150,9 +197,12 @@ def _dedup_mask(sc, radius):
     from scipy.sparse.csgraph import connected_components
     graph = coo_matrix((np.ones(edges.sum()), (i[edges], j[edges])), shape=(n, n))
     _, labels = connected_components(graph, directed=False)
-    comp_min_idx = np.full(labels.max() + 1, n, dtype=int)
-    np.minimum.at(comp_min_idx, labels, np.arange(n))
-    return np.arange(n) == comp_min_idx[labels]
+    order = np.arange(n, dtype=np.int64)
+    if prefer is not None:
+        order = np.asarray(prefer, dtype=np.int64) * n + order
+    comp_best = np.full(labels.max() + 1, np.iinfo(np.int64).max, dtype=np.int64)
+    np.minimum.at(comp_best, labels, order)
+    return order == comp_best[labels]
 
 
 #: A ref-vs-ref duplicate fraction above this is reported loudly. Not a hard
@@ -202,21 +252,31 @@ def _ref_pair_duplicate_fraction(cat_a, cat_b, sep_mas=REF_DUP_SEP_MAS,
 
 def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                               tie_magcut=None, tie_bright_percentile=20.0,
-                              verbose=True):
+                              verbose=True, rescue_k=None, skip_unverified=False):
     """Load each ref path SEPARATELY and affine-tie it onto src's frame
     BEFORE combining.
 
     Each JWST "observation" is its own independent visit with its own guide-
     star lock, hence its own small absolute pointing (and possibly
-    rotation/scale) offset -- even when, as for GC Treasury o127/o129/o132/
-    o135, several observations cover essentially the SAME sky footprint
-    (revisits, not separate tiles). Concatenating them first and fitting one
-    global tie only removes the AVERAGE of 4 different offsets, leaving each
+    rotation/scale) offset.  Whether several observations cover the SAME sky
+    footprint (revisits) or adjacent, partly overlapping tiles depends on the
+    field: for Sgr B2 the GC Treasury o127/o128/o129/o132/o135 are tiles, and
+    only o128, o129 and o135 overlap the 5365 footprint (by 50%, 49% and 32%
+    of it).  Either way, concatenating them first and fitting one global tie
+    only removes the AVERAGE of the different offsets, leaving each
     observation's individual residual in the data -- which then reads as a
     spatially-incoherent (by whichever observation happened to be the
     nearest-neighbor match at a given position) spurious proper motion.
     Tying each observation independently removes this before it can leak
     into the PM fit.
+
+    A tile with no overlap with ``src`` cannot be tied
+    (``multiepoch_pm.TieNotVerifiedError``).  That error propagates unless
+    ``skip_unverified`` is True, which drops such an observation with a
+    printed warning and records its path in ``ref['unverified_paths']``; the
+    remaining observations keep their positions in ``ref_paths`` as
+    ``obs_index`` and each tie diagnostic carries its ``ref_index``.
+    ``rescue_k`` is passed to ``_load_one``.
 
     ``tie_magcut=None`` (the default) derives an ABSOLUTE cutoff from
     ``src``'s own magnitude distribution (its ``tie_bright_percentile``,
@@ -240,7 +300,7 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                   f'({100 * n_cut / src["n"]:.1f}%, vs {tie_bright_percentile:g}% '
                   f'intended -- ties are matched to REF separately per observation, '
                   f'so this is src-side selectivity only, not the eventual tie sample size)')
-    cats = [_load_one(p, filt, ref_epoch, sn_cut, i) for i, p in enumerate(ref_paths)]
+    cats = [_load_one(p, filt, ref_epoch, sn_cut, i, rescue_k=rescue_k) for i, p in enumerate(ref_paths)]
     ref_dup_fractions = {}
     if len(cats) > 1:
         for a in range(len(cats)):
@@ -260,7 +320,7 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                           f'combination seen on fields whose trustworthy PM scatter '
                           f'came out several times their formal error.')
 
-    tied, diags = [], []
+    tied, diags, unverified = [], [], []
     for i, p in enumerate(ref_paths):
         cat = cats[i]
         n_ref_cut = int((cat['mag'] < tie_magcut).sum())
@@ -277,8 +337,17 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
         # margin above that; the dedup/uniqueness rejection in
         # _unique_nearest_pairs / local_residual_map (not radius alone) is
         # what keeps a wider search from admitting an ambiguous pair.
-        sc_tied, diag = M.affine_tie(cat['sc'], cat['mag'], src['sc'], src['mag'],
-                                     magcut=tie_magcut, match_radius=1.0)
+        try:
+            sc_tied, diag = M.affine_tie(cat['sc'], cat['mag'], src['sc'], src['mag'],
+                                         magcut=tie_magcut, match_radius=1.0)
+        except M.TieNotVerifiedError as exc:
+            if not skip_unverified:
+                raise
+            print(f'  ref[{i}] {p.split("/")[-1]}: tie not verified ({exc}); dropped '
+                  f'(skip_unverified)')
+            unverified.append(p)
+            continue
+        diag['ref_index'] = i
         if verbose:
             print(f'  ref[{i}] {p.split("/")[-1]}: {n_ref_cut:,}/{cat["n"]:,} '
                   f'pass the magcut ({100 * n_ref_cut / cat["n"]:.1f}%) -- '
@@ -302,16 +371,16 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                   f'{diag["n_kept"]}/{diag["n_match"]} kept, '
                   f'median ({diag["med_dx_mas"]:+.1f},{diag["med_dy_mas"]:+.1f}) mas, '
                   f'resid rms {diag["rms_resid_mas"]:.1f} mas')
+    if not tied:
+        raise M.TieNotVerifiedError(
+            f'none of the {len(ref_paths)} ref catalogs could be tied to src: '
+            + ', '.join(os.path.basename(q) for q in unverified))
     sc = concatenate([c['sc'] for c in tied]) if len(tied) > 1 else tied[0]['sc']
-    obs_index = np.concatenate([np.full(c['n'], c['obs_index']) for c in tied])
     sc_raw = concatenate([c['sc_raw'] for c in tied]) if len(tied) > 1 else tied[0]['sc_raw']
-    ref = dict(sc=sc, sc_raw=sc_raw,
-              ex=np.concatenate([c['ex'] for c in tied]),
-              ey=np.concatenate([c['ey'] for c in tied]),
-              flux=np.concatenate([c['flux'] for c in tied]),
-              mag=np.concatenate([c['mag'] for c in tied]),
-              sat=np.concatenate([c['sat'] for c in tied]),
-              epoch=ref_epoch, n=int(sum(c['n'] for c in tied)), obs_index=obs_index)
+    ref = dict(sc=sc, sc_raw=sc_raw, epoch=ref_epoch, n=int(sum(c['n'] for c in tied)),
+               **_stack(tied))
+    if unverified:
+        ref['unverified_paths'] = unverified
     return ref, diags
 
 
@@ -446,21 +515,31 @@ def saturation_offset_epochs(diags):
 
 def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
          match_radius=0.15, tie_magcut=None, isolation_radius=None, verbose=True,
-         demote_offset_saturated=True, src_isolation='flux'):
-    src = load_filter_catalog(src_paths, filt, src_epoch)
+         demote_offset_saturated=True, src_isolation='flux', assign=DEFAULT_ASSIGN,
+         rescue_k=DEFAULT_RESCUE_K, rescued_trustworthy=False, skip_unverified_refs=False,
+         flux_ratio_cap=DEFAULT_FLUX_RATIO_CAP):
+    src = load_filter_catalog(src_paths, filt, src_epoch, rescue_k=rescue_k)
     if verbose:
         print(f'  src ({filt}, epoch {src_epoch:.3f}) usable: {src["n"]:,}')
+        if rescue_k is not None:
+            print(f'  src rows rescued (flux_err fails the S/N cut, flux >= {rescue_k:g} x '
+                  f'local noise): {int(src["err_rescued"].sum()):,}')
     ref, diags = load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src,
-                                           tie_magcut=tie_magcut, verbose=verbose)
+                                           tie_magcut=tie_magcut, verbose=verbose,
+                                           rescue_k=rescue_k,
+                                           skip_unverified=skip_unverified_refs)
     if verbose:
         print(f'  ref ({filt}, epoch {ref_epoch:.3f}) usable: {ref["n"]:,} '
-              f'(from {len(ref_paths)} independently-tied observations)')
+              f'(from {len(diags)} independently-tied observations)')
+        if rescue_k is not None:
+            print(f'  ref rows rescued: {int(ref["err_rescued"].sum()):,}')
         # same_star_radius (build_pm_catalog_2epoch's default 0.05" = 50 mas)
         # assumes a tied observation's own residual scatter is well below
         # that, so a re-detection of the SAME star lands within it. A tie
         # whose resid_mas approaches 50 mas can't reliably tell "same star,
         # noisy" from "different, close star" at that radius either way.
-        for i, d in enumerate(diags):
+        for d in diags:
+            i = d['ref_index']
             if d['rms_resid_mas'] > 25.0:
                 print(f'  WARNING: ref[{i}] tie resid {d["rms_resid_mas"]:.1f} mas is '
                       f'within 2x the same_star_radius (50 mas) build_pm_catalog_2epoch '
@@ -469,8 +548,11 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
                       f'the trustworthy flag alone suggests.')
     pm = M.build_pm_catalog_2epoch(src, ref, match_radius=match_radius,
                                    isolation_radius=isolation_radius,
-                                   src_isolation=src_isolation)
+                                   flux_ratio_cap=flux_ratio_cap,
+                                   src_isolation=src_isolation, assign=assign,
+                                   rescued_trustworthy=rescued_trustworthy)
     pm.meta['filter'] = filt
+    pm.meta['flux_ratio_cap'] = float(flux_ratio_cap)
     pm.meta['frame'] = ('relative: mean motion + mean shear of the affine tie\'s own '
                         'bright/compact matching sample subtracted per observation; '
                         'NOT an absolute frame -- see build_treasury_pm module docstring')
@@ -481,6 +563,12 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     # if needed.
     pm.meta['tie_diag_json'] = json.dumps(diags)
     pm.meta['ref_paths_json'] = json.dumps([os.path.basename(q) for q in ref_paths])
+    pm.meta['src_paths_json'] = json.dumps([os.path.basename(q) for q in src_paths])
+    if rescue_k is not None:
+        pm.meta['rescue_k'] = float(rescue_k)
+    if ref.get('unverified_paths'):
+        pm.meta['ref_unverified_json'] = json.dumps(
+            [os.path.basename(q) for q in ref['unverified_paths']])
     # Saturated-star PM offset check (see saturation_pm_offset). An offset
     # saturated population is a catalog-side position bias, not a motion:
     # report it, and (by default) remove the affected rows from
@@ -553,18 +641,44 @@ def main():
                          'to catch a blended-but-undetected companion.')
     ap.add_argument('--src-isolation', choices=('flux', 'any'), default='flux',
                     help="source-epoch half of the isolation check: 'flux' "
-                         "(default) ignores src neighbours at contrast >= 10 "
-                         "(flux ratio <= 0.1, as on the ref side); 'any' is the "
-                         "pre-2026-10-20 rule, any src neighbour in the beam "
-                         "rejects the star")
+                         "(default) ignores src neighbours fainter than "
+                         "--flux-ratio-cap x the star's flux (as on the ref "
+                         "side); 'any' is the pre-2026-10-20 rule, any src "
+                         "neighbour in the beam rejects the star")
+    ap.add_argument('--flux-ratio-cap', type=float, default=DEFAULT_FLUX_RATIO_CAP,
+                    help='companion-to-star flux ratio below which a neighbour inside '
+                         'the isolation beam does not disqualify the star from '
+                         f"'trustworthy' (default {DEFAULT_FLUX_RATIO_CAP:g}; 0.10, "
+                         'i.e. contrast >= 10, reproduces the tables made before '
+                         '2026-11-18)')
     ap.add_argument('--keep-offset-saturated', action='store_true',
                     help='report a saturated-star PM offset but leave those '
                          'rows trustworthy (default: remove them)')
+    ap.add_argument('--assign', choices=('nearest', 'mincost'), default=DEFAULT_ASSIGN,
+                    help="src-ref pairing: 'mincost' keeps, of the src rows that "
+                         "claim one ref row, the one whose position and flux fit "
+                         "(multiepoch_pm._gated_mincost_pairs); 'nearest' drops "
+                         "every claimant of a ref row that two src rows both call "
+                         f"nearest (the pre-2026-11-18 rule). Default: {DEFAULT_ASSIGN}")
+    ap.add_argument('--rescue-inflated-err', type=float, default=DEFAULT_RESCUE_K, metavar='K',
+                    help='also use rows whose flux_err fails the S/N cut but whose '
+                         'flux is >= K x the local noise (group fits that lost '
+                         f'their covariance). Default: {DEFAULT_RESCUE_K:g}; 0 turns it off')
+    ap.add_argument('--rescued-trustworthy', action='store_true',
+                    help='let pairs with a rescued row be trustworthy (default: '
+                         'they are matched but not trustworthy)')
+    ap.add_argument('--skip-unverified-refs', action='store_true',
+                    help='drop a --ref catalog whose tie to --src cannot be verified '
+                         '(e.g. a tile with no overlap) instead of aborting')
     args = ap.parse_args()
+    if args.rescue_inflated_err < 0:
+        ap.error('--rescue-inflated-err must be >= 0 (0 turns the rescue off)')
     build(args.src, args.ref, args.filter, args.src_epoch, args.ref_epoch, args.out,
          match_radius=args.match_radius, isolation_radius=args.isolation_radius,
          demote_offset_saturated=not args.keep_offset_saturated,
-         src_isolation=args.src_isolation)
+         src_isolation=args.src_isolation, assign=args.assign,
+         rescue_k=args.rescue_inflated_err or None, rescued_trustworthy=args.rescued_trustworthy,
+         skip_unverified_refs=args.skip_unverified_refs, flux_ratio_cap=args.flux_ratio_cap)
 
 
 if __name__ == '__main__':
