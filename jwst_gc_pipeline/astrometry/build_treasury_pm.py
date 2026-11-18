@@ -23,6 +23,15 @@ bulk streaming measurement from this catalog will read artificially close to
 zero. The fitted per-observation tie coefficients (A, B) are stored in
 pm.meta['tie_diag_json'] precisely so this can be checked/undone later.
 
+Optional position-correction hook (--src-poscorr / --ref-poscorr, one table per catalog): a table made by
+make_poscorr.py for one merged catalog holds a sky correction in mas for every row (the mean, over the row's
+per-frame detections, of a detector-axis distortion correction).  It is added to the row positions when the
+catalog is loaded, so for the reference catalogs it enters before the per-observation tie.
+poscorr.load_poscorr refuses a table whose row count or position checksum differs from the catalog being loaded.
+Only positions change: the pm_*_err columns are computed as without the hook, and without the options the build
+is the build without the hook.  --emit-rows (implied by either option) adds the catalog row of every pair to the
+output; with a hook the output also carries the uncorrected positions (ra_ref/dec_ref, ra_src_cat/dec_src_cat).
+
 Example:
     python -m jwst_gc_pipeline.astrometry.build_treasury_pm \\
         --src /orange/.../sgrb2/catalogs/f212n_..._vetted.fits --src-epoch 2024.684 \\
@@ -40,6 +49,7 @@ from astropy.coordinates import SkyCoord, concatenate, search_around_sky
 import astropy.units as u
 
 from . import multiepoch_pm as M
+from . import poscorr as PC
 
 # Run defaults, chosen 2026-11-18 from the Sgr B2 5365 x 10678 completeness
 # census (each is reverted per run by --assign nearest, --rescue-inflated-err 0,
@@ -88,7 +98,7 @@ def _sat_flags(t, filt):
     return np.asarray(v, bool)
 
 
-def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None):
+def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None, poscorr=None):
     """One catalog's usable rows as a dict (sc, ex, ey, flux, mag, sat, flux_noise, ...).
 
     A row is usable when ``flux / flux_err > sn_cut``.  With ``rescue_k`` it is
@@ -99,6 +109,13 @@ def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None):
     that makes even a star at 8x the local noise read S/N < 5.  Those rows come
     back with ``err_rescued`` True (the key is present only when ``rescue_k`` is
     given).
+
+    ``poscorr`` is the path of a per-row position-correction table made for THIS
+    catalogue (``poscorr.load_poscorr`` checks the row count and a position
+    checksum): the usable rows' positions are then the catalogue positions plus
+    the table's sky corrections, ``sc_cat`` keeps the uncorrected catalogue
+    positions and ``poscorr_meta`` the table's header.  ``row`` is always the
+    usable rows' index in the catalogue file.
     """
     t = Table.read(path)
     sat = _sat_flags(t, filt)
@@ -108,6 +125,11 @@ def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None):
     _col(t, 'std_ra', filt)     # raise KeyError when absent, as for the columns above
     _col(t, 'std_dec', filt)
     sc = SkyCoord(t[sc_col])
+    sc_cat = sc
+    pc_meta = None
+    if poscorr is not None:
+        dxi, deta, pc_meta = PC.load_poscorr(poscorr, sc.ra.deg, sc.dec.deg)
+        sc = PC.apply_poscorr(sc, dxi, deta)
     flux = np.asarray(t[fl_col], float)
     flux_err = np.asarray(t[fe_col], float)
     ex, ey = M.std_columns_to_arcsec(t, filt, dec_deg=sc.dec.deg,
@@ -123,17 +145,20 @@ def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None):
                ex=np.where(np.isfinite(ex[ok]), ex[ok], 0.005),
                ey=np.where(np.isfinite(ey[ok]), ey[ok], 0.005),
                flux=flux[ok], mag=-2.5 * np.log10(flux[ok]), sat=sat[ok],
-               flux_noise=flux_noise[ok],
+               flux_noise=flux_noise[ok], row=np.nonzero(ok)[0],
                epoch=epoch, n=int(ok.sum()), obs_index=obs_index)
     if rescue_k is not None:
         cat['err_rescued'] = rescued[ok]
+    if poscorr is not None:
+        cat['sc_cat'] = sc_cat[ok]
+        cat['poscorr_meta'] = pc_meta
     return cat
 
 
 def _stack(cats, keep=None):
     """Concatenate the per-row arrays the PM builder reads from several ``_load_one``
     dicts (``err_rescued`` only when every dict has it), then apply ``keep``."""
-    keys = ['ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index']
+    keys = ['ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index', 'row']
     if all('err_rescued' in c for c in cats):
         keys.append('err_rescued')
     out = {}
@@ -144,7 +169,8 @@ def _stack(cats, keep=None):
     return out
 
 
-def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05, rescue_k=None):
+def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05, rescue_k=None,
+                        poscorr_paths=None):
     """Load one or more per-obs/per-field catalogs, keep one filter's usable
     (S/N > sn_cut) sources, concatenate. Works for both the bare-column
     single-filter vetted catalogs (skycoord/flux/...) and the suffixed
@@ -159,15 +185,33 @@ def load_filter_catalog(paths, filt, epoch, sn_cut=5.0, dedup_radius=0.05, rescu
     matched/trustworthy counts with duplicate PM rows for one physical star.
     Source-association dedup here, not a correction -- no reduce derived
     from the match, just which duplicate rows are kept.
+
+    ``poscorr_paths`` (one per path, or None) are per-row position-correction tables, see
+    ``_load_one``; the result then also carries ``sc_cat`` (uncorrected catalogue positions)
+    and ``poscorr_meta`` (a list of the tables' headers).
     """
-    cats = [_load_one(p, filt, epoch, sn_cut, i, rescue_k=rescue_k) for i, p in enumerate(paths)]
+    _check_poscorr_paths(poscorr_paths, paths)
+    cats = [_load_one(p, filt, epoch, sn_cut, i, rescue_k=rescue_k,
+                      poscorr=None if poscorr_paths is None else poscorr_paths[i])
+            for i, p in enumerate(paths)]
     sc = concatenate([c['sc'] for c in cats]) if len(cats) > 1 else cats[0]['sc']
     prefer = (np.concatenate([c['err_rescued'] for c in cats]).astype(np.int64)
               if all('err_rescued' in c for c in cats) else None)
     keep = _dedup_mask(sc, dedup_radius, prefer=prefer) if len(cats) > 1 else None
     if keep is not None:
         sc = sc[keep]
-    return dict(sc=sc, epoch=epoch, n=int(len(sc)), **_stack(cats, keep))
+    out = dict(sc=sc, epoch=epoch, n=int(len(sc)), **_stack(cats, keep))
+    if poscorr_paths is not None:
+        sc_cat = concatenate([c['sc_cat'] for c in cats]) if len(cats) > 1 else cats[0]['sc_cat']
+        out['sc_cat'] = sc_cat if keep is None else sc_cat[keep]
+        out['poscorr_meta'] = [c['poscorr_meta'] for c in cats]
+    return out
+
+
+def _check_poscorr_paths(poscorr_paths, paths):
+    if poscorr_paths is not None and len(poscorr_paths) != len(paths):
+        raise ValueError(f'{len(poscorr_paths)} position-correction tables for {len(paths)} catalogs; '
+                         f'give exactly one per catalog, in the same order')
 
 
 def _dedup_mask(sc, radius, prefer=None):
@@ -252,7 +296,8 @@ def _ref_pair_duplicate_fraction(cat_a, cat_b, sep_mas=REF_DUP_SEP_MAS,
 
 def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                               tie_magcut=None, tie_bright_percentile=20.0,
-                              verbose=True, rescue_k=None, skip_unverified=False):
+                              verbose=True, rescue_k=None, skip_unverified=False,
+                              poscorr_paths=None):
     """Load each ref path SEPARATELY and affine-tie it onto src's frame
     BEFORE combining.
 
@@ -276,7 +321,8 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
     printed warning and records its path in ``ref['unverified_paths']``; the
     remaining observations keep their positions in ``ref_paths`` as
     ``obs_index`` and each tie diagnostic carries its ``ref_index``.
-    ``rescue_k`` is passed to ``_load_one``.
+    ``rescue_k`` is passed to ``_load_one``.  ``poscorr_paths`` (one per ref catalog, or None)
+    are per-row position-correction tables, applied before the tie (``_load_one``).
 
     ``tie_magcut=None`` (the default) derives an ABSOLUTE cutoff from
     ``src``'s own magnitude distribution (its ``tie_bright_percentile``,
@@ -300,7 +346,10 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
                   f'({100 * n_cut / src["n"]:.1f}%, vs {tie_bright_percentile:g}% '
                   f'intended -- ties are matched to REF separately per observation, '
                   f'so this is src-side selectivity only, not the eventual tie sample size)')
-    cats = [_load_one(p, filt, ref_epoch, sn_cut, i, rescue_k=rescue_k) for i, p in enumerate(ref_paths)]
+    _check_poscorr_paths(poscorr_paths, ref_paths)
+    cats = [_load_one(p, filt, ref_epoch, sn_cut, i, rescue_k=rescue_k,
+                      poscorr=None if poscorr_paths is None else poscorr_paths[i])
+            for i, p in enumerate(ref_paths)]
     ref_dup_fractions = {}
     if len(cats) > 1:
         for a in range(len(cats)):
@@ -379,6 +428,10 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
     sc_raw = concatenate([c['sc_raw'] for c in tied]) if len(tied) > 1 else tied[0]['sc_raw']
     ref = dict(sc=sc, sc_raw=sc_raw, epoch=ref_epoch, n=int(sum(c['n'] for c in tied)),
                **_stack(tied))
+    if poscorr_paths is not None:
+        ref['sc_cat'] = (concatenate([c['sc_cat'] for c in tied]) if len(tied) > 1
+                         else tied[0]['sc_cat'])
+        ref['poscorr_meta'] = [c['poscorr_meta'] for c in tied]
     if unverified:
         ref['unverified_paths'] = unverified
     return ref, diags
@@ -517,13 +570,15 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
          match_radius=0.15, tie_magcut=None, isolation_radius=None, verbose=True,
          demote_offset_saturated=True, src_isolation='flux', assign=DEFAULT_ASSIGN,
          rescue_k=DEFAULT_RESCUE_K, rescued_trustworthy=False, skip_unverified_refs=False,
-         flux_ratio_cap=DEFAULT_FLUX_RATIO_CAP):
+         flux_ratio_cap=DEFAULT_FLUX_RATIO_CAP, src_poscorr=None, ref_poscorr=None,
+         emit_rows=False):
     # Same convention as --rescue-inflated-err: 0 (or None) = rescue off.  Passed on as 0, the
     # threshold is 0 x local noise: every positive-flux row that fails the S/N cut is rescued.
     if rescue_k is not None and not rescue_k >= 0:
         raise ValueError(f'rescue_k must be >= 0 (0 or None turns the rescue off), got {rescue_k!r}')
     rescue_k = rescue_k or None
-    src = load_filter_catalog(src_paths, filt, src_epoch, rescue_k=rescue_k)
+    src = load_filter_catalog(src_paths, filt, src_epoch, rescue_k=rescue_k,
+                              poscorr_paths=src_poscorr)
     if verbose:
         print(f'  src ({filt}, epoch {src_epoch:.3f}) usable: {src["n"]:,}')
         if rescue_k is not None:
@@ -532,7 +587,8 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     ref, diags = load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src,
                                            tie_magcut=tie_magcut, verbose=verbose,
                                            rescue_k=rescue_k,
-                                           skip_unverified=skip_unverified_refs)
+                                           skip_unverified=skip_unverified_refs,
+                                           poscorr_paths=ref_poscorr)
     if verbose:
         print(f'  ref ({filt}, epoch {ref_epoch:.3f}) usable: {ref["n"]:,} '
               f'(from {len(diags)} independently-tied observations)')
@@ -555,7 +611,9 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
                                    isolation_radius=isolation_radius,
                                    flux_ratio_cap=flux_ratio_cap,
                                    src_isolation=src_isolation, assign=assign,
-                                   rescued_trustworthy=rescued_trustworthy)
+                                   rescued_trustworthy=rescued_trustworthy,
+                                   emit_rows=emit_rows or src_poscorr is not None
+                                   or ref_poscorr is not None)
     pm.meta['filter'] = filt
     pm.meta['flux_ratio_cap'] = float(flux_ratio_cap)
     pm.meta['frame'] = ('relative: mean motion + mean shear of the affine tie\'s own '
@@ -569,6 +627,13 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     pm.meta['tie_diag_json'] = json.dumps(diags)
     pm.meta['ref_paths_json'] = json.dumps([os.path.basename(q) for q in ref_paths])
     pm.meta['src_paths_json'] = json.dumps([os.path.basename(q) for q in src_paths])
+    for which, tables, cat in (('src', src_poscorr, src), ('ref', ref_poscorr, ref)):
+        if tables is not None:
+            # provenance of the applied corrections: which tables, and what produced them
+            pm.meta[f'{which}_poscorr_json'] = json.dumps(
+                [dict(table=os.path.basename(q), solution=m.get('SOLUTION'), map_file=m.get('MAPFILE'),
+                      map_kind=m.get('MAPKIND'), radius=m.get('RADIUS'), f_assoc=m.get('F_ASSOC'))
+                 for q, m in zip(tables, cat['poscorr_meta'])])
     if rescue_k is not None:
         pm.meta['rescue_k'] = float(rescue_k)
     if ref.get('unverified_paths'):
@@ -635,6 +700,15 @@ def main():
     ap.add_argument('--src-epoch', type=float, required=True)
     ap.add_argument('--ref', required=True, nargs='+', help='epoch-1 catalog path(s)')
     ap.add_argument('--ref-epoch', type=float, required=True)
+    ap.add_argument('--src-poscorr', nargs='+', default=None, metavar='FITS',
+                    help='per-row position-correction table for each --src catalog, same order '
+                         '(distortion-correction hook; refused unless made for that exact catalog). '
+                         'Default: positions as catalogued')
+    ap.add_argument('--ref-poscorr', nargs='+', default=None, metavar='FITS',
+                    help='as --src-poscorr, for each --ref catalog')
+    ap.add_argument('--emit-rows', action='store_true',
+                    help='add src_row/src_obs_index/ref_row (row in the catalog file) to the output; '
+                         'implied by --src-poscorr/--ref-poscorr')
     ap.add_argument('--filter', required=True, help='filter, e.g. f212n')
     ap.add_argument('--out', required=True)
     ap.add_argument('--match-radius', type=float, default=0.15)
@@ -683,7 +757,8 @@ def main():
          demote_offset_saturated=not args.keep_offset_saturated,
          src_isolation=args.src_isolation, assign=args.assign,
          rescue_k=args.rescue_inflated_err or None, rescued_trustworthy=args.rescued_trustworthy,
-         skip_unverified_refs=args.skip_unverified_refs, flux_ratio_cap=args.flux_ratio_cap)
+         skip_unverified_refs=args.skip_unverified_refs, flux_ratio_cap=args.flux_ratio_cap,
+         src_poscorr=args.src_poscorr, ref_poscorr=args.ref_poscorr, emit_rows=args.emit_rows)
 
 
 if __name__ == '__main__':

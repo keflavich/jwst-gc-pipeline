@@ -45,7 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 #: SECOND, genuinely new split -- which is what the file-level allowlist did for
 #: every file before the function scoping.
 #:
-#: What the scoping buys is that this is now true of EIGHT files instead of all
+#: What the scoping buys is that this is now true of NINE files instead of all
 #: of them: a file whose entries are all function-scoped does catch a new split
 #: (verified by test_a_function_scoped_file_still_catches_a_new_split).  Adding
 #: a `<unattributed>` entry gives that up for that file, so
@@ -212,6 +212,29 @@ ALLOWLIST = {
     # false positive, not a rename to dodge the guard -- see the module
     # docstring's own "ASTROMETRY RULE #1" section for the methodology.
     ("jwst_gc_pipeline/astrometry/multiepoch_pm.py", "<unattributed>"),
+    # Hook-table producer.  associate() is source ASSOCIATION: mutual nearest
+    # neighbours closer than the merge's max_offset (default 0.10 arcsec), the
+    # criterion of merge_catalogs.combine_singleframe, to find which per-frame
+    # detections a merged row averaged.  The pairs select detections (the
+    # association, then the merge's sigma clip of the detections' flux and
+    # offsets from the catalogue position) and feed a diagnostic; they supply
+    # no correction.  The applied correction is a distortion map (handed in)
+    # evaluated at each selected detection's own x_fit, y_fit and averaged per
+    # row (for a row with no associated detection, and for a saturated row, at
+    # the pixel position that each covering frame's linear sky->pixel fit
+    # predicts for it).  No position offset derived from the pair separations
+    # is applied to anything.  The diagnostic is the recon_* columns: the
+    # catalogue position minus the mean of the kept detections' positions, a
+    # replication check that is written to the table and not applied.  The
+    # reduces the guard sees: np.median of the associated detections' own
+    # ra/dec, the tangent-plane origin of a frame's linear x_fit,y_fit <-> sky
+    # fit (frame_matrix); an rms of the map correction in a verbose print
+    # (build_stacks); and np.mean/np.median in run() (the F_SETOK header
+    # fraction and the final verbose summary, which includes a median
+    # |reconstructed - catalogue position|).  The match and those reduces sit
+    # in different functions, so the guard can only be cleared with a
+    # whole-file entry.
+    ("jwst_gc_pipeline/astrometry/make_poscorr.py", "<unattributed>"),
     # one-off scripts outside the pipeline's astrometric path
     ("scripts/reduction/combine_brick_allband.py", "main"),
     # PR #1020 evidence script, no astrometry.  seedspike.main: which loose
@@ -470,12 +493,12 @@ def test_a_clean_file_does_not_trip():
 
 #: Files whose ONLY protection is a whole-file exemption.  Each gave up
 #: per-function coverage; do not add to this without reading the file.
-_EXPECTED_UNATTRIBUTED = 8
+_EXPECTED_UNATTRIBUTED = 9
 
 
 def test_unattributed_entries_do_not_multiply():
-    """A `<unattributed>` entry silences a whole file.  Eight is the number the
-    tree needs today; a ninth means a file just lost per-function coverage and
+    """A `<unattributed>` entry silences a whole file.  Nine is the number the
+    tree needs today; a tenth means a file just lost per-function coverage and
     somebody should have noticed."""
     n = sum(1 for _f, fn in ALLOWLIST if fn == UNATTRIBUTED)
     assert n == _EXPECTED_UNATTRIBUTED, (

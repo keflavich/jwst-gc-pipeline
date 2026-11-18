@@ -782,7 +782,7 @@ def build_pm_catalog(jwst, virac, gns, match_radius=0.3, require_jwst=True):
 def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
                             flux_ratio_cap=0.10, isolation_radius=None,
                             same_star_radius=0.05, src_isolation='flux',
-                            assign='nearest', rescued_trustworthy=False):
+                            assign='nearest', rescued_trustworthy=False, emit_rows=False):
     """2-epoch flystar PM fit between two plain catalogs (e.g. two independent
     JWST epochs), after ``ref``'s coords have already been affine-tied onto
     ``src`` (or vice versa) with :func:`affine_tie`.
@@ -832,6 +832,14 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
     ``err_rescued``; the output then has ``src_err_rescued`` /
     ``ref_err_rescued``, and a pair with either set is not ``trustworthy``
     unless ``rescued_trustworthy`` is True.
+
+    ``emit_rows`` adds ``src_row`` / ``src_obs_index`` / ``ref_row`` (the pair's row in its catalog
+    file and which --src / --ref file it came from), so a pair can be keyed back to the catalogs and
+    compared between two builds.  When ``src`` / ``ref`` carry ``sc_cat`` (the catalogue positions
+    before a position-correction table was applied, ``build_treasury_pm._load_one``), ``ra_ref`` /
+    ``dec_ref`` keep their meaning, the position in the catalogue's own frame, and the corrected
+    untied position goes to ``ra_ref_corr`` / ``dec_ref_corr``; ``ra_src_cat`` / ``dec_src_cat`` are
+    the uncorrected src catalogue positions.
     """
     if src_isolation not in ('flux', 'any'):
         raise ValueError(f"src_isolation must be 'flux' or 'any', got {src_isolation!r}")
@@ -883,10 +891,24 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
         # Untied ref-frame position (the frame the Treasury HiPS/catalogs live in);
         # ra0/dec0 are in the src frame after the per-obs affine tie.
         raw = ref['sc_raw'][idx][selidx]
-        out['ra_ref'] = raw.ra.deg
-        out['dec_ref'] = raw.dec.deg
+        if 'sc_cat' in ref:
+            cat_pos = ref['sc_cat'][idx][selidx]
+            out['ra_ref'] = cat_pos.ra.deg
+            out['dec_ref'] = cat_pos.dec.deg
+            out['ra_ref_corr'] = raw.ra.deg
+            out['dec_ref_corr'] = raw.dec.deg
+        else:
+            out['ra_ref'] = raw.ra.deg
+            out['dec_ref'] = raw.dec.deg
         if 'obs_index' in ref:
             out['ref_obs_index'] = np.asarray(ref['obs_index'])[idx][selidx]
+    if 'sc_cat' in src:
+        out['ra_src_cat'] = src['sc_cat'][selidx].ra.deg
+        out['dec_src_cat'] = src['sc_cat'][selidx].dec.deg
+    if emit_rows:
+        out['src_row'] = np.asarray(src['row'], np.int64)[selidx]
+        out['src_obs_index'] = np.asarray(src['obs_index'])[selidx]
+        out['ref_row'] = np.asarray(ref['row'], np.int64)[idx][selidx]
     # Saturated-star-replacement flags (catalog ``replaced_saturated``), when
     # the caller loaded them: a saturated star's position comes from a
     # separate fit (saturated_star_finding), so a bias in that fit shows up
