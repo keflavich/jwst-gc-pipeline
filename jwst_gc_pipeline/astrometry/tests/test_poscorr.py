@@ -82,6 +82,52 @@ def test_load_refuses_non_finite_corrections_and_a_scrambled_row_column(tmp_path
         PC.load_poscorr(str(tmp_path / 'rows.fits'), ra, dec)
 
 
+def test_load_refuses_a_catalogue_whose_dec_alone_changed(tmp_path):
+    """RA bit-identical, Dec moved (a re-run that changed only Dec): the Dec checksum alone must refuse it, so
+    the RA checksum cannot be what is carrying the check."""
+    ra, dec = _positions()
+    p = tmp_path / 'pc.fits'
+    _write_table(p, ra, dec, np.zeros(len(ra)), np.zeros(len(ra)))
+    with pytest.raises(PC.PosCorrMismatchError, match='checksum'):
+        PC.load_poscorr(str(p), ra, dec + 1e-9)
+    dec2 = dec.copy()
+    dec2[11] = np.nextafter(dec2[11], 100.0)                                   # one ulp in one row
+    with pytest.raises(PC.PosCorrMismatchError, match='checksum'):
+        PC.load_poscorr(str(p), ra, dec2)
+
+
+@pytest.mark.parametrize('card', ['RACHK', 'DECCHK'])
+def test_load_refuses_a_table_whose_checksum_card_is_wrong_or_missing(tmp_path, card):
+    """A table that cannot be verified against the catalogue is refused, whichever of the two cards is damaged."""
+    ra, dec = _positions()
+    p = tmp_path / 'pc.fits'
+    _write_table(p, ra, dec, np.zeros(len(ra)), np.zeros(len(ra)))
+    t = Table.read(p)
+    t.meta[card] = int(t.meta[card]) ^ 1                                       # one bit of the stored checksum
+    t.write(tmp_path / 'wrong.fits', overwrite=True)
+    with pytest.raises(PC.PosCorrMismatchError, match='checksum'):
+        PC.load_poscorr(str(tmp_path / 'wrong.fits'), ra, dec)
+    del t.meta[card]
+    t.write(tmp_path / 'missing.fits', overwrite=True)
+    with pytest.raises(PC.PosCorrMismatchError, match='checksum'):
+        PC.load_poscorr(str(tmp_path / 'missing.fits'), ra, dec)
+
+
+def test_load_refuses_a_table_whose_nrows_card_disagrees_with_the_catalogue(tmp_path):
+    """Right row count and checksums, but the header records another catalogue size (a table edited after the
+    producer wrote it): refused on the NROWS card alone."""
+    ra, dec = _positions()
+    p = tmp_path / 'pc.fits'
+    _write_table(p, ra, dec, np.zeros(len(ra)), np.zeros(len(ra)))
+    t = Table.read(p)
+    assert len(t) == len(ra) and int(t.meta['NROWS']) == len(ra)
+    t.meta['NROWS'] = len(ra) + 1
+    t.write(tmp_path / 'nrows.fits', overwrite=True)
+    with pytest.raises(PC.PosCorrMismatchError, match='NROWS'):
+        PC.load_poscorr(str(tmp_path / 'nrows.fits'), ra, dec)
+    PC.load_poscorr(str(p), ra, dec)                                           # the untouched table still loads
+
+
 def test_apply_zero_correction_returns_the_positions_unchanged():
     ra, dec = _positions()
     sc = SkyCoord(ra * u.deg, dec * u.deg)
@@ -187,6 +233,73 @@ def test_load_one_refuses_a_table_for_a_recatalogued_file(tmp_path):
         _load_one(str(cat), 'f212n', 2024.7, 5.0, 0, poscorr=str(pc))
 
 
+def _const_table_for(path, out_path, dxi, deta, **meta):
+    """A table for the catalogue at ``path`` that moves every row by the same (dxi, deta) [mas]."""
+    sc = SkyCoord(Table.read(path)['skycoord'])
+    _write_table(out_path, sc.ra.deg, sc.dec.deg, np.full(len(sc), dxi), np.full(len(sc), deta), **meta)
+
+
+def _two_tile_field(tmp_path, n=600, seed=17):
+    """A src catalogue and two ref catalogues that are its west and east halves (adjacent tiles, a second epoch
+    with 4 mas noise).  Each tile's rows are written in a shuffled order, so a star's row in its tile is not its
+    row in src."""
+    rng = np.random.default_rng(seed)
+    dra = rng.uniform(-60, 60, n)                                              # arcsec
+    ddec = rng.uniform(-60, 60, n)
+    flux = 10 ** rng.uniform(-6, -4, n)
+
+    def sky(da, dd):
+        return SkyCoord((CENTER.ra.deg + da / 3600 / np.cos(CENTER.dec.rad)) * u.deg,
+                        (CENTER.dec.deg + dd / 3600) * u.deg)
+
+    src = tmp_path / 'src.fits'
+    _write_ref_fits(src, sky(dra, ddec), flux)
+    ref_dra = dra + rng.normal(0, 0.004, n)
+    ref_ddec = ddec + rng.normal(0, 0.004, n)
+    ref_flux = flux * (1.0 + rng.normal(0, 0.01, n))
+    refs = []
+    for name, half in (('west', dra < 0), ('east', dra >= 0)):
+        order = rng.permutation(np.nonzero(half)[0])
+        path = tmp_path / f'ref_{name}.fits'
+        _write_ref_fits(path, sky(ref_dra[order], ref_ddec[order]), ref_flux[order])
+        refs.append(str(path))
+    return str(src), refs
+
+
+#: the per-tile corrections [mas east, north] the two-tile tests put in the tables
+_WEST, _EAST = (6.0, -2.0), (-9.0, 5.0)
+
+
+def test_load_and_tie_ref_catalogs_applies_each_ref_catalogue_its_own_table(tmp_path):
+    """Two ref catalogues, one table each: every row is moved by the table of the catalogue it came from, and
+    the tables' headers stay in catalogue order.  A table list in the wrong order is refused (each table is
+    checked against the catalogue it is applied to), so a loader that read one table for every catalogue
+    could not pass."""
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import load_and_tie_ref_catalogs, load_filter_catalog
+    src_path, refs = _two_tile_field(tmp_path)
+    src = load_filter_catalog([src_path], 'f212n', 2024.7)
+    tw, te = tmp_path / 'tw.fits', tmp_path / 'te.fits'
+    _const_table_for(refs[0], tw, *_WEST, SOLUTION='west')
+    _const_table_for(refs[1], te, *_EAST, SOLUTION='east')
+    ref, diags = load_and_tie_ref_catalogs(refs, 'f212n', 2026.7, src, verbose=False,
+                                           poscorr_paths=[str(tw), str(te)])
+    assert [d['ref_index'] for d in diags] == [0, 1] and not ref.get('unverified_paths')
+    assert [m['SOLUTION'] for m in ref['poscorr_meta']] == ['west', 'east']
+    west, east = ref['obs_index'] == 0, ref['obs_index'] == 1
+    assert west.sum() > 200 and east.sum() > 200 and west.sum() + east.sum() == ref['n']
+    dra, ddec = ref['sc_cat'].spherical_offsets_to(ref['sc_raw'])               # catalogue -> corrected, pre-tie
+    for sel, (dxi, deta) in ((west, _WEST), (east, _EAST)):
+        np.testing.assert_allclose(dra.to(u.mas).value[sel], dxi, atol=1e-3)
+        np.testing.assert_allclose(ddec.to(u.mas).value[sel], deta, atol=1e-3)
+    for i, path in enumerate(refs):                                            # rows index the tile's own file
+        sel = ref['obs_index'] == i
+        in_file = SkyCoord(Table.read(path)['skycoord'])[ref['row'][sel]]
+        np.testing.assert_array_equal(ref['sc_cat'].ra.deg[sel], in_file.ra.deg)
+        np.testing.assert_array_equal(ref['sc_cat'].dec.deg[sel], in_file.dec.deg)
+    with pytest.raises(PC.PosCorrMismatchError):
+        load_and_tie_ref_catalogs(refs, 'f212n', 2026.7, src, verbose=False, poscorr_paths=[str(te), str(tw)])
+
+
 @pytest.fixture
 def two_epoch(tmp_path):
     pytest.importorskip('flystar')
@@ -287,6 +400,34 @@ def test_build_applies_a_ref_correction_with_the_opposite_sign(two_epoch):
     d_pmdec = np.asarray(hook['pm_dec'] - base['pm_dec'])
     assert d_pmdec[moved][0] == pytest.approx(+15.0 / dt, abs=0.15)
     assert float(hook['dec_ref_corr'][moved][0]) > float(hook['dec_ref'][moved][0])
+
+
+def test_build_with_two_ref_tiles_points_each_pair_at_its_partner_row_and_table(tmp_path):
+    """Two ref catalogues (shuffled rows, one table each), emit_rows: every pair's ``ref_row`` is the partner's
+    row in the catalogue ``ref_obs_index`` names -- the partner is the star the src row is, not another row of
+    that catalogue -- and the pair's corrected position carries that catalogue's own table."""
+    pytest.importorskip('flystar')
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    src_path, refs = _two_tile_field(tmp_path)
+    tw, te = tmp_path / 'tw.fits', tmp_path / 'te.fits'
+    _const_table_for(refs[0], tw, *_WEST, SOLUTION='west')
+    _const_table_for(refs[1], te, *_EAST, SOLUTION='east')
+    pm = btp.build([src_path], refs, 'f212n', 2024.7, 2026.7, str(tmp_path / 'pm.fits'), verbose=False,
+                   ref_poscorr=[str(tw), str(te)], emit_rows=True)
+    obs, row = np.asarray(pm['ref_obs_index']), np.asarray(pm['ref_row'])
+    assert (obs == 0).sum() > 200 and (obs == 1).sum() > 200 and set(np.unique(obs)) == {0, 1}
+    tiles = [SkyCoord(Table.read(p)['skycoord']) for p in refs]
+    partner = SkyCoord(np.array([tiles[o].ra.deg[r] for o, r in zip(obs, row)]) * u.deg,
+                       np.array([tiles[o].dec.deg[r] for o, r in zip(obs, row)]) * u.deg)
+    ref_cat = SkyCoord(np.asarray(pm['ra_ref']) * u.deg, np.asarray(pm['dec_ref']) * u.deg)
+    np.testing.assert_array_equal(ref_cat.ra.deg, partner.ra.deg)
+    np.testing.assert_array_equal(ref_cat.dec.deg, partner.dec.deg)
+    src_star = SkyCoord(Table.read(src_path)['skycoord'])[np.asarray(pm['src_row'])]
+    assert partner.separation(src_star).to(u.mas).value.max() < 60.0          # same star, 4 mas noise per epoch
+    dra, ddec = ref_cat.spherical_offsets_to(SkyCoord(np.asarray(pm['ra_ref_corr']) * u.deg,
+                                                      np.asarray(pm['dec_ref_corr']) * u.deg))
+    np.testing.assert_allclose(dra.to(u.mas).value, np.where(obs == 0, _WEST[0], _EAST[0]), atol=1e-3)
+    np.testing.assert_allclose(ddec.to(u.mas).value, np.where(obs == 0, _WEST[1], _EAST[1]), atol=1e-3)
 
 
 def test_cli_passes_the_poscorr_options_and_defaults_to_none(monkeypatch):
