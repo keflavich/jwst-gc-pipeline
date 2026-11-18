@@ -36,6 +36,28 @@ runs:
         python -m pip install --upgrade pip
         pip install -e .[test]
 
+    - name: Install flystar (one pinned commit, on PYTHONPATH)
+      shell: bash
+      env:
+        FLYSTAR_DIR: ${{ runner.temp }}/flystar
+        # MovingUniverseLab/flystar main as of 2025-06-09 ("Update index.rst")
+        FLYSTAR_SHA: 3f0feeb959e01130b51d553acb9faa119576dea9
+      # The multi-epoch proper-motion tests (astrometry/tests, treasury_pm_satstar_offset) need flystar; without
+      # it they skip, so the builder side of the position-correction hook was untested in CI.  flystar is not on
+      # PyPI and `pip install` of its git source fails on current Pythons: its build-system.requires pins
+      # cython==0.29.14, which cannot be built for Python >= 3.10, and with that pin bypassed its pyproject.toml
+      # (no requires-python) makes current setuptools raise a TypeError.  The package is pure Python, so one
+      # fixed commit on PYTHONPATH is enough.  pandas is imported by flystar.fit_velocity but not declared by
+      # flystar.
+      run: |
+        pip install pandas
+        git init --quiet "$FLYSTAR_DIR"
+        git -C "$FLYSTAR_DIR" fetch --quiet --depth 1 https://github.com/MovingUniverseLab/flystar.git "$FLYSTAR_SHA"
+        git -C "$FLYSTAR_DIR" checkout --quiet FETCH_HEAD
+        test "$(git -C "$FLYSTAR_DIR" rev-parse HEAD)" = "$FLYSTAR_SHA"
+        PYTHONPATH="$FLYSTAR_DIR" python -c "import flystar.startables"
+        echo "PYTHONPATH=$FLYSTAR_DIR${PYTHONPATH:+:$PYTHONPATH}" >> "$GITHUB_ENV"
+
     - name: Run test suite (local-survey-data tests auto-skip)
       shell: bash
       working-directory: ${{ inputs.path }}

@@ -65,8 +65,11 @@ docs = [
     "sphinx-automodapi",
 ]
 # multi-epoch proper-motion fitting (jwst_gc_pipeline/astrometry/). Not on
-# PyPI; not installed in CI, so the tests that need it
-# (astrometry/tests/test_multiepoch_pm.py) importorskip it rather than fail.
+# PyPI, and `pip install` of its git source fails on Python >= 3.10 (its
+# build-system.requires pins cython==0.29.14), so CI puts one pinned checkout
+# on PYTHONPATH instead (.github/actions/pytest-suite/action.yml).  The tests
+# that need it importorskip it, so an environment without it skips them
+# rather than fails.
 astrometry = [
     "flystar @ git+https://github.com/MovingUniverseLab/flystar.git",
 ]
