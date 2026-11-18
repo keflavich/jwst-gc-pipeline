@@ -670,3 +670,262 @@ def test_treasury_loader_raises_when_std_columns_absent(tmp_path, missing):
     t.write(path)
     with pytest.raises(KeyError):
         B._load_one(str(path), 'f200w', 2023.7, 5.0, 0)
+
+
+# ---------------------------------------------------------------------------
+# assign='mincost' (multiepoch_pm._gated_mincost_pairs) and local_flux_noise
+# ---------------------------------------------------------------------------
+
+def _cat_at(x_arcsec, flux, ex=0.003, noise=0.0):
+    """A catalog dict with stars on the y=0 line at ``x_arcsec`` (tangent arcsec)."""
+    x = np.atleast_1d(np.asarray(x_arcsec, float))
+    n = len(x)
+    flux = np.broadcast_to(np.asarray(flux, float), (n,)).copy()
+    return dict(sc=_sc_from_xy(x, np.zeros(n)), ex=np.full(n, ex), ey=np.full(n, ex),
+                mag=-2.5 * np.log10(flux), flux=flux, flux_noise=np.full(n, noise),
+                epoch=2024.0, n=n)
+
+
+def _pairs(ia, ib):
+    return set(zip(ia.tolist(), ib.tolist()))
+
+
+def test_mincost_keeps_the_nearer_claimant_where_nearest_drops_both():
+    """Two src stars 20 mas apart both call the one ref star between them
+    nearest: _unique_nearest_pairs drops BOTH; the gated assignment keeps the
+    closer one (3 mas sigma per axis -> a 25 mas position gate)."""
+    src = _cat_at([0.0, 0.020], 1.0)
+    ref = _cat_at([0.008], 1.0)
+    ia, ib = multiepoch_pm._unique_nearest_pairs(src['sc'], ref['sc'], 0.15)
+    assert len(ia) == 0
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert _pairs(ia, ib) == {(0, 0)}
+    assert tier.tolist() == [1]
+
+
+def test_mincost_flux_consistency_beats_proximity():
+    """The nearer src star is 3x brighter than the ref star, the farther one
+    matches it: the flux gate gives the ref star to the farther src star."""
+    src = _cat_at([0.0, 0.020], [3.0, 1.0])
+    ref = _cat_at([0.008], 1.0)
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert _pairs(ia, ib) == {(1, 0)}
+    # the same geometry without flux information pairs the nearer one
+    src_nf, ref_nf = ({k: v for k, v in c.items() if k not in ('flux', 'flux_noise')}
+                      for c in (src, ref))
+    ia, ib, _ = multiepoch_pm._gated_mincost_pairs(src_nf, ref_nf)
+    assert _pairs(ia, ib) == {(0, 0)}
+
+
+def test_mincost_keeps_both_stars_of_a_chain():
+    """a0 -- b0 -- a1 -- b1: a1 is nearer b0 (8 mas) than b1 (16 mas), so both
+    src stars call b0 nearest and the nearest rule drops both.  Giving b0 to a0
+    and b1 to a1 matches both stars, which is what the assignment does."""
+    src = _cat_at([0.000, 0.020], 1.0)
+    ref = _cat_at([0.012, 0.036], 1.0)
+    na, nb = multiepoch_pm._unique_nearest_pairs(src['sc'], ref['sc'], 0.15)
+    assert len(na) == 0
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert _pairs(ia, ib) == {(0, 0), (1, 1)}
+    assert (tier == 1).all()
+
+
+def test_mincost_keeps_a_nearest_pair_outside_the_gate_as_tier_2():
+    """A 60 mas displacement (a ~30 mas/yr mover) fails the 25 mas gate, but
+    the nearest rule pairs it, so it stays, as tier 2."""
+    src = _cat_at([0.0, 5.0], 1.0)
+    ref = _cat_at([0.060, 5.004], 1.0)
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert _pairs(ia, ib) == {(0, 0), (1, 1)}
+    assert dict(zip(ia.tolist(), tier.tolist())) == {0: 2, 1: 1}
+
+
+def test_mincost_never_adds_a_pair_outside_the_gate_that_nearest_lacks():
+    """The leftovers of tier 1 are NOT re-paired by the nearest rule: a contested
+    ref star whose claimants both fail the gate stays unmatched, as under the
+    nearest rule."""
+    src = _cat_at([0.0, 0.100], 1.0)
+    ref = _cat_at([0.050], 1.0)       # 50 mas from each: outside the 25 mas gate, contested
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert len(ia) == 0
+
+
+def test_mincost_equals_nearest_on_a_sparse_field():
+    """With no contested ref star every nearest pair inside the gate is kept, with
+    the same partner, and nothing is added."""
+    rng = np.random.default_rng(31)
+    n = 600
+    x = rng.uniform(-600, 600, n)
+    y = rng.uniform(-600, 600, n)
+    flux = 10 ** rng.uniform(-3, -1, n)
+    dt = 2.0
+    src = dict(sc=_sc_from_xy(x, y), ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+               mag=-2.5 * np.log10(flux), flux=flux, epoch=2024.0, n=n)
+    ref = dict(src, sc=_sc_from_xy(x + rng.normal(0, 2.0, n) * dt / 1e3,
+                                   y + rng.normal(0, 2.0, n) * dt / 1e3),
+               flux=flux * np.exp(rng.normal(0, 0.03, n)), epoch=2024.0 + dt)
+    na, nb = multiepoch_pm._unique_nearest_pairs(src['sc'], ref['sc'], 0.15)
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert _pairs(ia, ib) == _pairs(na, nb)
+    assert len(set(ia.tolist())) == len(ia) and len(set(ib.tolist())) == len(ib)
+
+
+def test_mincost_recovers_contested_pairs_in_a_crowded_field():
+    """Crowded synthetic field (4 stars / arcsec^2 is far denser than this; 1 is
+    enough to contest ~10% of the stars): the assignment returns one-to-one
+    pairs, at least as many as the nearest rule, almost all of them true."""
+    rng = np.random.default_rng(32)
+    n = 4000
+    half = 40.0
+    x = rng.uniform(-half, half, n)
+    y = rng.uniform(-half, half, n)
+    flux = 10 ** rng.uniform(-3, -1, n)
+    sig = 0.003
+    src = dict(sc=_sc_from_xy(x, y), ex=np.full(n, sig), ey=np.full(n, sig),
+               mag=-2.5 * np.log10(flux), flux=flux, flux_noise=np.full(n, 1e-5),
+               epoch=2024.0, n=n)
+    keep = rng.uniform(size=n) > 0.1     # a tenth of the stars are missing in ref
+    rx = x + rng.normal(0, sig, n)
+    ry = y + rng.normal(0, sig, n)
+    ref = dict(sc=_sc_from_xy(rx[keep], ry[keep]), ex=np.full(keep.sum(), sig),
+               ey=np.full(keep.sum(), sig), mag=src['mag'][keep],
+               flux=flux[keep] * np.exp(rng.normal(0, 0.02, keep.sum())),
+               flux_noise=np.full(keep.sum(), 1e-5), epoch=2026.0, n=int(keep.sum()))
+    truth = {int(i): j for j, i in enumerate(np.flatnonzero(keep))}
+    na, nb = multiepoch_pm._unique_nearest_pairs(src['sc'], ref['sc'], 0.15)
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert len(ia) >= len(na)
+    assert len(set(ia.tolist())) == len(ia) and len(set(ib.tolist())) == len(ib)
+    right = np.mean([truth.get(int(a)) == int(b) for a, b in zip(ia, ib)])
+    right_nearest = np.mean([truth.get(int(a)) == int(b) for a, b in zip(na, nb)])
+    assert right > 0.97 and right >= right_nearest - 0.01
+
+
+def test_build_pm_catalog_2epoch_assign_option():
+    pytest.importorskip('flystar')
+    src = _cat_at([0.0, 0.020, 5.0], 1.0)
+    ref = _cat_at([0.008, 5.004], 1.0)
+    ref['epoch'] = 2026.0
+    plain = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    assert len(plain) == 1 and 'assign_tier' not in plain.colnames
+    assert plain.meta['assign'] == 'nearest'
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6,
+                                 assign='mincost')
+    assert len(pm) == 2 and pm.meta['assign'] == 'mincost'
+    assert pm['assign_tier'].tolist() == [1, 1]
+    with pytest.raises(ValueError, match='assign'):
+        build_pm_catalog_2epoch({}, {}, assign='hungarian')
+
+
+def test_rescued_rows_are_matched_but_not_trustworthy_by_default():
+    pytest.importorskip('flystar')
+    n = 50
+    side = 8
+    gx, gy = np.meshgrid(np.arange(side) * 5.0, np.arange(side) * 5.0)
+    x, y = gx.ravel()[:n], gy.ravel()[:n]
+    flux = np.full(n, 1e-3)
+    src = dict(sc=_sc_from_xy(x, y), ex=np.full(n, 0.003), ey=np.full(n, 0.003),
+               mag=-2.5 * np.log10(flux), flux=flux, epoch=2024.0, n=n,
+               err_rescued=np.arange(n) < 10)
+    ref = dict(src, sc=_sc_from_xy(x + 0.004, y), epoch=2026.0, err_rescued=np.zeros(n, bool))
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6)
+    assert len(pm) == n
+    assert pm['src_err_rescued'].sum() == 10 and not pm['ref_err_rescued'].any()
+    assert pm['trustworthy'].sum() == n - 10
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6,
+                                 rescued_trustworthy=True)
+    assert pm['trustworthy'].sum() == n
+
+
+def test_local_flux_noise_ignores_rows_with_a_broken_flux_err():
+    """The noise is the median flux_err of the S/N 5-20 rows, so a bright star
+    whose flux_err is NaN, zero or inflated does not move it, and every row
+    (including the broken ones) gets it."""
+    rng = np.random.default_rng(33)
+    n = 600
+    ra = CENTER.ra.deg + rng.uniform(-40, 40, n) / 3600 / np.cos(CENTER.dec.rad)
+    dec = CENTER.dec.deg + rng.uniform(-40, 40, n) / 3600
+    ferr = np.full(n, 1e-6)
+    flux = rng.uniform(6e-6, 19e-6, n)
+    flux[:20] = 5e-5
+    ferr[:5] = np.nan
+    ferr[5:10] = 0.0
+    ferr[10:20] = 2e-5       # S/N 2.5
+    noise = multiepoch_pm.local_flux_noise(ra, dec, flux, ferr)
+    np.testing.assert_allclose(noise, 1e-6)
+    # too few S/N 5-20 rows to calibrate: unknown, not made up
+    assert np.isnan(multiepoch_pm.local_flux_noise(ra[:5], dec[:5], flux[:5], ferr[:5])).all()
+
+
+def test_local_flux_noise_follows_a_gradient():
+    """Noise doubling across the field is tracked cell by cell."""
+    rng = np.random.default_rng(34)
+    n = 4000
+    x = rng.uniform(-60, 60, n)
+    y = rng.uniform(-60, 60, n)
+    ra = CENTER.ra.deg + x / 3600 / np.cos(CENTER.dec.rad)
+    dec = CENTER.dec.deg + y / 3600
+    ferr = 1e-6 * np.where(x < 0, 1.0, 2.0)
+    flux = ferr * rng.uniform(6, 18, n)
+    noise = multiepoch_pm.local_flux_noise(ra, dec, flux, ferr)
+    assert abs(np.median(noise[x < -20]) / 1e-6 - 1.0) < 0.05
+    assert abs(np.median(noise[x > 20]) / 1e-6 - 2.0) < 0.1
+
+
+def test_mincost_flux_gate_rejects_an_inconsistent_claimant():
+    """The only src star inside the position gate is 3x brighter than the ref star
+    it would take; the other claimant is 100 mas away.  Both call the ref star
+    nearest, so the nearest rule drops both, and the flux gate keeps the
+    assignment from pairing the brighter star with it."""
+    src = _cat_at([0.0, 0.100], [3.0, 1.0])
+    ref = _cat_at([0.008], 1.0)
+    assert len(multiepoch_pm._unique_nearest_pairs(src['sc'], ref['sc'], 0.15)[0]) == 0
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert len(ia) == 0
+
+
+def test_mincost_never_pairs_a_ref_star_twice():
+    """a1's nearest ref star b' fails the flux gate, so tier 1 gives b to a1 (flux
+    consistent) although the nearest rule pairs b with a2 (nearer, flux off by
+    1.3x): the nearest pair (a2, b) must not be kept beside (a1, b)."""
+    src = _cat_at([-0.006, 0.015], [1.3, 1.0])         # a2, a1
+    ref = _cat_at([0.0, 0.016], [1.0, 5.0])            # b, b'
+    na, nb = multiepoch_pm._unique_nearest_pairs(src['sc'], ref['sc'], 0.15)
+    assert _pairs(na, nb) == {(0, 0), (1, 1)}
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert len(set(ib.tolist())) == len(ib) and len(set(ia.tolist())) == len(ia)
+    assert _pairs(ia, ib) == {(1, 0)}
+
+
+def test_local_flux_noise_fills_a_hole_from_neighbouring_cells():
+    """A row in a cell with no S/N 5-20 rows takes the median of the 3x3 cells
+    around it, not the global median (which here sits between the two halves)."""
+    rng = np.random.default_rng(35)
+    n = 8000
+    x = rng.uniform(-60, 60, n)
+    y = rng.uniform(-60, 60, n)
+    hole = (np.abs(x + 30) < 8) & (np.abs(y) < 8)
+    x, y = x[~hole], y[~hole]
+    x = np.append(x, -30.0)
+    y = np.append(y, 0.0)
+    ferr = 1e-6 * np.where(x < 0, 1.0, 2.0)
+    flux = ferr * rng.uniform(6, 18, len(x))
+    flux[-1], ferr[-1] = 1e-4, np.nan                 # the broken row sits in the hole
+    ra = CENTER.ra.deg + x / 3600 / np.cos(CENTER.dec.rad)
+    dec = CENTER.dec.deg + y / 3600
+    noise = multiepoch_pm.local_flux_noise(ra, dec, flux, ferr)
+    assert abs(noise[-1] / 1e-6 - 1.0) < 0.1
+
+
+def test_assign_tier_survives_a_fits_round_trip(tmp_path):
+    """astropy writes an int8 column to FITS as logical, so tier 2 read back as True."""
+    pytest.importorskip('flystar')
+    src = _cat_at([0.0, 5.0], 1.0)
+    ref = _cat_at([0.060, 5.004], 1.0)       # first pair is 60 mas apart: outside the position gate
+    ref['epoch'] = 2026.0
+    pm = build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=1e6, assign='mincost')
+    assert sorted(pm['assign_tier'].tolist()) == [1, 2]
+    pm.write(tmp_path / 'pm.fits')
+    back = Table.read(tmp_path / 'pm.fits')
+    assert back['assign_tier'].dtype.kind == 'i'
+    assert sorted(back['assign_tier'].tolist()) == [1, 2]

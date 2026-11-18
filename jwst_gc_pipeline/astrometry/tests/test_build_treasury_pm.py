@@ -282,3 +282,220 @@ def test_load_and_tie_ref_catalogs_ties_at_the_offset_that_broke_the_old_radius(
     ref, diags = load_and_tie_ref_catalogs([str(ref_path)], 'f212n', 2026.0, src,
                                            tie_magcut=None, tie_bright_percentile=20.0)
     assert diags[0]['n_kept'] > 0.5 * diags[0]['n_match']
+
+
+# ---------------------------------------------------------------------------
+# rescue of rows whose flux_err is broken (--rescue-inflated-err) and
+# skipping refs that cannot be tied (--skip-unverified-refs)
+# ---------------------------------------------------------------------------
+
+def _write_rescue_fits(path, rng):
+    """400 S/N 6-19 stars (the 1e-6 noise calibration), 10 healthy bright stars and,
+    below that, rows with a broken flux_err: 5 inflated (S/N 2.5), 3 NaN, 2 zero
+    -- all at 50x the noise -- plus 5 faint rows at 3x the noise."""
+    n = 425
+    ra = CENTER.ra.deg + rng.uniform(-40, 40, n) / 3600 / np.cos(CENTER.dec.rad)
+    dec = CENTER.dec.deg + rng.uniform(-40, 40, n) / 3600
+    flux = np.concatenate([rng.uniform(6e-6, 19e-6, 400), np.full(10, 1e-4), np.full(10, 5e-5),
+                           np.full(5, 3e-6)])
+    ferr = np.concatenate([np.full(410, 1e-6), np.full(5, 2e-5), np.full(3, np.nan), np.full(2, 0.0),
+                           np.full(5, 1e-6)])
+    t = Table()
+    t['skycoord'] = SkyCoord(ra * u.deg, dec * u.deg)
+    t['flux'] = flux
+    t['flux_err'] = ferr
+    t['std_ra'] = np.full(n, 1e-6)
+    t['std_dec'] = np.full(n, 1e-6)
+    t.write(path, overwrite=True)
+
+
+def test_load_one_rescues_rows_whose_flux_err_fails_the_cut_but_whose_flux_is_high(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import _load_one
+    path = tmp_path / 'cat.fits'
+    _write_rescue_fits(path, np.random.default_rng(21))
+    plain = _load_one(str(path), 'f212n', 2024.7, 5.0, 0)
+    assert plain['n'] == 410 and 'err_rescued' not in plain
+    resc = _load_one(str(path), 'f212n', 2024.7, 5.0, 0, rescue_k=8.0)
+    assert resc['n'] == 420 and resc['err_rescued'].sum() == 10
+    assert resc['flux'][resc['err_rescued']].min() == 5e-5      # faint rows stay out
+    np.testing.assert_allclose(resc['flux_noise'], 1e-6)
+    # the healthy rows are identical with and without the option
+    np.testing.assert_array_equal(resc['flux'][~resc['err_rescued']], plain['flux'])
+
+
+def test_load_filter_catalog_carries_rescue_flags_through_the_dedup(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import load_filter_catalog
+    p1, p2 = tmp_path / 'a.fits', tmp_path / 'b.fits'
+    _write_rescue_fits(p1, np.random.default_rng(22))
+    _write_rescue_fits(p2, np.random.default_rng(23))
+    cat = load_filter_catalog([str(p1), str(p2)], 'f212n', 2024.7, rescue_k=8.0)
+    assert cat['n'] == len(cat['err_rescued']) == len(cat['flux_noise']) == len(cat['ex'])
+    assert cat['err_rescued'].sum() > 0
+    assert 'err_rescued' not in load_filter_catalog([str(p1), str(p2)], 'f212n', 2024.7)
+
+
+def test_skip_unverified_drops_a_ref_with_no_overlap_and_keeps_obs_index(tmp_path):
+    import pytest
+    from jwst_gc_pipeline.astrometry.multiepoch_pm import TieNotVerifiedError
+    rng = np.random.default_rng(24)
+    n = 500
+    dra = rng.uniform(-60, 60, n)
+    ddec = rng.uniform(-60, 60, n)
+    sc = SkyCoord((CENTER.ra.deg + dra / 3600) * u.deg, (CENTER.dec.deg + ddec / 3600) * u.deg)
+    flux = rng.uniform(1e-8, 1e-6, n)
+    src = dict(sc=sc, mag=-2.5 * np.log10(flux), n=n)
+    ref_sc = SkyCoord((CENTER.ra.deg + (dra + rng.normal(0, 0.005, n)) / 3600) * u.deg,
+                      (CENTER.dec.deg + (ddec + rng.normal(0, 0.005, n)) / 3600) * u.deg)
+    far_sc = SkyCoord((CENTER.ra.deg + 0.5 + dra / 3600) * u.deg, (CENTER.dec.deg + ddec / 3600) * u.deg)
+    far_flux = flux * (1.0 + rng.normal(0, 0.01, n))
+    near, far = tmp_path / 'near.fits', tmp_path / 'far.fits'
+    _write_ref_fits(far, far_sc, far_flux)
+    _write_ref_fits(near, ref_sc, flux * (1.0 + rng.normal(0, 0.01, n)))
+    paths = [str(far), str(near)]
+    with pytest.raises(TieNotVerifiedError):
+        load_and_tie_ref_catalogs(paths, 'f212n', 2026.0, src, verbose=False)
+    ref, diags = load_and_tie_ref_catalogs(paths, 'f212n', 2026.0, src, verbose=False,
+                                           skip_unverified=True)
+    assert ref['unverified_paths'] == [str(far)]
+    assert [d['ref_index'] for d in diags] == [1]
+    assert set(ref['obs_index'].tolist()) == {1} and ref['n'] == n
+    with pytest.raises(TieNotVerifiedError):
+        load_and_tie_ref_catalogs([str(far)], 'f212n', 2026.0, src, verbose=False,
+                                  skip_unverified=True)
+
+
+def test_dedup_prefer_keeps_the_healthy_row_over_a_lower_indexed_rescued_one():
+    """A star in both modules, the lower-indexed row only usable through the rescue:
+    with prefer the healthy later row is kept, without it the lowest index is."""
+    pts = [_sc_at(CENTER, 0, 0), _sc_at(CENTER, 5, 0), _sc_at(CENTER, 5_000, 0)]
+    sc = SkyCoord([p.ra.deg for p in pts] * u.deg, [p.dec.deg for p in pts] * u.deg)
+    assert _dedup_mask(sc, 0.05).tolist() == [True, False, True]
+    assert _dedup_mask(sc, 0.05, prefer=[1, 0, 1]).tolist() == [False, True, True]
+    # equal preference falls back to the lowest index, as without prefer
+    assert _dedup_mask(sc, 0.05, prefer=[1, 1, 0]).tolist() == [True, False, True]
+    # a chain A-B-C with the healthy row at the far end still collapses to one row
+    a, b, c = (_sc_at(CENTER, 0, 0), _sc_at(CENTER, 30, 0), _sc_at(CENTER, 60, 0))
+    sc = SkyCoord([a.ra.deg, b.ra.deg, c.ra.deg] * u.deg, [a.dec.deg, b.dec.deg, c.dec.deg] * u.deg)
+    assert _dedup_mask(sc, 0.05, prefer=[1, 1, 0]).tolist() == [False, False, True]
+
+
+def test_rescue_never_displaces_a_healthy_duplicate_in_load_filter_catalog(tmp_path):
+    """Module A has a rescue-only row of a star that module B measures normally: the row
+    kept is B's, so the rescue table's rows are a superset of the plain table's."""
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import load_filter_catalog
+    rng = np.random.default_rng(25)
+    pa, pb = tmp_path / 'a.fits', tmp_path / 'b.fits'
+    _write_rescue_fits(pa, rng)
+    # B repeats A's 10 inflated-err rows with a healthy flux_err and adds nothing else
+    ta = Table.read(pa)
+    tb = ta[410:415].copy()
+    tb['flux_err'] = 1e-6
+    tb['flux'] = 1e-4
+    tb.write(pb, overwrite=True)
+    plain = load_filter_catalog([str(pa), str(pb)], 'f212n', 2024.7)
+    resc = load_filter_catalog([str(pa), str(pb)], 'f212n', 2024.7, rescue_k=8.0)
+    assert plain['n'] == 415          # A's 410 healthy rows + B's 5 (their A twins fail the S/N cut)
+    assert resc['n'] == 420           # + A's 5 NaN / zero flux_err rows; B keeps the 5 it measures normally
+    assert resc['err_rescued'].sum() == 5
+    # A's inflated rows (flux 5e-5, indices below B's) are NOT kept in place of B's healthy twins (1e-4)
+    healthy_bright = resc['flux'] == 1e-4
+    assert healthy_bright.sum() == 15 and not resc['err_rescued'][healthy_bright].any()
+    only_a = resc['flux'] == 5e-5
+    assert only_a.sum() == 5 and resc['err_rescued'][only_a].all()
+
+
+def _synthetic_two_epoch_field(tmp_path, rng, n=500, companion_every=5, companion_flux=0.3):
+    """src/ref FITS for one field: a star every ~arcsec, every ``companion_every``-th one with a
+    companion 0.2" away at ``companion_flux`` x its flux in both epochs."""
+    dra = rng.uniform(-60, 60, n)
+    ddec = rng.uniform(-60, 60, n)
+    flux = 10 ** rng.uniform(-6, -4, n)
+    k = np.arange(0, n, companion_every)
+    dra = np.concatenate([dra, dra[k] + 0.2])
+    ddec = np.concatenate([ddec, ddec[k]])
+    flux = np.concatenate([flux, flux[k] * companion_flux])
+
+    def _write(path, ra_arcsec, dec_arcsec, fl):
+        sc = SkyCoord((CENTER.ra.deg + ra_arcsec / 3600 / np.cos(CENTER.dec.rad)) * u.deg,
+                      (CENTER.dec.deg + dec_arcsec / 3600) * u.deg)
+        _write_ref_fits(path, sc, fl)
+
+    n_all = len(flux)
+    src_path, ref_path = tmp_path / 'src.fits', tmp_path / 'ref.fits'
+    _write(src_path, dra, ddec, flux)
+    _write(ref_path, dra + rng.normal(0, 0.004, n_all), ddec + rng.normal(0, 0.004, n_all),
+           flux * (1.0 + rng.normal(0, 0.01, n_all)))
+    return str(src_path), str(ref_path), n_all, len(k)
+
+
+def test_build_end_to_end_defaults_and_the_legacy_options(tmp_path):
+    """build() defaults to min-cost pairing, rescue K=8 and cap 0.5; the old flags give the old table."""
+    pytest = __import__('pytest')
+    pytest.importorskip('flystar')
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    src, ref, n_all, n_comp = _synthetic_two_epoch_field(tmp_path, np.random.default_rng(41))
+    out = tmp_path / 'pm.fits'
+    pm = btp.build([src], [ref], 'f212n', 2024.7, 2026.7, str(out), verbose=False)
+    assert pm.meta['assign'] == btp.DEFAULT_ASSIGN == 'mincost'
+    assert pm.meta['flux_ratio_cap'] == btp.DEFAULT_FLUX_RATIO_CAP == 0.5
+    assert pm.meta['rescue_k'] == btp.DEFAULT_RESCUE_K == 8.0
+    assert {'assign_tier', 'src_err_rescued', 'ref_err_rescued'} <= set(pm.colnames)
+    legacy = btp.build([src], [ref], 'f212n', 2024.7, 2026.7, str(tmp_path / 'legacy.fits'), verbose=False,
+                       assign='nearest', rescue_k=None, flux_ratio_cap=0.10)
+    assert legacy.meta['assign'] == 'nearest' and legacy.meta['flux_ratio_cap'] == 0.10
+    assert 'rescue_k' not in legacy.meta
+    assert 'assign_tier' not in legacy.colnames and 'src_err_rescued' not in legacy.colnames
+    assert len(legacy) > 0.95 * n_all
+    # a 0.3 companion at 0.2" inside the 0.45" beam: dominant at the default cap 0.5, not at 0.10
+    n_dom_legacy = int(np.asarray(legacy['dominant']).sum())
+    assert n_dom_legacy < len(legacy) - 0.5 * n_comp
+    assert int(np.asarray(pm['dominant']).sum()) > n_dom_legacy + 0.5 * n_comp
+    assert len(pm) >= len(legacy)
+    back = Table.read(out)
+    assert len(back) == len(pm)
+
+
+def test_build_signature_defaults_are_the_module_constants():
+    import inspect
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    par = inspect.signature(btp.build).parameters
+    assert par['assign'].default == btp.DEFAULT_ASSIGN
+    assert par['rescue_k'].default == btp.DEFAULT_RESCUE_K
+    assert par['flux_ratio_cap'].default == btp.DEFAULT_FLUX_RATIO_CAP
+
+
+def test_cli_defaults_and_the_legacy_flags(monkeypatch):
+    import sys
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    seen = {}
+    monkeypatch.setattr(btp, 'build', lambda *a, **k: seen.update(k) or None)
+    base = ['x', '--src', 's.fits', '--src-epoch', '2024.7', '--ref', 'r.fits', '--ref-epoch', '2026.7',
+            '--filter', 'f212n', '--out', 'o.fits']
+    monkeypatch.setattr(sys, 'argv', base)
+    btp.main()
+    assert seen['flux_ratio_cap'] == btp.DEFAULT_FLUX_RATIO_CAP == 0.5
+    assert seen['assign'] == btp.DEFAULT_ASSIGN == 'mincost'
+    assert seen['rescue_k'] == btp.DEFAULT_RESCUE_K == 8.0
+    assert seen['rescued_trustworthy'] is False and seen['skip_unverified_refs'] is False
+    # the three flags that reproduce the tables made before the defaults changed
+    monkeypatch.setattr(sys, 'argv', base + ['--assign', 'nearest', '--rescue-inflated-err', '0',
+                                             '--flux-ratio-cap', '0.10'])
+    btp.main()
+    assert seen['flux_ratio_cap'] == 0.10 and seen['assign'] == 'nearest' and seen['rescue_k'] is None
+    monkeypatch.setattr(sys, 'argv', base + ['--flux-ratio-cap', '0.3', '--rescue-inflated-err', '5',
+                                             '--rescued-trustworthy', '--skip-unverified-refs'])
+    btp.main()
+    assert seen['flux_ratio_cap'] == 0.3 and seen['assign'] == 'mincost' and seen['rescue_k'] == 5.0
+    assert seen['rescued_trustworthy'] is True and seen['skip_unverified_refs'] is True
+
+
+def test_cli_rejects_a_negative_rescue_threshold(monkeypatch):
+    import sys
+    import pytest
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    monkeypatch.setattr(btp, 'build', lambda *a, **k: pytest.fail('build must not run'))
+    monkeypatch.setattr(sys, 'argv', ['x', '--src', 's.fits', '--src-epoch', '2024.7', '--ref', 'r.fits',
+                                      '--ref-epoch', '2026.7', '--filter', 'f212n', '--out', 'o.fits',
+                                      '--rescue-inflated-err', '-1'])
+    with pytest.raises(SystemExit):
+        btp.main()

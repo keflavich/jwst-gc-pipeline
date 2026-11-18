@@ -41,6 +41,8 @@ single-direction nearest-neighbor lookup cannot tell "my nearest neighbor"
 from "somebody else's nearest neighbor too", which is exactly the ambiguity a
 crowded GC core creates.
 """
+import warnings
+
 import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord, search_around_sky
@@ -197,6 +199,160 @@ def _unique_nearest_pairs(a_sc, b_sc, radius_arcsec):
     b_multi = set(np.unique(ib_n)[b_counts > 1].tolist())
     keep = np.array([bi not in b_multi for bi in ib_n.tolist()])
     return ia_n[keep], ib_n[keep]
+
+
+#: ``assign='mincost'`` defaults (see ``_gated_mincost_pairs``).
+ASSIGN_SEARCH_ARCSEC = 0.06
+#: 99.7% point of a 2-dof chi2: the position gate on (dx, dy).
+ASSIGN_POS_GATE_CHI2 = 11.8
+#: Added in quadrature to the two epochs' per-star position errors:
+#: sqrt(3.5**2 + 5**2) mas = per-observation frame-tie residual plus the
+#: displacement a 2 yr baseline gives a ~2.5 mas/yr star.
+ASSIGN_FLOOR_MAS = 6.1
+#: Systematic ln-flux scatter between the epochs (bright stars are limited by
+#: the PSF model and crowding, not by the formal flux error).
+ASSIGN_FLUX_FLOOR = 0.10
+#: 99.7% point of a 1-dof chi2: the gate on ln(flux_ref / flux_src).
+ASSIGN_FLUX_GATE_CHI2 = 9.0
+
+
+def _pos_sigma_mas(cat):
+    """Per-star 1-axis position error in mas from a catalog dict's ``ex``/``ey`` (arcsec)."""
+    return np.hypot(np.asarray(cat['ex'], float), np.asarray(cat['ey'], float)) / np.sqrt(2.0) * 1e3
+
+
+def _flux_noise(cat):
+    """Per-row local flux noise of a catalog dict; 0 where unknown, so a missing
+    estimate leaves only the systematic floor in the flux gate rather than
+    failing it."""
+    if 'flux_noise' not in cat:
+        return np.zeros(len(cat['sc']))
+    return np.nan_to_num(np.asarray(cat['flux_noise'], float))
+
+
+def _gated_mincost_pairs(a, b, match_radius=0.15, search_arcsec=ASSIGN_SEARCH_ARCSEC,
+                         pos_gate_chi2=ASSIGN_POS_GATE_CHI2, floor_mas=ASSIGN_FLOOR_MAS,
+                         flux_floor=ASSIGN_FLUX_FLOOR, flux_gate_chi2=ASSIGN_FLUX_GATE_CHI2):
+    """One-to-one pairs between catalog dicts ``a`` and ``b`` (the ``src`` /
+    ``ref`` dicts of :func:`build_pm_catalog_2epoch`), in two tiers.
+
+    Tier 1: every (a, b) candidate within ``search_arcsec`` whose position chi2
+    (``(dx**2 + dy**2) / (sig_a**2 + sig_b**2 + floor_mas**2)``) is below
+    ``pos_gate_chi2`` and whose flux ratio is consistent
+    (``ln(F_b/F_a)**2 / (flux_floor**2 + (noise_a/F_a)**2 + (noise_b/F_b)**2)``
+    below ``flux_gate_chi2``; skipped when either catalog has no ``flux``) is an
+    edge of a bipartite graph.  Each connected component is solved exactly with
+    ``scipy.optimize.linear_sum_assignment`` on the summed chi2, preferring
+    more pairs over a lower total (a non-edge costs 1e6).  Where
+    :func:`_unique_nearest_pairs` drops ALL claimants of a ``b`` that two ``a``
+    both call nearest, this keeps the one that fits (position AND flux) and
+    leaves the other unmatched.
+
+    Tier 2: the :func:`_unique_nearest_pairs` pairs (``match_radius``) that
+    tier 1 did not touch -- both ends unused -- are kept as they are, so a star
+    whose true displacement is outside the tier-1 gate (a ~10-70 mas/yr mover)
+    is matched exactly as before.  Tier 2 never ADDS a pair
+    :func:`_unique_nearest_pairs` would not have made.  (Re-running the
+    nearest rule on tier 1's leftovers instead does add pairs, but 80% of those
+    lie at 100-150 mas with flux ratios off by factors of 2-20: chance
+    coincidences.)
+
+    Returns ``(ia, ib, tier)``: index arrays into ``a['sc']`` / ``b['sc']``
+    (``ia`` has no repeats, ``ib`` has no repeats) and the tier (1 or 2) of each pair.
+    """
+    from scipy.optimize import linear_sum_assignment
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    na, nb = len(a['sc']), len(b['sc'])
+    ia, ib, _, _ = search_around_sky(a['sc'], b['sc'], search_arcsec * u.arcsec)
+    t1a = t1b = np.zeros(0, dtype=int)
+    if len(ia):
+        dlon, dlat = a['sc'][ia].spherical_offsets_to(b['sc'][ib])
+        dx, dy = dlon.to_value(u.mas), dlat.to_value(u.mas)
+        sig2 = _pos_sigma_mas(a)[ia] ** 2 + _pos_sigma_mas(b)[ib] ** 2 + floor_mas ** 2
+        cost = (dx ** 2 + dy ** 2) / sig2
+        keep = cost < pos_gate_chi2
+        if 'flux' in a and 'flux' in b:
+            fa, fb = np.asarray(a['flux'], float)[ia], np.asarray(b['flux'], float)[ib]
+            noise_a, noise_b = _flux_noise(a)[ia], _flux_noise(b)[ib]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                chi_f = np.log(fb / fa) ** 2 / (flux_floor ** 2 + (noise_a / fa) ** 2 + (noise_b / fb) ** 2)
+            keep &= chi_f < flux_gate_chi2
+            cost = cost + np.where(keep, chi_f, 0.0)
+        ia, ib, cost = ia[keep], ib[keep], cost[keep]
+
+    if len(ia):
+        graph = coo_matrix((np.ones(len(ia)), (ia, na + ib)), shape=(na + nb, na + nb))
+        ncomp, label = connected_components(graph, directed=False)
+        elab = label[ia]
+        single = np.bincount(elab, minlength=ncomp)[elab] == 1
+        out_a, out_b = [ia[single]], [ib[single]]
+        multi = np.flatnonzero(~single)
+        if len(multi):
+            multi = multi[np.argsort(elab[multi], kind='stable')]
+            for grp in np.split(multi, np.flatnonzero(np.diff(elab[multi])) + 1):
+                ua, ca = np.unique(ia[grp], return_inverse=True)
+                ub, cb = np.unique(ib[grp], return_inverse=True)
+                cmat = np.full((len(ua), len(ub)), 1e6)
+                np.minimum.at(cmat, (ca, cb), cost[grp])
+                ri, ci = linear_sum_assignment(cmat)
+                ok = cmat[ri, ci] < 1e5
+                out_a.append(ua[ri[ok]])
+                out_b.append(ub[ci[ok]])
+        t1a, t1b = np.concatenate(out_a), np.concatenate(out_b)
+
+    n_a, n_b = _unique_nearest_pairs(a['sc'], b['sc'], match_radius)
+    free = ~np.isin(n_a, t1a) & ~np.isin(n_b, t1b)
+    ia_all = np.concatenate([t1a, n_a[free]]).astype(int)
+    ib_all = np.concatenate([t1b, n_b[free]]).astype(int)
+    tier = np.concatenate([np.ones(len(t1a), np.int16), np.full(int(free.sum()), 2, np.int16)])
+    return ia_all, ib_all, tier
+
+
+def local_flux_noise(ra_deg, dec_deg, flux, flux_err, cell_arcsec=8.0, min_rows=8,
+                     sn_range=(5.0, 20.0)):
+    """Local 1-sigma flux noise at every row: the median ``flux_err`` of the
+    ``sn_range`` S/N rows in the row's ``cell_arcsec`` cell, smoothed with the
+    median of the 3x3 neighbouring cells (cells with fewer than ``min_rows``
+    contribute nothing; rows outside every populated neighbourhood get the
+    global median).  All-NaN when too few rows are in ``sn_range``.
+
+    The median over S/N 5-20 rows reads off the noise a faint star would have
+    HERE (crowding, background) and, unlike a row's own ``flux_err``, is not
+    inflated by a group fit that exhausted its LM budget and lost its
+    covariance (photutils flag bit 16): such a bright star has
+    ``flux / flux_err`` < 5 only because ``flux_err`` is wrong.
+    """
+    from scipy.ndimage import generic_filter
+    from scipy.stats import binned_statistic_2d
+    ra, dec = np.asarray(ra_deg, float), np.asarray(dec_deg, float)
+    flux, ferr = np.asarray(flux, float), np.asarray(flux_err, float)
+    out = np.full(len(ra), np.nan)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        sn = flux / ferr
+    use = np.isfinite(sn) & (ferr > 0) & (sn > sn_range[0]) & (sn < sn_range[1])
+    fin = np.isfinite(ra) & np.isfinite(dec)
+    if use.sum() < min_rows or not fin.any():
+        return out
+    ra0, dec0 = np.mean(ra[fin]), np.mean(dec[fin])
+    x = (((ra - ra0 + 180.0) % 360.0) - 180.0) * np.cos(np.deg2rad(dec0)) * 3600.0
+    y = (dec - dec0) * 3600.0
+    xe = np.arange(x[fin].min() - cell_arcsec, x[fin].max() + 2 * cell_arcsec, cell_arcsec)
+    ye = np.arange(y[fin].min() - cell_arcsec, y[fin].max() + 2 * cell_arcsec, cell_arcsec)
+    u_ = use & fin
+    med = binned_statistic_2d(x[u_], y[u_], ferr[u_], 'median', bins=[xe, ye])[0]
+    cnt = binned_statistic_2d(x[u_], y[u_], ferr[u_], 'count', bins=[xe, ye])[0]
+    med = np.where(cnt >= min_rows, med, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)     # all-NaN neighbourhoods
+        smooth = generic_filter(med, np.nanmedian, size=3, mode='nearest')
+    glob = np.median(ferr[u_])
+    ix = np.clip(((x[fin] - xe[0]) // cell_arcsec).astype(int), 0, len(xe) - 2)
+    iy = np.clip(((y[fin] - ye[0]) // cell_arcsec).astype(int), 0, len(ye) - 2)
+    v = smooth[ix, iy]
+    out[fin] = np.where(np.isfinite(v), v, glob)
+    return out
 
 
 # merge_catalogs.py writes std_ra/std_dec as the scatter of avg_ra/avg_dec,
@@ -625,7 +781,8 @@ def build_pm_catalog(jwst, virac, gns, match_radius=0.3, require_jwst=True):
 
 def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
                             flux_ratio_cap=0.10, isolation_radius=None,
-                            same_star_radius=0.05, src_isolation='flux'):
+                            same_star_radius=0.05, src_isolation='flux',
+                            assign='nearest', rescued_trustworthy=False):
     """2-epoch flystar PM fit between two plain catalogs (e.g. two independent
     JWST epochs), after ``ref``'s coords have already been affine-tied onto
     ``src`` (or vice versa) with :func:`affine_tie`.
@@ -662,12 +819,30 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
     own src flux; 0 when there is none), ``n_src_within_beam`` (src rows in
     the beam including the star itself, any brightness) and
     ``meta['src_isolation']``.
+
+    ``assign`` picks the src-ref pairing.  'nearest' (default) is
+    :func:`_unique_nearest_pairs`, which drops every claimant of a ref row two
+    src rows both call nearest (4.4% of the covered Sgr B2 src stars).
+    'mincost' is :func:`_gated_mincost_pairs`: a position + flux gated
+    one-to-one assignment that keeps the claimant that fits, then the same
+    nearest pairs for whatever it left alone; adds ``assign_tier`` (1 = gated
+    assignment, 2 = nearest pair outside the gate) and ``meta['assign']``.
+
+    Rows loaded with ``rescue_k`` (``build_treasury_pm._load_one``) carry
+    ``err_rescued``; the output then has ``src_err_rescued`` /
+    ``ref_err_rescued``, and a pair with either set is not ``trustworthy``
+    unless ``rescued_trustworthy`` is True.
     """
     if src_isolation not in ('flux', 'any'):
         raise ValueError(f"src_isolation must be 'flux' or 'any', got {src_isolation!r}")
+    if assign not in ('nearest', 'mincost'):
+        raise ValueError(f"assign must be 'nearest' or 'mincost', got {assign!r}")
     from flystar.startables import StarTable
     center = _field_center(src['sc'])
-    ia, ib = _unique_nearest_pairs(src['sc'], ref['sc'], match_radius)
+    if assign == 'mincost':
+        ia, ib, tier = _gated_mincost_pairs(src, ref, match_radius)
+    else:
+        ia, ib = _unique_nearest_pairs(src['sc'], ref['sc'], match_radius)
     idx = np.zeros(src['n'], dtype=int)
     idx[ia] = ib
     matched = np.zeros(src['n'], dtype=bool)
@@ -721,6 +896,19 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
         out['src_saturated'] = np.asarray(src['sat'], bool)[selidx]
     if 'sat' in ref:
         out['ref_saturated'] = np.asarray(ref['sat'], bool)[idx][selidx]
+    if assign == 'mincost':
+        # int16, not int8: astropy writes an int8 column to FITS as a logical (L)
+        # column, which reads back as all-True and loses the tier.
+        tier_all = np.zeros(src['n'], np.int16)
+        tier_all[ia] = tier
+        out['assign_tier'] = tier_all[selidx]
+    rescued = np.zeros(len(selidx), bool)
+    if 'err_rescued' in src:
+        out['src_err_rescued'] = np.asarray(src['err_rescued'], bool)[selidx]
+        rescued |= out['src_err_rescued']
+    if 'err_rescued' in ref:
+        out['ref_err_rescued'] = np.asarray(ref['err_rescued'], bool)[idx][selidx]
+        rescued |= out['ref_err_rescued']
 
     good_err = (np.isfinite(out['pm_ra_err']) & np.isfinite(out['pm_dec_err']) &
                 (out['pm_ra_err'] < err_cap_mas) & (out['pm_dec_err'] < err_cap_mas))
@@ -770,7 +958,10 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
         out['dominant'] = dominant
         out.meta['src_isolation'] = src_isolation
         trust = trust & dominant
+    if not rescued_trustworthy:
+        trust = trust & ~rescued
     out['trustworthy'] = trust
+    out.meta['assign'] = assign
     out.meta['epochs'] = [float(src['epoch']), float(ref['epoch'])]
     out.meta['baseline_yr'] = float(dt)
     return out
