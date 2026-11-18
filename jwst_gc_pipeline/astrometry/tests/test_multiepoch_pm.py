@@ -686,6 +686,14 @@ def _cat_at(x_arcsec, flux, ex=0.003, noise=0.0):
                 epoch=2024.0, n=n)
 
 
+def _cat_xy(x_arcsec, y_arcsec, flux=1.0, ex=0.003):
+    """Like :func:`_cat_at`, with the stars at (x, y) tangent arcsec."""
+    x = np.atleast_1d(np.asarray(x_arcsec, float))
+    cat = _cat_at(x, flux, ex=ex)
+    cat['sc'] = _sc_from_xy(x, np.atleast_1d(np.asarray(y_arcsec, float)))
+    return cat
+
+
 def _pairs(ia, ib):
     return set(zip(ia.tolist(), ib.tolist()))
 
@@ -748,6 +756,24 @@ def test_mincost_never_adds_a_pair_outside_the_gate_that_nearest_lacks():
     ref = _cat_at([0.050], 1.0)       # 50 mas from each: outside the 25 mas gate, contested
     ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
     assert len(ia) == 0
+
+
+def test_mincost_keeps_a_forced_out_of_gate_assignment_out_of_tier_1():
+    """a0 and a1 are inside the gate of b0 only (15 mas); a2 is inside the gate of b0, b1 and b2.
+    The component's maximum matching is 2 (a0 and a1 cannot both have b0), but
+    linear_sum_assignment on its 3 x 3 cost matrix still returns three pairs, the third a non-edge
+    (cost 1e6) between stars 30-39 mas apart, outside the 25.5 mas gate.  Only the ``cmat < 1e5``
+    guard keeps that pair out of tier 1.  The nearest rule drops all three src stars (each calls b0
+    nearest), so tier 2 adds nothing."""
+    src = _cat_xy([0.015, -0.015, 0.0], [0.0, 0.0, 0.015])
+    ref = _cat_xy([0.0, 0.010, -0.010], [0.0, 0.030, 0.030])
+    na, nb = multiepoch_pm._unique_nearest_pairs(src['sc'], ref['sc'], 0.15)
+    assert len(na) == 0
+    ia, ib, tier = multiepoch_pm._gated_mincost_pairs(src, ref)
+    assert len(ia) == 2 and (tier == 1).all()
+    assert len(set(ia.tolist())) == len(ia) and len(set(ib.tolist())) == len(ib)
+    assert _pairs(ia, ib) <= {(0, 0), (1, 0), (2, 0), (2, 1), (2, 2)}      # edges of the graph only
+    assert src['sc'][ia].separation(ref['sc'][ib]).to_value(u.mas).max() < 25.5
 
 
 def test_mincost_equals_nearest_on_a_sparse_field():

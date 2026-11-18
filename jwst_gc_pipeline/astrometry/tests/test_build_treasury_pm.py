@@ -2,6 +2,7 @@
 the commit that added them (ac4bf1e4) shipped with none, per PR #140 review.
 """
 import numpy as np
+import pytest
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
 import astropy.units as u
@@ -487,6 +488,31 @@ def test_cli_defaults_and_the_legacy_flags(monkeypatch):
     btp.main()
     assert seen['flux_ratio_cap'] == 0.3 and seen['assign'] == 'mincost' and seen['rescue_k'] == 5.0
     assert seen['rescued_trustworthy'] is True and seen['skip_unverified_refs'] is True
+
+
+def test_build_treats_rescue_k_zero_as_off(tmp_path):
+    """The CLI maps --rescue-inflated-err 0 to off; the library does the same.  Passed on to
+    _load_one as 0 the threshold is 0 x local noise: every positive-flux row that fails the S/N cut
+    is rescued, and the table gains the rescue columns."""
+    pytest.importorskip('flystar')
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    src, ref, n_all, n_comp = _synthetic_two_epoch_field(tmp_path, np.random.default_rng(41))
+    off = btp.build([src], [ref], 'f212n', 2024.7, 2026.7, str(tmp_path / 'off.fits'), verbose=False,
+                    rescue_k=None)
+    zero = btp.build([src], [ref], 'f212n', 2024.7, 2026.7, str(tmp_path / 'zero.fits'), verbose=False,
+                     rescue_k=0)
+    assert 'rescue_k' not in zero.meta
+    assert 'src_err_rescued' not in zero.colnames and 'ref_err_rescued' not in zero.colnames
+    assert zero.colnames == off.colnames and len(zero) == len(off)
+
+
+@pytest.mark.parametrize('bad', [-1.0, -1e-9, float('nan')])
+def test_build_rejects_a_negative_or_nan_rescue_threshold(bad):
+    """The check runs before any catalog is read (the paths here do not exist)."""
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    with pytest.raises(ValueError, match='rescue_k'):
+        btp.build(['no_such_src.fits'], ['no_such_ref.fits'], 'f212n', 2024.7, 2026.7, 'o.fits',
+                  rescue_k=bad)
 
 
 def test_cli_rejects_a_negative_rescue_threshold(monkeypatch):

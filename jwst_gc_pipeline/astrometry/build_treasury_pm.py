@@ -518,6 +518,11 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
          demote_offset_saturated=True, src_isolation='flux', assign=DEFAULT_ASSIGN,
          rescue_k=DEFAULT_RESCUE_K, rescued_trustworthy=False, skip_unverified_refs=False,
          flux_ratio_cap=DEFAULT_FLUX_RATIO_CAP):
+    # Same convention as --rescue-inflated-err: 0 (or None) = rescue off.  Passed on as 0, the
+    # threshold is 0 x local noise: every positive-flux row that fails the S/N cut is rescued.
+    if rescue_k is not None and not rescue_k >= 0:
+        raise ValueError(f'rescue_k must be >= 0 (0 or None turns the rescue off), got {rescue_k!r}')
+    rescue_k = rescue_k or None
     src = load_filter_catalog(src_paths, filt, src_epoch, rescue_k=rescue_k)
     if verbose:
         print(f'  src ({filt}, epoch {src_epoch:.3f}) usable: {src["n"]:,}')
