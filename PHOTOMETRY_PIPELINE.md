@@ -198,6 +198,9 @@ The PSF model is STPSF by default.  The opt-in hybrid PSF (empirical core,
 STPSF wings; `jwst_gc_pipeline.photometry.epsf_hybrid`) is enabled with
 `git clone https://github.com/JWST-GC/epsfs && export PSF_EPSF_CORE_DIR=<checkout>`;
 its catalogs carry the `_hybpsf` filename token and `PSFMODEL`/`EPSFCORE`/`EPSFSHA`.
+A per-frame catalog records only the core applied to its own detector: a detector with no
+core file in `PSF_EPSF_CORE_DIR` is fitted with plain STPSF and reads `PSFMODEL=STPSF` with
+no `EPSFCORE`, even when the same process applied cores to other detectors.
 The satstar fits use the same hybrid for NIRCam: `saturated_star_finding.get_psf`
 applies the core to the frame's grid (the large grid that `get_saturated_stars`
 loads for forced and MIRI sources stays STPSF), so a small saturated core

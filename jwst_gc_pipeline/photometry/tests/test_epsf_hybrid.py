@@ -6,10 +6,14 @@ is a broader, slightly off-centre Gaussian -- the sign of the real STPSF/ePSF
 difference (STPSF too sharp, issue #1007).
 """
 import sys
+import types
 
 import numpy as np
 import pytest
+from astropy.io import fits
 from astropy.nddata import NDData
+from astropy.table import Table
+from astropy.wcs import WCS
 from photutils.psf import GriddedPSFModel
 
 from jwst_gc_pipeline.photometry import epsf_hybrid as eh
@@ -242,6 +246,74 @@ def test_get_psf_model_wiring(tmp_path, monkeypatch, instrument):
     monkeypatch.setenv(eh.EPSF_CORE_DIR_ENV, str(tmp_path))
     grid, _ = ccl.get_psf_model('F480M', '10678', '081', **kw)
     assert grid is not st and grid.meta['epsf_core'].endswith('epsf_core_nrcb5_f480m.fits')
+
+
+def _write_catalog(ccl, basepath, filtername, module):
+    """One per-frame catalog through the real writer; returns the table it wrote."""
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = [10, 10]
+    wcs.wcs.cdelt = [-1.7e-5, 1.7e-5]
+    wcs.wcs.crval = [266.5, -28.7]
+    wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    wcs.wcs.cunit = ['deg', 'deg']
+    im1 = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(np.zeros((4, 4)))])
+    options = types.SimpleNamespace(each_exposure=True, proposal_id='10678', field='081',
+                                    desaturated=False)
+    result = Table({'x_fit': [1.0, 2.0], 'y_fit': [1.0, 2.0], 'flux_fit': [10.0, 20.0]})
+    return ccl.save_photutils_results(
+        result, wcs, f'jw10678001001_02101_00001_{module}_destreak_o001_crf.fits', im1, module,
+        str(basepath), filtername, module, '', '', '_exp00001', '_visit001', '_vgroup02101',
+        options=options, basic_or_iterative='basic', iteration_label='m2')
+
+
+def test_catalog_provenance_is_the_frames_own_detector(tmp_path, monkeypatch):
+    """One process fits a detector with a core and one without; each catalog says so.
+
+    A hybrid run can ship cores for most detectors and leave one on plain STPSF
+    (the 2026-11 sgrb2 F212N rerun does this for NRCA3, whose core is worse than
+    STPSF).  The process then holds a core for one detector and None for the
+    other in ``_APPLIED``, and the writer used to stamp the union on both: the
+    plain-STPSF frame read ``STPSF+EPSFCORE`` with the neighbour's core file.
+    Here NRCA5 has a core and NRCB5 has none (F480M, long-wave per-frame modules).
+    """
+    ccl = pytest.importorskip('jwst_gc_pipeline.photometry.crowdsource_catalogs_long')
+    st = _stpsf_grid()
+    for det in ('nrca5', 'nrcb5'):
+        (tmp_path / f'nircam_{det}_f480m_fovp101_samp2_npsf16.fits').write_text('fake')
+    monkeypatch.setattr(ccl, 'load_stpsf_grid', lambda f: st)
+    monkeypatch.setattr(eh, '_APPLIED', {})
+    eh.write_epsf_core(tmp_path / eh.epsf_core_filename('NRCA5', 'F480M'), _core(), 'NRCA5', 'F480M')
+    monkeypatch.setenv(eh.EPSF_CORE_DIR_ENV, str(tmp_path))
+    for module in ('nrcalong', 'nrcblong'):
+        ccl.get_psf_model('F480M', '10678', '081', module=module, use_webbpsf=True, use_grid=True,
+                          instrument='NIRCAM', psf_cache_dir=str(tmp_path))
+    assert set(eh._APPLIED) == {('NRCA5', 'F480M'), ('NRCB5', 'F480M')}
+    assert eh._APPLIED[('NRCB5', 'F480M')] is None
+
+    out = tmp_path / 'out'
+    (out / 'F480M').mkdir(parents=True)
+    with_core = _write_catalog(ccl, out, 'F480M', 'nrcalong').meta
+    assert with_core['PSFMODEL'] == 'STPSF+EPSFCORE'
+    assert with_core['EPSFCORE'] == 'epsf_core_nrca5_f480m.fits'
+    without_core = _write_catalog(ccl, out, 'F480M', 'nrcblong').meta
+    assert without_core['PSFMODEL'] == 'STPSF'
+    assert not {'EPSFCORE', 'EPSFSHA', 'EPSFPROG', 'EPSFR0', 'EPSFR1', 'EPSFSHFT'} & set(without_core)
+    assert without_core['EPSFDIR'] == str(tmp_path)    # the configuration is still recorded
+
+
+@pytest.mark.parametrize('module, filtername, expected', [
+    ('nrca3', 'F212N', 'NRCA3'),         # per-frame SW: the detector itself
+    ('nrcalong', 'F480M', 'NRCA5'),      # per-frame LW: the exposure header's NRCALONG is NRCA5
+    ('nrcblong', 'F480M', 'NRCB5'),
+    ('nrcb', 'F212N', 'NRCB1'),          # module-level pass: get_psf_model builds one detector's grid
+    ('nrcb', 'F480M', 'NRCB5'),
+    ('merged', 'F212N', None),           # all-detectors path: every detector applied for the filter
+    ('', 'F212N', None),
+    ('mirimage', 'F770W', 'MIRIM'),
+])
+def test_psf_provenance_detector_is_the_key_get_psf_model_applies(module, filtername, expected):
+    ccl = pytest.importorskip('jwst_gc_pipeline.photometry.crowdsource_catalogs_long')
+    assert ccl._psf_provenance_detector(module, filtername) == expected
 
 
 def test_windowed_core_evaluation_equals_the_full_stamp(monkeypatch):

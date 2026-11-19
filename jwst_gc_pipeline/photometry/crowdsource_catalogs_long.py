@@ -2428,7 +2428,11 @@ def save_photutils_results(result, ww, filename,
     result.meta['proposal_id'] = options.proposal_id
     # Which PSF model fitted this catalog (STPSF, or the opt-in ePSF-core hybrid):
     # the two differ in flux by 0.4-2.4%, so a catalog must say (epsf_hybrid.py).
-    result.meta.update(psf_provenance_meta(filtername))
+    # Only this frame's own detector counts: a process fits several, and a
+    # detector with no core file (plain STPSF) must not read as hybrid because
+    # a neighbour's core was applied.
+    result.meta.update(psf_provenance_meta(
+        filtername, detector=_psf_provenance_detector(module, filtername)))
 
     if 'RAOFFSET' in im1[0].header:
         result.meta['RAOFFSET'] = im1[0].header['RAOFFSET']
@@ -2618,6 +2622,19 @@ def stpsf_detector_for_module(module, filtername, instrument):
         # SW physical detectors (nrca1..nrcb4) map directly.
         return module.upper()
     return None  # all_detectors path (e.g. module='merged')
+
+
+def _psf_provenance_detector(module, filtername):
+    """The stpsf detector whose PSF fitted a frame written with ``module``.
+
+    The detector :func:`get_psf_model` gives ``maybe_apply_epsf_core``, which is
+    what ``epsf_hybrid._APPLIED`` is keyed on.  None on the all-detectors path
+    (``module='merged'``): that catalog records every detector applied for the
+    filter, as before.  ``saturated_star_finding._psf_provenance_detector`` does
+    the same for a satstar frame from its header.
+    """
+    return stpsf_detector_for_module(str(module or ''), filtername,
+                                     _instrument_from_filter(filtername))
 
 
 def get_psf_model(filtername, proposal_id, field,
