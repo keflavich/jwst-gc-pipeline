@@ -4,8 +4,8 @@ The next quantitative F480M map should start from the no-destreak exposure linea
 
 ## Evidence
 
-- On 2026-11-20, the survey recipe selected 66 hybrid-m7 F480M residual tiles. Their `*_perframe_inputs.json` ledgers named 784 exposure records, all `destreak_…_crf`. None of those exposure stems had a matching `align_…_crf` next to it in the production directory. The survey FITS coadd carries a primary brightness image and a WHT extension. The selector describes the currently available inputs, and the existing FITS coadd has no manifest that identifies the inputs used for its build. The current pipeline policy already turns off destreaking for Treasury F480M. [Policy and original rerun](https://github.com/keflavich/jwst-gc-pipeline/pull/1271)
-- A paired injection into the six NRCBLONG calibrated exposures of each of o065, o072, and o079 measured the transfer of sky structure. The synthetic sky had a peak amplitude of 0.6 MJy/sr. The row filter was applied to both the injected and uninjected calibration and the difference was reprojected with the same aligned GWCS, bilinear interpolation, DQ mask and equal exposure weights. Scoring used the central 768 × 768 pixels where at least three exposures contributed. The no-destreak injection on this same grid defines unit gain. Contrast gain is the slope of the recovered image against the injected template with a free intercept. The experiment held star fitting and coverage fixed. [Earlier controlled three-observation rerun](https://github.com/keflavich/jwst-gc-pipeline/issues/1268#issuecomment-6604672711)
+- On 2026-11-20, the survey recipe selected 66 hybrid-m7 F480M residual tiles. Its exclusion list contains o138 and o139, each with 12 ledger records. Their `*_perframe_inputs.json` ledgers named 784 exposure records, all `destreak_…_crf`. None of those exposure stems had a matching `align_…_crf` next to it in the production directory. The survey FITS coadd carries a primary brightness image and a WHT extension. The selector describes the currently available inputs, and the existing FITS coadd has no manifest that identifies the inputs used for its build. The current pipeline policy already turns off destreaking for Treasury F480M. [Lineage audit](../evidence/f480m_diffuse_pilot/README.md#lineage-audit) · [Policy and original rerun](https://github.com/keflavich/jwst-gc-pipeline/pull/1271)
+- A paired injection into the six NRCBLONG calibrated exposures of each of o065, o072, and o079 measured the transfer of sky structure. The synthetic sky had a peak amplitude of 0.6 MJy/sr. The row filter was applied to both the injected and uninjected calibration and the difference was reprojected with the same aligned GWCS, bilinear interpolation, DQ mask and equal exposure weights. Scoring used the central 768 × 768 pixels where at least three exposures contributed. The no-destreak injection on this same grid defines unit gain. Contrast gain is the slope of the recovered image against the injected template with a free intercept. The experiment used fixed coverage and did no stellar fitting. [Injection code and per-observation results](../evidence/f480m_diffuse_pilot/README.md#paired-injections)
 
 | Injected structure | 256-row filter | 2048-row filter |
 | --- | ---: | ---: |
@@ -26,7 +26,7 @@ A separate test used the archived F480M image mosaics from the original rerun, b
 | No destreak | 0.186 | 0.097 | MJy/sr |
 | Joint row correction prototype | 0.179 | 0.148 | MJy/sr |
 
-The no-destreak result supports testing additive matching on rebuilt residuals. For the old destreak products, a tile constant cannot recover the lost row-aligned sky signal. The archival production products varied in age. [Overlap rerun and caveats](https://github.com/keflavich/jwst-gc-pipeline/pull/1271)
+The no-destreak result supports testing additive matching on rebuilt residuals. For the old destreak products, a tile constant cannot recover the lost row-aligned sky signal. The joint row prototype estimated detector-row offsets per amplifier and exposure from same-module overlap differences before mosaicking. The archival production products varied in age. [Held-out overlap inputs, code, and predictions](../evidence/f480m_diffuse_pilot/README.md#held-out-overlap-edges) · [Original rerun and caveats](https://github.com/keflavich/jwst-gc-pipeline/pull/1271)
 
 ## Proposed build
 
@@ -41,3 +41,5 @@ The first end-to-end check should repeat the paired injections with star fitting
 
 - Stage 15 can report the transfer and seam metrics beside its photometry-tool panels. [QA methods](https://github.com/JWST-GC/data-qa/blob/main/docs/qa_methods.md#stage-15--residual-maps-by-photometry-tool)
 - The Treasury HiPS builder can render from the approved FITS and manifest. [Survey mosaic viewer builder](https://github.com/keflavich/jwst_scripts/blob/main/scripts/gc_treasury_mosaic_rgb_hips.py)
+
+*Prepared by GPT-6.2 Sol (Codex).*

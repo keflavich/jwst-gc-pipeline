@@ -1,0 +1,1538 @@
+{
+  "selection_recipe": "/orange/adamginsburg/jwst/gc-treasury/mosaics/recipe/make_residual_mosaics.py",
+  "tile_lineage": {
+    "o040": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o040_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o040_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00001_nrcalong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00001_nrcblong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00002_nrcalong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00002_nrcblong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00003_nrcalong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00003_nrcblong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00004_nrcalong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00004_nrcblong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00005_nrcalong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00005_nrcblong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00006_nrcalong_destreak_o040_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678040001_02101_00006_nrcblong_destreak_o040_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o041": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o041_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o041_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00001_nrcalong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00001_nrcblong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00002_nrcalong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00002_nrcblong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00003_nrcalong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00003_nrcblong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00004_nrcalong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00004_nrcblong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00005_nrcalong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00005_nrcblong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00006_nrcalong_destreak_o041_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678041001_02101_00006_nrcblong_destreak_o041_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o042": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o042_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o042_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00001_nrcalong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00001_nrcblong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00002_nrcalong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00002_nrcblong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00003_nrcalong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00003_nrcblong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00004_nrcalong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00004_nrcblong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00005_nrcalong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00005_nrcblong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00006_nrcalong_destreak_o042_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678042001_02101_00006_nrcblong_destreak_o042_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o043": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o043_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o043_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00001_nrcalong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00001_nrcblong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00002_nrcalong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00002_nrcblong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00003_nrcalong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00003_nrcblong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00004_nrcalong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00004_nrcblong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00005_nrcalong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00005_nrcblong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00006_nrcalong_destreak_o043_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678043001_02101_00006_nrcblong_destreak_o043_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o044": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o044_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o044_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00001_nrcalong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00001_nrcblong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00002_nrcalong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00002_nrcblong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00003_nrcalong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00003_nrcblong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00004_nrcalong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00004_nrcblong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00005_nrcalong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00005_nrcblong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00006_nrcalong_destreak_o044_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678044001_02101_00006_nrcblong_destreak_o044_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o045": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o045_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o045_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00001_nrcalong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00001_nrcblong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00002_nrcalong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00002_nrcblong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00003_nrcalong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00003_nrcblong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00004_nrcalong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00004_nrcblong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00005_nrcalong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00005_nrcblong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00006_nrcalong_destreak_o045_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678045001_02101_00006_nrcblong_destreak_o045_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o046": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o046_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o046_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00001_nrcalong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00001_nrcblong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00002_nrcalong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00002_nrcblong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00003_nrcalong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00003_nrcblong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00004_nrcalong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00004_nrcblong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00005_nrcalong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00005_nrcblong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00006_nrcalong_destreak_o046_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678046001_02101_00006_nrcblong_destreak_o046_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o060": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o060_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o060_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00001_nrcalong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00001_nrcblong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00002_nrcalong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00002_nrcblong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00003_nrcalong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00003_nrcblong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00004_nrcalong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00004_nrcblong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00005_nrcalong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00005_nrcblong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00006_nrcalong_destreak_o060_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678060001_02101_00006_nrcblong_destreak_o060_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o061": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o061_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o061_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00001_nrcalong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00001_nrcblong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00002_nrcalong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00002_nrcblong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00003_nrcalong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00003_nrcblong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00004_nrcalong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00004_nrcblong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00005_nrcalong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00005_nrcblong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00006_nrcalong_destreak_o061_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678061001_02101_00006_nrcblong_destreak_o061_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o063": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o063_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o063_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00001_nrcalong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00001_nrcblong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00002_nrcalong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00002_nrcblong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00003_nrcalong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00003_nrcblong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00004_nrcalong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00004_nrcblong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00005_nrcalong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00005_nrcblong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00006_nrcalong_destreak_o063_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678063001_02101_00006_nrcblong_destreak_o063_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o064": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o064_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o064_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00001_nrcalong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00001_nrcblong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00002_nrcalong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00002_nrcblong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00003_nrcalong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00003_nrcblong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00004_nrcalong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00004_nrcblong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00005_nrcalong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00005_nrcblong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00006_nrcalong_destreak_o064_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678064001_02101_00006_nrcblong_destreak_o064_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o065": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o065_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o065_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00001_nrcalong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00001_nrcblong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00002_nrcalong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00002_nrcblong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00003_nrcalong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00003_nrcblong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00004_nrcalong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00004_nrcblong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00005_nrcalong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00005_nrcblong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00006_nrcalong_destreak_o065_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678065001_02101_00006_nrcblong_destreak_o065_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o066": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o066_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o066_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00001_nrcalong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00001_nrcblong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00002_nrcalong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00002_nrcblong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00003_nrcalong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00003_nrcblong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00004_nrcalong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00004_nrcblong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00005_nrcalong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00005_nrcblong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00006_nrcalong_destreak_o066_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678066001_02101_00006_nrcblong_destreak_o066_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o067": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o067_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o067_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00001_nrcalong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00001_nrcblong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00002_nrcalong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00002_nrcblong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00003_nrcalong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00003_nrcblong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00004_nrcalong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00004_nrcblong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00005_nrcalong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00005_nrcblong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00006_nrcalong_destreak_o067_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678067001_02101_00006_nrcblong_destreak_o067_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o068": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o068_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o068_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00001_nrcalong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00001_nrcblong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00002_nrcalong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00002_nrcblong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00003_nrcalong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00003_nrcblong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00004_nrcalong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00004_nrcblong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00005_nrcalong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00005_nrcblong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00006_nrcalong_destreak_o068_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678068001_02101_00006_nrcblong_destreak_o068_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o069": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o069_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o069_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00001_nrcalong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00001_nrcblong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00002_nrcalong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00002_nrcblong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00003_nrcalong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00003_nrcblong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00004_nrcalong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00004_nrcblong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00005_nrcalong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00005_nrcblong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00006_nrcalong_destreak_o069_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678069001_02101_00006_nrcblong_destreak_o069_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o070": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o070_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o070_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00001_nrcalong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00001_nrcblong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00002_nrcalong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00002_nrcblong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00003_nrcalong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00003_nrcblong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00004_nrcalong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00004_nrcblong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00005_nrcalong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00005_nrcblong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00006_nrcalong_destreak_o070_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678070001_02101_00006_nrcblong_destreak_o070_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o071": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o071_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o071_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00001_nrcalong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00001_nrcblong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00002_nrcalong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00002_nrcblong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00003_nrcalong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00003_nrcblong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00004_nrcalong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00004_nrcblong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00005_nrcalong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00005_nrcblong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00006_nrcalong_destreak_o071_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678071001_02101_00006_nrcblong_destreak_o071_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o072": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o072_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o072_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00001_nrcalong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00001_nrcblong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00002_nrcalong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00002_nrcblong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00003_nrcalong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00003_nrcblong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00004_nrcalong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00004_nrcblong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00005_nrcalong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00005_nrcblong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00006_nrcalong_destreak_o072_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678072001_02101_00006_nrcblong_destreak_o072_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o073": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o073_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o073_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00001_nrcalong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00001_nrcblong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00002_nrcalong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00002_nrcblong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00003_nrcalong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00003_nrcblong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00004_nrcalong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00004_nrcblong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00005_nrcalong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00005_nrcblong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00006_nrcalong_destreak_o073_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678073001_02101_00006_nrcblong_destreak_o073_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o074": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o074_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o074_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00001_nrcalong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00001_nrcblong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00002_nrcalong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00002_nrcblong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00003_nrcalong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00003_nrcblong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00004_nrcalong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00004_nrcblong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00005_nrcalong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00005_nrcblong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00006_nrcalong_destreak_o074_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678074001_02101_00006_nrcblong_destreak_o074_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o075": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o075_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o075_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00001_nrcalong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00001_nrcblong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00002_nrcalong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00002_nrcblong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00003_nrcalong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00003_nrcblong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00004_nrcalong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00004_nrcblong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00005_nrcalong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00005_nrcblong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00006_nrcalong_destreak_o075_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678075001_02101_00006_nrcblong_destreak_o075_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o076": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o076_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o076_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00001_nrcalong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00001_nrcblong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00002_nrcalong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00002_nrcblong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00003_nrcalong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00003_nrcblong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00004_nrcalong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00004_nrcblong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00005_nrcalong_destreak_o076_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678076001_02101_00005_nrcblong_destreak_o076_crf.fits"
+      ],
+      "counts": {
+        "destreak": 10
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o077": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o077_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o077_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00001_nrcalong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00001_nrcblong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00002_nrcalong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00002_nrcblong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00003_nrcalong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00003_nrcblong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00004_nrcalong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00004_nrcblong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00005_nrcalong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00005_nrcblong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00006_nrcalong_destreak_o077_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678077001_02101_00006_nrcblong_destreak_o077_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o078": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o078_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o078_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00001_nrcalong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00001_nrcblong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00002_nrcalong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00002_nrcblong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00003_nrcalong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00003_nrcblong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00004_nrcalong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00004_nrcblong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00005_nrcalong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00005_nrcblong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00006_nrcalong_destreak_o078_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678078001_02101_00006_nrcblong_destreak_o078_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o079": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o079_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o079_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00001_nrcalong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00001_nrcblong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00002_nrcalong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00002_nrcblong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00003_nrcalong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00003_nrcblong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00004_nrcalong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00004_nrcblong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00005_nrcalong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00005_nrcblong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00006_nrcalong_destreak_o079_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678079001_02101_00006_nrcblong_destreak_o079_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o080": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o080_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o080_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00001_nrcalong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00001_nrcblong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00002_nrcalong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00002_nrcblong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00003_nrcalong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00003_nrcblong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00004_nrcalong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00004_nrcblong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00005_nrcalong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00005_nrcblong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00006_nrcalong_destreak_o080_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678080001_02101_00006_nrcblong_destreak_o080_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o081": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o081_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o081_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00001_nrcalong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00001_nrcblong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00002_nrcalong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00002_nrcblong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00003_nrcalong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00003_nrcblong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00004_nrcalong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00004_nrcblong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00005_nrcalong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00005_nrcblong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00006_nrcalong_destreak_o081_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678081001_02101_00006_nrcblong_destreak_o081_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o082": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o082_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o082_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00001_nrcalong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00001_nrcblong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00002_nrcalong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00002_nrcblong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00003_nrcalong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00003_nrcblong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00004_nrcalong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00004_nrcblong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00005_nrcalong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00005_nrcblong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00006_nrcalong_destreak_o082_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678082001_02101_00006_nrcblong_destreak_o082_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o083": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o083_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o083_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00001_nrcalong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00001_nrcblong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00002_nrcalong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00002_nrcblong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00003_nrcalong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00003_nrcblong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00004_nrcalong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00004_nrcblong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00005_nrcalong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00005_nrcblong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00006_nrcalong_destreak_o083_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678083001_02101_00006_nrcblong_destreak_o083_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o084": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o084_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o084_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00001_nrcalong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00001_nrcblong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00002_nrcalong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00002_nrcblong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00003_nrcalong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00003_nrcblong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00004_nrcalong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00004_nrcblong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00005_nrcalong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00005_nrcblong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00006_nrcalong_destreak_o084_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678084001_02101_00006_nrcblong_destreak_o084_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o085": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o085_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o085_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00001_nrcalong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00001_nrcblong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00002_nrcalong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00002_nrcblong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00003_nrcalong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00003_nrcblong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00004_nrcalong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00004_nrcblong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00005_nrcalong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00005_nrcblong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00006_nrcalong_destreak_o085_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678085001_02101_00006_nrcblong_destreak_o085_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o086": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o086_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o086_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00001_nrcalong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00001_nrcblong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00002_nrcalong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00002_nrcblong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00003_nrcalong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00003_nrcblong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00004_nrcalong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00004_nrcblong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00005_nrcalong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00005_nrcblong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00006_nrcalong_destreak_o086_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678086001_02101_00006_nrcblong_destreak_o086_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o087": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o087_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o087_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00001_nrcalong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00001_nrcblong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00002_nrcalong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00002_nrcblong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00003_nrcalong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00003_nrcblong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00004_nrcalong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00004_nrcblong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00005_nrcalong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00005_nrcblong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00006_nrcalong_destreak_o087_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678087001_02101_00006_nrcblong_destreak_o087_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o098": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o098_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o098_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00001_nrcalong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00001_nrcblong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00002_nrcalong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00002_nrcblong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00003_nrcalong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00003_nrcblong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00004_nrcalong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00004_nrcblong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00005_nrcalong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00005_nrcblong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00006_nrcalong_destreak_o098_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678098001_02101_00006_nrcblong_destreak_o098_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o100": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o100_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o100_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00001_nrcalong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00001_nrcblong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00002_nrcalong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00002_nrcblong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00003_nrcalong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00003_nrcblong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00004_nrcalong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00004_nrcblong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00005_nrcalong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00005_nrcblong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00006_nrcalong_destreak_o100_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678100001_02101_00006_nrcblong_destreak_o100_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o102": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o102_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o102_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00001_nrcalong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00001_nrcblong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00002_nrcalong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00002_nrcblong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00003_nrcalong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00003_nrcblong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00004_nrcalong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00004_nrcblong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00005_nrcalong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00005_nrcblong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00006_nrcalong_destreak_o102_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678102001_02101_00006_nrcblong_destreak_o102_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o105": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o105_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o105_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00001_nrcalong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00001_nrcblong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00002_nrcalong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00002_nrcblong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00003_nrcalong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00003_nrcblong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00004_nrcalong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00004_nrcblong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00005_nrcalong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00005_nrcblong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00006_nrcalong_destreak_o105_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678105001_02101_00006_nrcblong_destreak_o105_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o106": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o106_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o106_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00001_nrcalong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00001_nrcblong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00002_nrcalong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00002_nrcblong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00003_nrcalong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00003_nrcblong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00004_nrcalong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00004_nrcblong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00005_nrcalong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00005_nrcblong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00006_nrcalong_destreak_o106_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678106001_02101_00006_nrcblong_destreak_o106_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o107": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o107_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o107_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00001_nrcalong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00001_nrcblong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00002_nrcalong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00002_nrcblong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00003_nrcalong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00003_nrcblong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00004_nrcalong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00004_nrcblong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00005_nrcalong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00005_nrcblong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00006_nrcalong_destreak_o107_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678107001_02101_00006_nrcblong_destreak_o107_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o108": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o108_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o108_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00001_nrcalong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00001_nrcblong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00002_nrcalong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00002_nrcblong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00003_nrcalong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00003_nrcblong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00004_nrcalong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00004_nrcblong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00005_nrcalong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00005_nrcblong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00006_nrcalong_destreak_o108_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678108001_02101_00006_nrcblong_destreak_o108_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o109": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o109_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o109_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00001_nrcalong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00001_nrcblong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00002_nrcalong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00002_nrcblong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00003_nrcalong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00003_nrcblong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00004_nrcalong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00004_nrcblong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00005_nrcalong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00005_nrcblong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00006_nrcalong_destreak_o109_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678109001_02101_00006_nrcblong_destreak_o109_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o111": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o111_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o111_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00001_nrcalong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00001_nrcblong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00002_nrcalong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00002_nrcblong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00003_nrcalong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00003_nrcblong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00004_nrcalong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00004_nrcblong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00005_nrcalong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00005_nrcblong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00006_nrcalong_destreak_o111_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678111001_02101_00006_nrcblong_destreak_o111_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o112": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o112_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o112_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00001_nrcalong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00001_nrcblong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00002_nrcalong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00002_nrcblong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00003_nrcalong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00003_nrcblong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00004_nrcalong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00004_nrcblong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00005_nrcalong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00005_nrcblong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00006_nrcalong_destreak_o112_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678112001_02101_00006_nrcblong_destreak_o112_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o113": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o113_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o113_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678113001_02101_00001_nrcalong_destreak_o113_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678113001_02101_00001_nrcblong_destreak_o113_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678113001_02101_00002_nrcalong_destreak_o113_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678113001_02101_00002_nrcblong_destreak_o113_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678113001_02101_00003_nrcalong_destreak_o113_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678113001_02101_00003_nrcblong_destreak_o113_crf.fits"
+      ],
+      "counts": {
+        "destreak": 6
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o114": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o114_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o114_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00001_nrcalong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00001_nrcblong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00002_nrcalong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00002_nrcblong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00003_nrcalong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00003_nrcblong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00004_nrcalong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00004_nrcblong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00005_nrcalong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00005_nrcblong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00006_nrcalong_destreak_o114_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678114001_02101_00006_nrcblong_destreak_o114_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o116": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o116_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o116_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00001_nrcalong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00001_nrcblong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00002_nrcalong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00002_nrcblong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00003_nrcalong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00003_nrcblong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00004_nrcalong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00004_nrcblong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00005_nrcalong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00005_nrcblong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00006_nrcalong_destreak_o116_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678116001_02101_00006_nrcblong_destreak_o116_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o117": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o117_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o117_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00001_nrcalong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00001_nrcblong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00002_nrcalong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00002_nrcblong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00003_nrcalong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00003_nrcblong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00004_nrcalong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00004_nrcblong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00005_nrcalong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00005_nrcblong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00006_nrcalong_destreak_o117_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678117001_02101_00006_nrcblong_destreak_o117_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o118": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o118_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o118_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00001_nrcalong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00001_nrcblong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00002_nrcalong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00002_nrcblong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00003_nrcalong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00003_nrcblong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00004_nrcalong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00004_nrcblong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00005_nrcalong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00005_nrcblong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00006_nrcalong_destreak_o118_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678118001_02101_00006_nrcblong_destreak_o118_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o120": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o120_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o120_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00001_nrcalong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00001_nrcblong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00002_nrcalong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00002_nrcblong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00003_nrcalong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00003_nrcblong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00004_nrcalong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00004_nrcblong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00005_nrcalong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00005_nrcblong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00006_nrcalong_destreak_o120_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678120001_02101_00006_nrcblong_destreak_o120_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o121": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o121_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o121_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00001_nrcalong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00001_nrcblong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00002_nrcalong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00002_nrcblong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00003_nrcalong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00003_nrcblong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00004_nrcalong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00004_nrcblong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00005_nrcalong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00005_nrcblong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00006_nrcalong_destreak_o121_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678121001_02101_00006_nrcblong_destreak_o121_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o122": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o122_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o122_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00001_nrcalong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00001_nrcblong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00002_nrcalong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00002_nrcblong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00003_nrcalong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00003_nrcblong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00004_nrcalong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00004_nrcblong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00005_nrcalong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00005_nrcblong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00006_nrcalong_destreak_o122_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678122001_02101_00006_nrcblong_destreak_o122_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o123": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o123_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o123_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00001_nrcalong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00001_nrcblong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00002_nrcalong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00002_nrcblong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00003_nrcalong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00003_nrcblong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00004_nrcalong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00004_nrcblong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00005_nrcalong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00005_nrcblong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00006_nrcalong_destreak_o123_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678123001_02101_00006_nrcblong_destreak_o123_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o124": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o124_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o124_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00001_nrcalong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00001_nrcblong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00002_nrcalong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00002_nrcblong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00003_nrcalong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00003_nrcblong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00004_nrcalong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00004_nrcblong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00005_nrcalong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00005_nrcblong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00006_nrcalong_destreak_o124_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678124001_02101_00006_nrcblong_destreak_o124_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o125": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o125_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o125_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00001_nrcalong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00001_nrcblong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00002_nrcalong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00002_nrcblong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00003_nrcalong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00003_nrcblong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00004_nrcalong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00004_nrcblong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00005_nrcalong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00005_nrcblong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00006_nrcalong_destreak_o125_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678125001_02101_00006_nrcblong_destreak_o125_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o126": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o126_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o126_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00001_nrcalong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00001_nrcblong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00002_nrcalong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00002_nrcblong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00003_nrcalong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00003_nrcblong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00004_nrcalong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00004_nrcblong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00005_nrcalong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00005_nrcblong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00006_nrcalong_destreak_o126_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678126001_02101_00006_nrcblong_destreak_o126_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o127": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o127_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o127_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00001_nrcalong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00001_nrcblong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00002_nrcalong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00002_nrcblong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00003_nrcalong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00003_nrcblong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00004_nrcalong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00004_nrcblong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00005_nrcalong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00005_nrcblong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00006_nrcalong_destreak_o127_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678127001_02101_00006_nrcblong_destreak_o127_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o128": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o128_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o128_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00001_nrcalong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00001_nrcblong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00002_nrcalong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00002_nrcblong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00003_nrcalong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00003_nrcblong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00004_nrcalong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00004_nrcblong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00005_nrcalong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00005_nrcblong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00006_nrcalong_destreak_o128_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678128001_02101_00006_nrcblong_destreak_o128_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o129": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o129_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o129_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00001_nrcalong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00001_nrcblong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00002_nrcalong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00002_nrcblong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00003_nrcalong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00003_nrcblong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00004_nrcalong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00004_nrcblong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00005_nrcalong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00005_nrcblong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00006_nrcalong_destreak_o129_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678129001_02101_00006_nrcblong_destreak_o129_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o130": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o130_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o130_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00001_nrcalong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00001_nrcblong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00002_nrcalong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00002_nrcblong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00003_nrcalong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00003_nrcblong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00004_nrcalong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00004_nrcblong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00005_nrcalong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00005_nrcblong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00006_nrcalong_destreak_o130_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678130001_02101_00006_nrcblong_destreak_o130_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o131": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o131_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o131_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00001_nrcalong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00001_nrcblong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00002_nrcalong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00002_nrcblong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00003_nrcalong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00003_nrcblong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00004_nrcalong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00004_nrcblong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00005_nrcalong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00005_nrcblong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00006_nrcalong_destreak_o131_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678131001_02101_00006_nrcblong_destreak_o131_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o132": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o132_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o132_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00001_nrcalong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00001_nrcblong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00002_nrcalong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00002_nrcblong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00003_nrcalong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00003_nrcblong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00004_nrcalong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00004_nrcblong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00005_nrcalong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00005_nrcblong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00006_nrcalong_destreak_o132_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678132001_02101_00006_nrcblong_destreak_o132_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o133": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o133_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o133_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00001_nrcalong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00001_nrcblong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00002_nrcalong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00002_nrcblong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00003_nrcalong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00003_nrcblong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00004_nrcalong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00004_nrcblong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00005_nrcalong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00005_nrcblong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00006_nrcalong_destreak_o133_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678133001_02101_00006_nrcblong_destreak_o133_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o134": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o134_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o134_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00001_nrcalong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00001_nrcblong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00002_nrcalong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00002_nrcblong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00003_nrcalong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00003_nrcblong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00004_nrcalong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00004_nrcblong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00005_nrcalong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00005_nrcblong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00006_nrcalong_destreak_o134_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678134001_02101_00006_nrcblong_destreak_o134_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o135": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o135_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o135_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00001_nrcalong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00001_nrcblong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00002_nrcalong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00002_nrcblong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00003_nrcalong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00003_nrcblong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00004_nrcalong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00004_nrcblong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00005_nrcalong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00005_nrcblong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00006_nrcalong_destreak_o135_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678135001_02101_00006_nrcblong_destreak_o135_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    },
+    "o137": {
+      "image": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o137_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_i2d.fits",
+      "ledger": "/orange/adamginsburg/jwst/gc-treasury/F480M/pipeline/jw10678-o137_t001_nircam_clear-f480m-merged_resbgsub_hybpsf_m7_daophot_basic_mergedcat_residual_perframe_inputs.json",
+      "frames": [
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00001_nrcalong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00001_nrcblong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00002_nrcalong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00002_nrcblong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00003_nrcalong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00003_nrcblong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00004_nrcalong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00004_nrcblong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00005_nrcalong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00005_nrcblong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00006_nrcalong_destreak_o137_crf.fits",
+        "/orange/adamginsburg/jwst/gc-treasury//F480M/pipeline/jw10678137001_02101_00006_nrcblong_destreak_o137_crf.fits"
+      ],
+      "counts": {
+        "destreak": 12
+      },
+      "lineage": "destreak",
+      "ledger_names_image": true
+    }
+  },
+  "archived_overlap": {
+    "prod": {
+      "n": 129,
+      "median_abs": 0.5882945620834112,
+      "p90_abs": 2.749740714178974,
+      "above_one": 48,
+      "within_block_mad": 0.8949760999466699
+    },
+    "woff": {
+      "n": 129,
+      "median_abs": 0.16630823853294707,
+      "p90_abs": 0.345990412605369,
+      "above_one": 2,
+      "within_block_mad": 0.743665373397911
+    },
+    "wjoint": {
+      "n": 129,
+      "median_abs": 0.17106168875739058,
+      "p90_abs": 0.4122962570085662,
+      "above_one": 3,
+      "within_block_mad": 0.752395175153633
+    }
+  }
+}
