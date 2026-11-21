@@ -1,0 +1,128 @@
+{
+  "obs": "072",
+  "cal_paths": [
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00001_nrcblong_cal.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00002_nrcblong_cal.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00003_nrcblong_cal.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00004_nrcblong_cal.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00005_nrcblong_cal.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00006_nrcblong_cal.fits"
+  ],
+  "crf_wcs_paths": [
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00001_nrcblong_align_o072_crf.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00002_nrcblong_align_o072_crf.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00003_nrcblong_align_o072_crf.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00004_nrcblong_align_o072_crf.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00005_nrcblong_align_o072_crf.fits",
+    "/blue/adamginsburg/adamginsburg/tmp/destreakpilot/woff/gc-treasury/F480M/pipeline/jw10678072001_02101_00006_nrcblong_align_o072_crf.fits"
+  ],
+  "max_wcs_interpolation_error_px": 0.003143524973612833,
+  "common_coverage_fraction": 0.9635687934027778,
+  "peak_mjysr": 0.6,
+  "metrics": {
+    "filament_8px_parallel": {
+      "256": {
+        "contrast_gain": 0.43392723545994105,
+        "error_rms_mjysr": 0.030222970244045487,
+        "aperture_flux_ratio": 0.6753364963041936
+      },
+      "2048": {
+        "contrast_gain": 0.12325249880503693,
+        "error_rms_mjysr": 0.040752688592713936,
+        "aperture_flux_ratio": 0.11589386993901622
+      }
+    },
+    "filament_8px_perpendicular": {
+      "256": {
+        "contrast_gain": 1.001072209478455,
+        "error_rms_mjysr": 0.013088519943416284,
+        "aperture_flux_ratio": 1.0059900799558328
+      },
+      "2048": {
+        "contrast_gain": 0.9919449615934309,
+        "error_rms_mjysr": 0.0138707536505326,
+        "aperture_flux_ratio": 0.9693312308002275
+      }
+    },
+    "filament_32px_parallel": {
+      "256": {
+        "contrast_gain": 0.5826042519288328,
+        "error_rms_mjysr": 0.045014251849055525,
+        "aperture_flux_ratio": 0.7029653301628731
+      },
+      "2048": {
+        "contrast_gain": 0.11180509213436172,
+        "error_rms_mjysr": 0.08112337988009581,
+        "aperture_flux_ratio": 0.18251886340536547
+      }
+    },
+    "filament_32px_perpendicular": {
+      "256": {
+        "contrast_gain": 1.0018929205711966,
+        "error_rms_mjysr": 0.02808096083926956,
+        "aperture_flux_ratio": 1.0047916775934778
+      },
+      "2048": {
+        "contrast_gain": 0.9783986854691031,
+        "error_rms_mjysr": 0.03347849794807603,
+        "aperture_flux_ratio": 0.9200383106749129
+      }
+    },
+    "filament_128px_parallel": {
+      "256": {
+        "contrast_gain": 0.7961119157913646,
+        "error_rms_mjysr": 0.048132388821951075,
+        "aperture_flux_ratio": 0.9292580712084887
+      },
+      "2048": {
+        "contrast_gain": 0.11357772193144092,
+        "error_rms_mjysr": 0.152882507641836,
+        "aperture_flux_ratio": 0.3279184923386999
+      }
+    },
+    "filament_128px_perpendicular": {
+      "256": {
+        "contrast_gain": 0.9987436434865402,
+        "error_rms_mjysr": 0.04607813250999629,
+        "aperture_flux_ratio": 0.9861329413710971
+      },
+      "2048": {
+        "contrast_gain": 0.9888052338891389,
+        "error_rms_mjysr": 0.0704089671753113,
+        "aperture_flux_ratio": 0.9028909317291897
+      }
+    },
+    "knot_30px": {
+      "256": {
+        "contrast_gain": 0.9882618450783469,
+        "error_rms_mjysr": 0.0012037762746424205,
+        "aperture_flux_ratio": 0.9787165098404408
+      },
+      "2048": {
+        "contrast_gain": 0.9868966640687903,
+        "error_rms_mjysr": 0.0012809820179978924,
+        "aperture_flux_ratio": 0.9763689531725671
+      }
+    },
+    "wave_512px_parallel": {
+      "256": {
+        "contrast_gain": 0.8168104350737907,
+        "error_rms_mjysr": 0.11211213071886453
+      },
+      "2048": {
+        "contrast_gain": 0.03622313139425952,
+        "error_rms_mjysr": 0.41494343429403446
+      }
+    },
+    "wave_512px_perpendicular": {
+      "256": {
+        "contrast_gain": 1.0054015078227112,
+        "error_rms_mjysr": 0.12390691238399772
+      },
+      "2048": {
+        "contrast_gain": 0.9307778070566199,
+        "error_rms_mjysr": 0.16618871021755913
+      }
+    }
+  }
+}
