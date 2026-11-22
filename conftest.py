@@ -21,6 +21,7 @@ Defines two markers for tests that need something the machine may not have:
 """
 import os
 import socket
+import time
 import urllib.error
 import urllib.request
 
@@ -58,6 +59,12 @@ def crds_reachable():
     blanket-caught: the network ones, the DNS/socket ones, and CRDS's own,
     whose `CrdsError` is a plain `Exception` and so is NOT covered by
     `OSError`.
+
+    What the probe saw is kept in `_crds_state['why']` (the HTTP status, or the
+    exception type and message, plus the elapsed time), so a skip reason or a
+    failing assertion can say why the server was judged unreachable.
+    `_crds_state['timed_out']` says whether it gave up on CRDS_PROBE_TIMEOUT:
+    a server slower than that is treated as an outage, the same as a 5xx.
     """
     if 'ok' in _crds_state:
         return _crds_state['ok']
@@ -68,11 +75,16 @@ def crds_reachable():
         errors.append(CrdsError)
     except ImportError:
         pass
+    start = time.monotonic()
+    _crds_state['timed_out'] = False
     try:
-        urllib.request.urlopen(CRDS_PROBE_URL,
-                               timeout=CRDS_PROBE_TIMEOUT).close()
+        resp = urllib.request.urlopen(CRDS_PROBE_URL,
+                                      timeout=CRDS_PROBE_TIMEOUT)
+        seen = f'HTTP {getattr(resp, "status", "?")}'
+        resp.close()
         _crds_state['ok'] = True
     except urllib.error.HTTPError as err:
+        seen = f'HTTP {err.code} {err.reason}'
         # The server ANSWERED, so classify on the code rather than on the
         # exception type.  4xx means the endpoint is alive and rejecting the
         # shape of the request -- a GET to a POST-only /json/ is a 400, which
@@ -81,8 +93,15 @@ def crds_reachable():
         # was a 504.  Treating every HTTPError as reachable would let that 504
         # through and put the original failure back.
         _crds_state['ok'] = err.code < 500
-    except tuple(errors):
+    except tuple(errors) as err:
+        seen = f'{type(err).__name__}: {err}'
+        # urllib raises a bare TimeoutError when the response is slow and wraps
+        # it in URLError when connect or the TLS handshake is.
+        _crds_state['timed_out'] = (
+            isinstance(err, TimeoutError)
+            or isinstance(getattr(err, 'reason', None), TimeoutError))
         _crds_state['ok'] = False
+    _crds_state['why'] = f'{seen} after {time.monotonic() - start:.2f} s'
     return _crds_state['ok']
 
 
@@ -105,8 +124,9 @@ def pytest_collection_modifyitems(config, items):
 
     if any('crds' in item.keywords for item in items) and not crds_reachable():
         skip = pytest.mark.skip(
-            reason=f'CRDS server unreachable ({CRDS_PROBE_URL}); a CRDS '
-                   f'outage is not a defect in this change')
+            reason=f'CRDS server unreachable ({CRDS_PROBE_URL}: '
+                   f'{_crds_state.get("why")}); a CRDS outage is not a defect '
+                   f'in this change')
         for item in items:
             if 'crds' in item.keywords:
                 item.add_marker(skip)

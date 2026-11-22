@@ -105,19 +105,76 @@ def test_the_probe_agrees_with_crds_itself():
     """The probe is a proxy for "can crds talk to the server", so when crds
     demonstrably can, the probe must not be saying otherwise.  This is the
     check that would have caught the inversion: the URL assertion passed while
-    the answer was wrong."""
-    crds = pytest.importorskip('crds')
+    the answer was wrong.
+
+    The reference is a fresh `get_server_info` JSON-RPC call.  It used to be
+    `crds.get_context_name('jwst')`, but that is memoized (`@utils.cached`),
+    earlier tests in the session fill it, and it falls back to the local cache
+    when the server does not answer -- so in a full run its success did not
+    show that crds had reached the server.  When the server answered crds but
+    the probe gave up on its timeout, the server is slower than
+    CRDS_PROBE_TIMEOUT, which the probe treats as an outage on purpose; that
+    is a skip, not a disagreement.  main went red three times on 2026-11-22
+    that way, with jwst-crds taking 11-24 s to answer /json/."""
+    pytest.importorskip('crds')
+    from crds.client import api
+    from crds.core.exceptions import CrdsError
     C._crds_state.clear()
     try:
-        context = crds.get_context_name('jwst')
-    except Exception:                      # genuinely unreachable, or no cache
-        pytest.skip('crds cannot reach the server either; nothing to compare')
-    finally:
-        C._crds_state.clear()
-    assert context
-    assert C.crds_reachable() is True, (
+        api.get_server_info.uncached()
+    except CrdsError as exc:               # CrdsNetworkError, ServiceError
+        pytest.skip(f'crds cannot reach the server either ({exc}); '
+                    'nothing to compare')
+    reachable = C.crds_reachable()
+    why, timed_out = C._crds_state.get('why'), C._crds_state.get('timed_out')
+    C._crds_state.clear()
+    if not reachable and timed_out:
+        pytest.skip(f'the server answered crds but not the probe within '
+                    f'{C.CRDS_PROBE_TIMEOUT} s ({why}); a slow server is '
+                    'treated as an outage')
+    assert reachable is True, (
         'crds reached the server but the probe reports it unreachable -- every '
-        'crds-marked test would skip while the server is healthy')
+        'crds-marked test would skip while the server is healthy; probe saw '
+        f'{why} at {C.CRDS_PROBE_URL}')
+
+
+def test_the_probe_records_what_it_saw(monkeypatch):
+    """main went red three times on the assertion above with no way to tell a
+    5xx from a timeout from a refused connection.  The probe keeps what it saw
+    so that message, and the skip reason, can say."""
+    import urllib.request
+    C._crds_state.clear()
+    monkeypatch.setattr(urllib.request, 'urlopen',
+                        lambda *a, **kw: (_ for _ in ()).throw(_http_error(503)))
+    assert C.crds_reachable() is False
+    assert C._crds_state['why'].startswith('HTTP 503 ')
+    assert C._crds_state['timed_out'] is False
+    C._crds_state.clear()
+
+    def refused(*a, **kw):
+        raise ConnectionRefusedError('connection refused')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', refused)
+    assert C.crds_reachable() is False
+    assert C._crds_state['why'].startswith(
+        'ConnectionRefusedError: connection refused after ')
+    assert C._crds_state['timed_out'] is False
+    C._crds_state.clear()
+
+
+def test_the_probe_flags_a_timeout_in_either_phase(monkeypatch):
+    """A slow connect or handshake comes back as URLError(reason=TimeoutError),
+    a slow response as a bare TimeoutError; both mean "gave up waiting", which
+    the agreement test above skips on rather than failing."""
+    import urllib.error
+    import urllib.request
+    for exc in (urllib.error.URLError(TimeoutError('timed out')),
+                TimeoutError('timed out')):
+        C._crds_state.clear()
+        monkeypatch.setattr(urllib.request, 'urlopen',
+                            lambda *a, _e=exc, **kw: (_ for _ in ()).throw(_e))
+        assert C.crds_reachable() is False
+        assert C._crds_state['timed_out'] is True, type(exc).__name__
     C._crds_state.clear()
 
 
