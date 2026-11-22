@@ -267,6 +267,27 @@ def test_the_o028_floor_covers_its_measured_scatter_with_margin():
     assert floor <= 10.0
 
 
+def test_g028_floor_covers_its_non_converging_exposure_only():
+    """g028's F300M exposure 1 (both LW detectors) stopped three m2 cycles in a
+    row with the RA sign flipping each time: 2.04-2.72 mas after the first
+    correction (job 51788413 is the third stop).  The same exposure on the SW
+    channel converged, so the residual is not the exposure's pointing.
+
+    The floor has to clear that residual, and it must leave the two F090W
+    exposure-1 corrections above 4 mas (4.17, 5.15 on 2026-11-17) actionable.
+    Seven smaller SW corrections from the same pass (2.03-2.86) did converge
+    when applied; the entry's comment records that this floor would not have
+    acted on them.
+    """
+    floor, source = m2_correction_floor('g028', env={})
+    assert (floor, source) == (4.0, 'per-field')
+    f300m_exp1_max_since_first_correction = 2.72
+    f090w_smallest_above_floor = 4.17
+    assert floor > f300m_exp1_max_since_first_correction
+    assert floor - f300m_exp1_max_since_first_correction > 1.0
+    assert floor < f090w_smallest_above_floor
+
+
 def test_quintuplet_stays_unregistered_until_it_measures_something():
     """Its records carry ``correction_floor_mas: 4.0`` from the env var like
     arches's do, but all four (2026-08-01 and 2026-08-15, F212N and F323N) hold
