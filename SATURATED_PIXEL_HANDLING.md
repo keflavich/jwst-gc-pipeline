@@ -652,6 +652,58 @@ these flag sets would remove the footgun of setting them individually.)*
   neighbour's model is negligible). The 0.25 flux threshold was tuned on those
   two observations only (kept rows ≥ 0.29, rejected ≤ 0.067) and is untested
   on other fields or filters.
+- **`SATSTAR_DAO_RESTORE_FRAC_MIN`** (opt-in; `satstar_dao_restore`; off unless
+  above 0): keep the daophot row that a satstar overwrote when the in-field dedup
+  (`cofit` or `cofit_residual`) would drop the satstar row.  `replace_saturated`
+  writes the satstar's flux and position over the daophot row it pairs with the
+  satstar, so the row the dedup drops is the only row the star had.  gc-treasury
+  10678 o105 F212N m7: a replay of the `cofit` dedup on the 10354 in-field rows of
+  the consolidated satstar catalog drops 57; 55 of the 57 have no row in the
+  production m7 merged catalog (the other two were not examined) and 24 of the 55
+  have a daophot cluster (1-5 frames) within 80 mas.  Five of the 24 lie 63-79 mas
+  from the satstar at 0.002-0.031 of its flux (`dqsat` seeds of single-exposure
+  transients, rightly dropped); the other 19 lie within 21 mas of it (18 within
+  5 mas) at 0.80-1.06 of its flux.  With the switch on:
+  1. the per-frame merge (`merge_individual_frames` -> `replace_saturated`) records
+     the flux, flux error and position of each daophot row it overwrites in the
+     columns `satstar_dao_flux`, `satstar_dao_flux_err`, `satstar_dao_ra` and
+     `satstar_dao_dec` (float64, NaN on every other row and on appended satstar rows;
+     32 bytes per row; 18.6 MB for the 579,673 rows of the o105 F212N raw merged
+     table);
+  2. the dedup keeps a row it would drop, as the daophot row it was, when the
+     recorded flux is in [`SATSTAR_DAO_RESTORE_FRAC_MIN`,
+     `SATSTAR_DAO_RESTORE_FRAC_MAX`) of the satstar flux (default upper end 1.25,
+     exclusive), the recorded position is within `SATSTAR_DAO_RESTORE_SEP_MAX_ARCSEC`
+     of the satstar (default 0.03") and no surviving satstar row lies within
+     `SATSTAR_DAO_RESTORE_NEIGHBOUR_MIN_ARCSEC` of the recorded position (default
+     0.1"; 0 turns the check off).  The kept row has the recorded flux, flux error
+     and position, `replaced_saturated` False, `is_saturated` unchanged (the vetting
+     force-keep reads it), the satstar ensemble columns (`satstar_nframes`,
+     `satstar_nmeas`, `satstar_std_ra`, `satstar_std_dec`) blank, and
+     `satstar_dao_restored` True.  Every other row is dropped or kept as without the
+     switch.
+  The three limits other than `FRAC_MIN` are read only when `FRAC_MIN` is above 0,
+  and `run_manual_pipeline` and `merge_individual_frames` reject a bad value of any
+  of the four before any work (`FRAC_MAX` must exceed `FRAC_MIN`).  A merged table
+  written without the switch has no record: the dedup prints a WARNING and drops
+  as before.  A table with pixel or magnitude columns (`x`, `y`, `dx`, `dy`,
+  `x_fit`, `y_fit`, `x_err`, `y_err`, `mag_ab`, `mag_vega`, `emag_ab`) restores
+  nothing, because the record does not cover them; the per-frame merge's
+  `minimal_table` has none.  The restored row carries the daophot photometry.  In
+  the replay below the 18 appended daophot rows added no crater, while
+  `SATSTAR_INFIELD_DEDUP=cofit_residual`, which restores satstar fits (a larger and
+  different set of rows), added four (27 craters deeper than 500 MJy/sr against 23);
+  those restored single-frame satstar fits over-subtract by 25-40 % or lie about
+  0.2" off.  The defaults come from the o105 F212N recon table of the
+  55 dropped rows (the per-frame daophot cluster stands in for the overwritten row,
+  which is not on disk): the code with the defaults restores 19 of the 55, namely
+  the 24 with a cluster except the five transients (ratio 0.002-0.031, 63-79 mas);
+  their nearest surviving satstar row is 0.17-0.90" away, so the neighbour check
+  does not change this set; `SEP_MAX_ARCSEC=0.01` restores 18; a ratio window of
+  0.0001-2 with `SEP_MAX_ARCSEC=0.1` restores all 24 with a cluster, the transients
+  included.  The defaults are untested on any other field or filter, and the
+  full-merge effect (m7 + finalize with the switch on, then the residual render) has not
+  been measured: the replay below appended the rows to the vetted catalog.
 - **Opt-in guards in the merged-catalog residual render**
   (`build_mergedcat_residuals`; each switch is off unless set).  Two kinds of
   artifact stay in the `*_mergedcat_residual_i2d` of a saturated field: craters,
@@ -800,10 +852,16 @@ these flag sets would remove the footgun of setting them individually.)*
     17 / 9 / 2 leftovers above 500 / 1000 / 5000 MJy/sr and no new crater (23
     deeper than 500); `SATSTAR_INFIELD_DEDUP=cofit_residual` on the same stack
     gives 15 / 8 / 2 with 27 craters deeper than 500; the extra craters are restored
-    single-frame fits that over-subtract by 25-40 % or lie about 0.2" off.  A
-    production rule that keeps a daophot-supported row (`nmatch >= 2`, flux within
-    25 % of the satstar's) instead of overwriting or dropping it has not been
-    written; the replay shows what such a rule can reach at most.
+    single-frame fits that over-subtract by 25-40 % or lie about 0.2" off.  The
+    replay needs no minimum on the number of daophot frames (four of the 18 rows
+    have a daophot detection in one frame, at 0.86-0.99 of the satstar flux) and
+    `SATSTAR_DAO_RESTORE_FRAC_MIN` (above) is the opt-in rule with those criteria.
+    Its default separation limit of 0.03" adds one row to the replay's 18 (idx 8131,
+    21.4 mas, 1.058 of the satstar flux); appending those 19 rows gives 727 / 59 /
+    16 / 9 / 7 / 2 leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr and the
+    craters of the 18-row stack (127 / 53 / 23 / 7 / 6 deeper than 50 / 200 / 500 /
+    1000 / 2000).  The rows in these replays were appended to the vetted catalog;
+    they did not pass through `replace_saturated`, the dedup and the vetting.
   - Deblend rows on F480M (o105, the same replay on all 12 frames; the event mask,
     negative-pixel mask and shrink 0.3 are on).  The consolidated satstar catalog goes
     from 1703 rows (production) to 1559 (deblend): 77 new, 221 lost.  The lost rows are
@@ -1032,6 +1090,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `MIRI_EDGE_DETECT_MARGIN` | 8 | detection margin at the detector edge |
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
 | `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section) |
+| `SATSTAR_DAO_RESTORE_FRAC_MIN` / `SATSTAR_DAO_RESTORE_FRAC_MAX` / `SATSTAR_DAO_RESTORE_SEP_MAX_ARCSEC` / `SATSTAR_DAO_RESTORE_NEIGHBOUR_MIN_ARCSEC` | off / 1.25 / 0.03 / 0.1 | keep the daophot row a satstar overwrote when the in-field dedup would drop the satstar row: recorded flux in [`FRAC_MIN`, `FRAC_MAX`) of the satstar's, recorded position within `SEP_MAX_ARCSEC` of the satstar, no surviving satstar row within `NEIGHBOUR_MIN_ARCSEC` of it (0 turns that check off); off unless `FRAC_MIN` is above 0 (the other three are then not read); needs a merge that ran with the switch on (`satstar_dao_*` columns, section 6); a bad value raises at the start of `run_manual_pipeline` and `merge_individual_frames` |
 | `SATSTAR_SEED_REQUIRE_DO_NOT_USE` | 0 (**off**) | restrict SEEDING to truly-lost cores (debug only — see §2b) |
 | `SATSTAR_SEVERITY_FLOOR` | per-filter `SAT_SEVERITY_FLOOR` | override the daophot-mask severity floor |
 | `SATSTAR_MIN_LOST_CORE` | 5 | min truly-lost core size (px) |

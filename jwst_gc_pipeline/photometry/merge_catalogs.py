@@ -66,6 +66,7 @@ from jwst_gc_pipeline.photometry.satstar_wcs_refresh import (
     frame_path_for_satstar_catalog, refresh_satstar_skycoords,
     satstar_frame_state_signature)
 from jwst_gc_pipeline.photometry.satstar_columns import finalize_satstar_columns
+from jwst_gc_pipeline.photometry import satstar_dao_restore
 from jwst_gc_pipeline.photometry.satstar_zf_status import (
     satstar_zf_status, satstar_zf_summary, zf_fit_fraction)
 from jwst_gc_pipeline.photometry.satstar_phase_selection import (
@@ -2177,6 +2178,9 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
             "both given.  The m2 offsets were measured on the frames' BAKED "
             "positions; an offsets table re-shifts each frame first, so the "
             "registration would be applied to positions it did not measure.")
+    # A bad SATSTAR_DAO_RESTORE_* value would otherwise raise only at the
+    # replace_saturated call, after every per-frame catalog has been combined.
+    _record_dao_prior = satstar_dao_restore.enabled()
 
     desat = "_unsatstar" if desat else ""
     bgsub = _bgsub_token(bgsub, resbgsub)
@@ -2524,7 +2528,8 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                           fwhm_basepath=fwhm_basepath, basepath=basepath,
                           proposal_id=progid, field=field,
                           phase=iteration_label,
-                          frame_variants=_frame_variants)
+                          frame_variants=_frame_variants,
+                          record_daophot_prior=_record_dao_prior)
         if m2_registration_summary is not None:
             # Saturated-star rows come from the satstar catalogs, which are not
             # per-frame catalogs and have no m2 entry: their positions are not
@@ -5146,7 +5151,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
                       proposal_id=None, field=None, phase=None,
-                      frame_variants=None):
+                      frame_variants=None, record_daophot_prior=False):
     # ``basepath`` locates the satstar catalogs (the cutout's own, for cutout
     # runs).  ``fwhm_basepath`` is unused (the fwhm_table.ecsv read it located
     # was dead compute and has been removed); retained for signature
@@ -5156,6 +5161,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     # that phase's satstar catalog, not the brightest of every phase on disk.
     # ``frame_variants`` is the frame variant(s) the merge reads: only satstar
     # catalogs fit on those frames are used (load_satstar_catalog, #1194).
+    # ``record_daophot_prior`` writes the ``satstar_dao_*`` columns: the flux,
+    # flux error and position each overwritten daophot row had.  The in-field
+    # dedup reads them to put a dropped row back (satstar_dao_restore).
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath,
                                        proposal_id=proposal_id, field=field,
                                        phase=phase, frame_variants=frame_variants)
@@ -5457,6 +5465,17 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         if 'satstar_match_sep' not in cat.colnames:
             cat['satstar_match_sep'] = np.full(len(cat), np.nan)
         cat['satstar_match_sep'][idx_cat] = _presep
+
+    # The daophot row each overwrite below replaces, kept for the in-field
+    # dedup (SATSTAR_DAO_RESTORE_FRAC_MIN).  Must precede the writes.
+    if record_daophot_prior:
+        _dao_flux_col, _dao_err_col = satstar_dao_restore.flux_columns(cat)
+        if _dao_flux_col is not None:
+            _n_rec = satstar_dao_restore.record_prior(
+                cat, idx_cat, _dao_flux_col, _dao_err_col)
+            print(f"replace_saturated: recorded the daophot flux and position "
+                  f"of {_n_rec} overwritten row(s) in the satstar_dao_* columns",
+                  flush=True)
 
     # Unambiguous per-row record of the satstar ensemble, on EVERY substituted
     # row rather than only the appended ones.  A row that overwrote a daophot
