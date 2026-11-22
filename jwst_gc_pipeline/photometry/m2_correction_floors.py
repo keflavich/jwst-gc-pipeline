@@ -403,6 +403,86 @@ PER_FIELD_FLOOR_MAS = {
     # consensus->reference tie (7.9 to 2648 mas, issue #819), not on
     # per-exposure scatter, so no floor value would change their verdict.
     'crowded_l3': 4.0,
+    # g028 (9438/001).  Registered 2026-11-21 after the m12 finalize of job
+    # 51788413 stopped on F300M.  It was the third m2 cycle in which the same
+    # exposure -- vgroup 0210b exposure 1, both LW detectors -- measured above
+    # the 2 mas tolerance after the previous cycle's correction had been
+    # applied and the frames regenerated from it:
+    #
+    #     record                  nrcalong (dRA, dDec)   nrcblong (dRA, dDec)
+    #     2026-11-12              (+1.83, -5.72)         (+0.89, -6.03)
+    #     2026-11-17 (WARN_ONLY)  (-1.68, +1.15)         (-2.29, +1.47)
+    #     2026-11-21 (51788413)   (+1.40, -2.03)         (+1.83, -1.86)
+    #
+    # Both applied corrections overshot: the residual moved by 1.8-3.6x the
+    # applied correction in RA and 1.2-2.8x in Dec.  RA therefore changed sign
+    # at both cycles, and the size has stayed at 2.0-2.7 mas since the first
+    # correction: the non-converging case this module exists for.  The frames
+    # carry the rows 1:1 -- the exposure-1 minus exposure-2 WCS shift (crf
+    # against cal, CRVAL) equals the difference of their table rows to 0.01
+    # mas on both detectors -- so the overshoot is on the measurement side.
+    # Its cause is not identified.
+    #
+    # F090W exposure 1 is the same exposure on the SW channel (vgroup 0210b,
+    # EXPSTART 60935.854926 in both headers), and it converged: about
+    # (+10, -8) mas on all eight detectors on 2026-11-12, about (-2.6, -0.5)
+    # on 2026-11-17, and no corrections on 2026-11-21 (largest offset 2.42).
+    # Its response to the first correction was 1.15-1.33x in RA per detector,
+    # and 0.91x in Dec as an eight-detector mean (0.38-1.23 per detector).
+    # The 2026-11-17 corrections were 2.3-5.2 mas on seven detectors (nrca3
+    # was not corrected), too small for per-detector ratios to be informative.
+    # On 2026-11-17 the two channels shared a negative RA residual.  On
+    # 2026-11-21, five of the eight SW detectors sit at RA +0.92 to +1.87,
+    # near the LW +1.40 / +1.83.  Their Dec (-1.19 to +1.43) does not share
+    # the LW -2.03 / -1.86.
+    #
+    # At this floor about 2.5 mas stays in the F300M exposure-1 LW frames.  It
+    # also stays in the merged catalogs unless ASTROM_MERGE_M2_REGISTRATION=1.
+    #
+    # Per-exposure tie offset (`off`, mas).  F070W-F300M are from the
+    # 2026-11-21 records.  F335M-F480M are from the 2026-11-17 WARN_ONLY pass
+    # (job 51433557, run after the F070W 2.41 mas stop of job 51057602); they
+    # emitted no corrections there, and their frames were not regenerated
+    # before 2026-11-21.
+    #
+    #     filter    n  unver   mean    med    p90    max
+    #     F070W    32    0     0.63   0.48   1.17   1.64
+    #     F090W    32    0     0.74   0.21   1.69   2.42
+    #     F115W    32    0     0.66   0.57   1.32   1.49
+    #     F140M    32    0     0.89   1.00   1.43   1.60
+    #     F150W    32    0     0.23   0.08   0.35   1.66
+    #     F182M    32    0     0.43   0.31   0.97   1.01
+    #     F210M    32    0     0.43   0.34   0.99   1.03
+    #     F277W     8    0     0.62   0.63   1.02   1.43
+    #     F300M     8    0     0.64   0.02   2.51   2.61
+    #     F335M     8    0     0.38   0.38   0.73   0.73
+    #     F360M     8    0     0.01   0.01   0.01   0.01
+    #     F410M     8    0     0.38   0.35   0.77   0.79
+    #     F430M     8    0     0.37   0.34   0.74   0.76
+    #     F480M     8    0     0.36   0.33   0.69   0.72
+    #
+    # Apart from F300M exposure 1, this is a tight field: p90 <= 1.69 and
+    # max <= 2.42 in all fourteen filters, comparable to crowded_l3.
+    #
+    # COST OF THIS ENTRY, measured on this field.  The 2026-11-17 pass emitted
+    # nine SW per-exposure corrections besides the two F300M ones: F070W
+    # nrca3 2.41, F140M nrca2 2.03, and F090W exposure 1 on seven detectors
+    # at 2.32, 2.36, 2.42, 2.71, 2.86, 4.17 and 5.15.  All nine were applied
+    # and regenerated, and on 2026-11-21 those three filters measured no
+    # corrections.  They were displacements on the sky, and seven of the nine
+    # are below 4.0.  At this floor, a regeneration from _cal would leave
+    # displacements of that size uncorrected and the checkpoint would pass.
+    # The table already carries those nine rows, so the floor applies only
+    # to displacements measured from now on.  For the m3+ merged catalogs,
+    # merge-time registration (ASTROM_MERGE_M2_REGISTRATION=1, opt-in;
+    # m2_registration.py) applies sub-floor offsets of this kind to the
+    # per-frame positions.  The frames themselves keep the offsets.
+    #
+    # 4.0, matching brick/sgra/sgrb2/sickle/cloudef/crowded_l3.  It is above
+    # the largest F300M exposure-1 residual since the first correction (2.72
+    # on 2026-11-17).  F090W's 5.15 and 4.17 remain actionable.  The
+    # consensus->reference tie is floor-exempt as everywhere else.
+    'g028': 4.0,
 }
 
 
