@@ -117,7 +117,30 @@ def test_the_probe_agrees_with_crds_itself():
     assert context
     assert C.crds_reachable() is True, (
         'crds reached the server but the probe reports it unreachable -- every '
-        'crds-marked test would skip while the server is healthy')
+        'crds-marked test would skip while the server is healthy; probe saw '
+        f'{C._crds_state.get("why")} at {C.CRDS_PROBE_URL}')
+    C._crds_state.clear()
+
+
+def test_the_probe_records_what_it_saw(monkeypatch):
+    """main went red three times on the assertion above with no way to tell a
+    5xx from a timeout from a refused connection.  The probe keeps what it saw
+    so that message, and the skip reason, can say."""
+    import urllib.request
+    C._crds_state.clear()
+    monkeypatch.setattr(urllib.request, 'urlopen',
+                        lambda *a, **kw: (_ for _ in ()).throw(_http_error(503)))
+    assert C.crds_reachable() is False
+    assert C._crds_state['why'].startswith('HTTP 503 ')
+    C._crds_state.clear()
+
+    def refused(*a, **kw):
+        raise ConnectionRefusedError('connection refused')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', refused)
+    assert C.crds_reachable() is False
+    assert C._crds_state['why'].startswith(
+        'ConnectionRefusedError: connection refused after ')
     C._crds_state.clear()
 
 
