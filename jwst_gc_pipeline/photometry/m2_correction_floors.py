@@ -424,12 +424,17 @@ PER_FIELD_FLOOR_MAS = {
     # Its cause is not identified.
     #
     # F090W exposure 1 is the same exposure on the SW channel (vgroup 0210b,
-    # EXPSTART 60935.854926 in both headers).  Through the same cycles it
-    # responded at 0.9-1.3x and converged: about (+10, -8) mas on all eight
-    # detectors on 2026-11-12, about (-2.6, -0.5) on 2026-11-17, and no
-    # corrections on 2026-11-21 (largest offset 2.42).  On 2026-11-17 the two
-    # channels shared a negative RA residual; on 2026-11-21 the SW frames do
-    # not share the remaining F300M one.
+    # EXPSTART 60935.854926 in both headers), and it converged: about
+    # (+10, -8) mas on all eight detectors on 2026-11-12, about (-2.6, -0.5)
+    # on 2026-11-17, and no corrections on 2026-11-21 (largest offset 2.42).
+    # Its response to the first correction was 1.15-1.33x in RA per detector,
+    # and 0.91x in Dec as an eight-detector mean (0.38-1.23 per detector).
+    # The 2026-11-17 corrections were 2.3-5.2 mas on seven detectors (nrca3
+    # was not corrected), too small for per-detector ratios to be informative.
+    # On 2026-11-17 the two channels shared a negative RA residual.  On
+    # 2026-11-21, five of the eight SW detectors sit at RA +0.92 to +1.87,
+    # near the LW +1.40 / +1.83.  Their Dec (-1.19 to +1.43) does not share
+    # the LW -2.03 / -1.86.
     #
     # At this floor about 2.5 mas stays in the F300M exposure-1 LW frames.  It
     # also stays in the merged catalogs unless ASTROM_MERGE_M2_REGISTRATION=1.
