@@ -849,20 +849,36 @@ these flag sets would remove the footgun of setting them individually.)*
     (3,227,541 NaN pixels of the F212N image and 667,561 of the F480M one on both
     sides, none in only one) and leaves every other pixel unchanged (maximum
     difference 0), so the counts of those three stacks are those of the switch;
-    the other counts came from the same emulation script.  With `KFAC` 1 and
-    `MARGIN` 2 the residual i2d gives for o105 F212N
-    (leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper than
-    50 / 200 / 500 / 1000 / 2000): production 845 / 178 / 133 / 116 / 66 / 18 |
-    489 / 166 / 71 / 37 / 18; the best stack above 752 / 51 / 12 / 9 / 2 / 1 |
-    89 / 35 / 5 / 0 / 0; the best stack with the deblend rows and the 18 supported
-    rows 741 / 46 / 7 / 4 / 2 / 1 | 89 / 35 / 5 / 0 / 0.  o105 F480M production with
-    the mask: 174 / 39 / 10 / 4 / 1 / 1 | 31 / 4 / 2 / 0 / 0 (production without it
-    303 / 168 / 111 / 84 / 24 / 2 | 69 / 28 / 16 / 7 / 1).  With the event mask,
-    negative-pixel mask and shrink 0.3 on, F480M with the mask gives 145 / 36 / 9 / 4 / 1 / 1 |
-    3 / 0 / 0 / 0 / 0, and 141 / 33 / 6 / 1 / 0 / 0 | 4 / 0 / 0 / 0 / 0 with the 36 deblend rows
-    as well.  The mask sets 1.66 % (F212N) and 2.19 % (F480M) of the finite pixels of the
-    residual i2d to NaN.  It hides the model mismatch inside the footprint; it does not make
-    the model fit.
+    the other counts came from the same emulation script.  Counts for o105 F212N
+    (leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper
+    than 50 / 200 / 500 / 1000 / 2000), without the mask and then with it at `KFAC`
+    1 and `MARGIN` 2:
+    - production 845 / 178 / 133 / 116 / 66 / 18 | 489 / 166 / 71 / 37 / 18; it was
+      not replayed with the mask.
+    - the best stack above (event mask, negative-pixel mask 50, shrink 0.8, vetted
+      catalog with the reconstructed rows) 740 / 72 / 28 / 20 / 16 / 5 |
+      127 / 53 / 23 / 7 / 6; with the mask 752 / 51 / 12 / 9 / 2 / 1 |
+      89 / 35 / 5 / 0 / 0.
+    - the best stack with the deblend rows and the 18 supported rows
+      728 / 60 / 17 / 9 / 7 / 2 | 127 / 53 / 23 / 7 / 6; with the mask
+      741 / 46 / 7 / 4 / 2 / 1 | 89 / 35 / 5 / 0 / 0.
+
+    o105 F212N's count above 50 MJy/sr rises with the mask (740 to 752, 728 to 741);
+    the cause was not examined.  o105 F480M:
+    - production 303 / 168 / 111 / 84 / 24 / 2 | 69 / 28 / 16 / 7 / 1; with the mask
+      174 / 39 / 10 / 4 / 1 / 1 | 31 / 4 / 2 / 0 / 0.
+    - event mask, negative-pixel mask and shrink 0.3 274 / 165 / 110 / 84 / 24 / 2 |
+      30 / 17 / 13 / 7 / 1; with the mask 145 / 36 / 9 / 4 / 1 / 1 | 3 / 0 / 0 / 0 / 0.
+    - the same with the 36 deblend rows 264 / 156 / 101 / 77 / 22 / 0 |
+      34 / 20 / 15 / 8 / 2; with the mask 141 / 33 / 6 / 1 / 0 / 0 |
+      4 / 0 / 0 / 0 / 0.
+
+    The mask sets 1.66 % (F212N) and 2.19 % (F480M) of the finite pixels of the
+    residual i2d to NaN, in disks of median radius 4.7 (F212N) and 6.3 (F480M)
+    mosaic pixels and maximum radius 33.9 and 33.3.  The counts of a masked image
+    leave out whatever lies inside the disks: a leftover or a crater there is not
+    measured.  The mask hides the model mismatch inside the footprint; it does not
+    make the model fit.
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
