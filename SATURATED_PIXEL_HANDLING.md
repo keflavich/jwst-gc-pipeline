@@ -652,6 +652,205 @@ these flag sets would remove the footgun of setting them individually.)*
   neighbour's model is negligible). The 0.25 flux threshold was tuned on those
   two observations only (kept rows ≥ 0.29, rejected ≤ 0.067) and is untested
   on other fields or filters.
+- **Opt-in guards in the merged-catalog residual render**
+  (`build_mergedcat_residuals`; each switch is off unless set).  Two kinds of
+  artifact stay in the `*_mergedcat_residual_i2d` of a saturated field: craters,
+  where the render subtracts a row at a flux the frame's data do not carry, and
+  single-exposure transients, which enter the coadd at weight 1/N while no catalog
+  model subtracts them.  The counts below are gc-treasury 10678 o105 F212N m7,
+  whose production residual holds 489 craters (a crater is a residual minimum
+  more than 50 MJy/sr below zero and more than 0.3 of the merged model's peak
+  there; 71 are deeper than 500 MJy/sr) and 845 whole-star leftovers (a residual
+  peak above 50 MJy/sr that holds more than 0.7 of the data peak; 133 are above
+  500 MJy/sr).  Each count is a replay of `build_mergedcat_residuals` on the
+  production m7 catalog, so a difference is the switch's own effect.
+  - `MERGE_SATROW_DATA_SUPPORT_MIN` (0-1).  A `replaced_saturated` row that a
+    frame's own satstar model does not cover is rendered at the merged flux,
+    the flux of the frames whose satstar pass fit it.  A frame whose data hold
+    less than this fraction of that flux at the row (`_satrow_data_flux`: the
+    least-squares amplitude of the unit-flux PSF over the central 5x5 pixels,
+    after the median of the 6-10 pixel annulus; a core with a non-finite pixel
+    cannot be tested and keeps the merged flux) renders the row at the data
+    flux, floored at 0.  Craters deeper than 500 MJy/sr: 71 -> 67 at 0.3 and
+    65 at 0.6.
+  - `MERGE_ROW_RESID_SUPPORT_MIN` (0-1) with `MERGE_ROW_RESID_NMATCH_MAX`
+    (default 99).  Per frame, the unit PSF of every uncovered
+    `replaced_saturated` row and of every ordinary row matched in at most
+    `NMATCH_MAX` frame catalogs, with a rendered peak of at least 25 MJy/sr, is
+    fit to that frame's merged-catalog residual (`_resid_supported_shrink`:
+    central 5x5 pixels, 6-10 pixel annulus background, at least 12 finite core
+    and 20 finite annulus pixels).  A row whose fitted amplitude is below
+    -(1 - MIN) x its flux is re-rendered at flux + amplitude, floored at 0,
+    largest first, with the residual updated after each row.  At 0.3 the craters
+    go 489 -> 147 and those deeper than 500 MJy/sr 71 -> 32, with no crater
+    where production had none; `NMATCH_MAX=1` (single-detection rows only)
+    gives 489 -> 209 and 71 -> 39.  The whole-star leftovers above 500 MJy/sr
+    go 133 -> 134.
+  - `SINGLE_EXPOSURE_EVENT_MASK=1` (`single_exposure_events`).  Sets DO_NOT_USE
+    on the pixels of a compact SATURATED core that one frame carries and the
+    other covering frames do not, with its wings, in the data mosaic and in each
+    per-frame residual's DQ before resampling (94 events in 38 of 48 frames,
+    10575 pixels).  With the shrink above, the leftovers above 500 MJy/sr go
+    133 -> 58; the 17 "vetted but unsubtracted" and 9 "vetted out" ones are
+    gone.  Measured against the replay with `MERGE_SATROW_DATA_SUPPORT_MIN=0.3`
+    alone, the mask removes 8 craters and adds 4 (248, 154, 101 and 54 MJy/sr
+    deep, each 0.77-0.97 of the model peak); with the shrink above it adds none
+    and removes 8 as well.
+  - `NEGATIVE_PIXEL_MASK_NSIGMA` (a number >= 0; blank or 0 is off).  Sets
+    DO_NOT_USE on pixels with no SATURATED or DO_NOT_USE flag and SCI below
+    -N x ERR, in the same two places.  At 50 it masks 10 pixels in 9 of 48
+    frames; the deepest is a detector pixel (nrca4, x=1140, y=1644) with SCI
+    -19079 to -19095 MJy/sr, 166.5 ERR below zero and DQ = JUMP_DET only, in
+    each of the six exposures of its pointing.  With the shrink and the event
+    mask in place, craters deeper than 500 MJy/sr go 30 -> 24 (7 craters, 259 to
+    2723 MJy/sr deep, are gone and none appear).
+  - The last three together (`SINGLE_EXPOSURE_EVENT_MASK=1
+    NEGATIVE_PIXEL_MASK_NSIGMA=50 MERGE_ROW_RESID_SUPPORT_MIN=0.3`): craters
+    489 -> 132 (deeper than 200 MJy/sr 166 -> 52, than 500 71 -> 24, than 1000
+    37 -> 8); whole-star leftovers 845 -> 771 (above 200 MJy/sr 178 -> 103,
+    above 500 133 -> 58, above 1000 116 -> 44).  Of the 24 craters left above
+    500 MJy/sr, 8 lie within 31 mas of a satstar row fit in one frame (the
+    crater is in that frame's own satstar model, which the shrink does not
+    reach) and 16 have no catalog row within 40 mas.
+  - Shrink threshold: `MERGE_ROW_RESID_SUPPORT_MIN` 0.6 and 0.8 instead of 0.3, with
+    the event mask, the negative-pixel mask and `MERGE_SATROW_DATA_SUPPORT_MIN=0.3`
+    unchanged (o105 F212N replays).  Craters deeper than 50 MJy/sr 132 (0.3), 121
+    (0.6), 120 (0.8); deeper than 500 MJy/sr 24, 22, 21; whole-star leftovers
+    above 500 MJy/sr 58, 59, 59.  A higher threshold removes more craters and
+    changes the leftovers by one star.  A row lowered although it was right would
+    show up as a leftover; the count above 500 MJy/sr goes from 58 to 59 between
+    0.3 and 0.8, and the replay cannot say whether that star is one of them.
+  - `SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN` / `_MAX` (merge time,
+    `replace_saturated`; off unless `_MIN` is above 0, `_MAX` defaults to 0.8).
+    The mutual-nearest second pass pairs a satstar with the nearest daophot row
+    out to min(0.5", 1.5 FWHM), 0.105" in F212N, and overwrites that row's flux and
+    position with the satstar's.  A satstar whose own daophot row was clipped pairs
+    with it at 0.5-3.6 mag below the satstar's flux.  A neighbouring star
+    pairs at a comparable flux and is erased: the leftover (100-3000 MJy/sr) then
+    sits beside the satstar.  With the guard on, a pairing whose row carries `_MIN`
+    <= row flux / satstar flux < `_MAX` of the satstar's flux is not made; the row
+    stays and the satstar is appended as its own row.  In o105 F212N 327
+    `replaced_saturated` rows were paired at a pre-overwrite separation of at least
+    0.05".  The overwritten rows were reconstructed from the per-frame m7 tables
+    (rows within 0.16" of the satstar in each frame, shifted by the frame's median
+    offset to the unreplaced merged rows; the candidate whose distance to the
+    satstar matches `satstar_match_sep` to 0.02" and that appears in the most frames
+    within 0.03" is the overwritten row).  59 of them carry 0.2-0.8 of the satstar's
+    flux, and for those the data light centroid lies at the flux-weighted blend of
+    the satstar and the row, 0.04-0.2 pixel from it: they are real neighbours.
+    Replay: the reconstructed rows with 0.2 <= flux ratio < 0.8 appended to the
+    production vetted catalog on top of the stack above.  Leftovers above 500 MJy/sr
+    58 -> 27 (above 1000: 44 -> 19; above 2000: 25 -> 15) at shrink 0.3, with
+    craters deeper than 50 MJy/sr 132 -> 140 and deeper than 500 MJy/sr 24 -> 27; at
+    shrink 0.8, 59 -> 28 leftovers above 500 MJy/sr, craters deeper than 50 MJy/sr
+    120 -> 127, deeper than 500 MJy/sr 21 -> 23.  Appending every reconstructed row
+    whatever its flux ratio gives 26 leftovers above 500 MJy/sr and 149 / 27 craters
+    (shrink 0.3), so the window drops no leftover the unrestricted set clears and
+    adds 9 fewer craters deeper than 50 MJy/sr.  Caveat: the replay appends rows to
+    the vetted catalog; `replace_saturated` and the dedup and vetting after it
+    have not been rerun with the guard on, so a restored row that vetting would
+    remove is counted as kept here.
+  - What the guards leave (o105 F212N, stack + neighbour guard + shrink 0.8: 28
+    leftovers above 500 MJy/sr, 23 craters deeper than 500 MJy/sr).  The craters
+    classify (`classify_tag.py`, a row within 40 mas counts as at the crater) as 16
+    with no catalog row there (5 lie 117-136 mas from a satstar row, 11 lie
+    0.46-1.07" from one; the satstars are 1.3e7-3.8e7 in flux), 5 in the satstar
+    model of a single frame (the satstar fit of one exposure, which the shrink does
+    not reach) and 2 at a satstar row in 4-5 frames.  The montages of the 16 show
+    ring-shaped minima around the brightest satstars, which is what a mismatch
+    between the PSF model and the measured PSF structure would leave; no catalog
+    change reaches them and that reading is not tested further here.  The brightest
+    leftovers (80606, 35239 and 11796 MJy/sr) are stars that the satstar finder
+    joined to a brighter satstar.  Example:
+    the star at (266.646137, -28.66411) in nrca1 exposure 4 has its own raw DQ
+    SATURATED component (45 pixels, every pixel finite, maximum 91717 MJy/sr) 14.6
+    pixels (6.6 FWHM) from the accepted satstar, whose component holds 231
+    pixels.  The finder's mask for the satstar is its DQ component plus the
+    unflagged pixels above the severity floor (dilated by 2 pixels), which are
+    joined with the neighbour's: one component (`sat_area` 1199), one satstar row,
+    and the daophot fit has no row there because the hand-off of SATURATED
+    components without an accepted satstar (`DAOPHOT_HANDOFF_UNACCEPTED_SAT`) is
+    off for F212N in the production m7 run (`DAOPHOT_HANDOFF_FILTERS='F480M'`, the
+    per-frame catalog header says `HNDOFFSA = False`).
+  - Other tiles and filters (same replay, `SINGLE_EXPOSURE_EVENT_MASK=1
+    NEGATIVE_PIXEL_MASK_NSIGMA=50 MERGE_ROW_RESID_SUPPORT_MIN=0.3`, production
+    vetted catalog).  Whole-star leftovers above 500 MJy/sr / craters deeper than
+    500 MJy/sr, production -> replay: o045 F212N 140 -> 75 / 84 -> 20; o118 F212N
+    72 -> 17 / 33 -> 3; o130 F212N 90 -> 16 / 28 -> 5; o138 F212N 89 -> 32 /
+    52 -> 21; o105 F480M 111 -> 110 / 16 -> 13.  The F480M leftovers are mostly the
+    rings below, which the switches do not touch.
+  - Rows that the pipeline drops, found by replay (o105 F212N, on top of the stack
+    and neighbour guard above).  (1) `--deblend-satstars` (off in production; needs
+    each frame's `_ramp.fits` and `_cal.fits`) run on all 48 F212N frames adds 1104
+    satstar rows and loses 209; consolidated, 227 new and 103 lost.  Appending the
+    consolidated rows seen in at least two frames (`n_frames_fit >= 2`) takes the
+    leftovers above 500 / 1000 / 5000 MJy/sr from 28 / 20 / 5 to 24 / 16 / 2 and
+    leaves the craters unchanged (23 deeper than 500); including single-frame rows
+    adds one crater deeper than 2000; also removing the 73 base rows that match the
+    lost rows raises the leftovers above 500 to 44.  (2) The in-field dedup (`cofit`)
+    leaves 55 consolidated satstar rows with no row in the merged catalog.  The
+    "never co-fit" test cannot reject a star that was satstar-fit in one frame
+    only.  19 of the 55 are real stars: peak or sub-floor seeds, area 9-32 pixels,
+    `n_frames_fit` 1-2, with daophot clusters in 1-5 other frames at 0.80-1.06 of the
+    satstar flux and, in 18 of them, within 5 mas of the satstar position, and a
+    satstar neighbour 0.17-0.9" away.  About 36 are transient-like `dqsat` seeds (no
+    daophot cluster, or only neighbours at 0.01-0.03 of the flux) that the dedup
+    rightly drops.  Appending the 18 daophot-supported ones (flux ratio 0.75-1.25,
+    position within 10 mas, from the per-frame m7 daophot tables) to the deblend stack gives
+    17 / 9 / 2 leftovers above 500 / 1000 / 5000 MJy/sr and no new crater (23
+    deeper than 500); `SATSTAR_INFIELD_DEDUP=cofit_residual` on the same stack
+    gives 15 / 8 / 2 with 27 craters deeper than 500; the extra craters are restored
+    single-frame fits that over-subtract by 25-40 % or lie about 0.2" off.  A
+    production rule that keeps a daophot-supported row (`nmatch >= 2`, flux within
+    25 % of the satstar's) instead of overwriting or dropping it has not been
+    written; the replay shows what such a rule can reach at most.
+  - A footprint mask (emulation only, not in the pipeline).  Setting NaN in a disk
+    of radius 1.0 x the satstar's saturated-area radius + 2 mosaic pixels around
+    each consolidated satstar row, in the residual i2d, gives for o105 F212N
+    (leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper than
+    50 / 200 / 500 / 1000 / 2000): production 845 / 178 / 133 / 116 / 66 / 18 |
+    489 / 166 / 71 / 37 / 18; the best stack above 752 / 51 / 12 / 9 / 2 / 1 |
+    89 / 35 / 5 / 0 / 0; the best stack with the deblend rows and the 18 supported
+    rows 741 / 46 / 7 / 4 / 2 / 1 | 89 / 35 / 5 / 0 / 0.  o105 F480M production with
+    the mask: 174 / 39 / 10 / 4 / 1 / 1 | 31 / 4 / 2 / 0 / 0 (production without it
+    303 / 168 / 111 / 84 / 24 / 2 | 69 / 28 / 16 / 7 / 1).  The mask hides the model
+    mismatch inside the footprint; it does not make the model fit.
+  - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
+    leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
+    within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
+    catalog row, sit at y = 9 (x = 452 and 461), and have no covering frame in the
+    per-frame probe.  One (11796 MJy/sr) is a star saturated in the one exposure
+    that covers it, whose satstar candidate the fit-quality gate rejected (qfit 7.39,
+    flux 12572).  One (3896 MJy/sr) is an unsaturated star covered by one exposure
+    with no daophot row.  Of the 58 leftovers above 200 MJy/sr in the cofit_residual
+    + deblend replay, 7 lie within 0.25" of a gate-rejected satstar candidate in some
+    frame (six rejected by `fit_quality_gate`, one by `implied_peak_gate`).
+  - The craters that the mask leaves (same stack): 5 deeper than 500 MJy/sr and 35
+    deeper than 200, 34 of them with no catalog row within 40 mas.  The nearest
+    satstars of the five are 0.46-1.07" away, with `flux_fit` 4.4e5, 6.0e5, 1.1e7,
+    1.2e7 and 1.3e7.  Without the mask, in the best stack 39 craters deeper than
+    200 MJy/sr lie within 1.5" of a satstar with `flux_fit >= 1e5`; their distance
+    to it has quartiles 15.4, 16.0 and 16.3 pixels, 26 are 12-20 pixels away, and
+    23 of those 26 lie at position angles 105-135 degrees (mod 180) in the mosaic
+    pixel frame.  In the median of residual / `flux_fit` over the 147 isolated
+    satstars (no other satstar within 45 pixels) with `flux_fit >= 1e6`, the
+    production residual at 14-18 pixels is 0.4 and 1.0 (x 1e-6) in the position-angle
+    sectors 0-15 and 105-135 degrees against 5.1, 6.3 and 6.8 in the sectors 15-45,
+    75-105 and 135-165 degrees.  A template (the median of residual / `flux_fit`)
+    made from half of those stars correlates 0.992 over 6-24 pixels with the other
+    half's.  Subtracting it from the other half, scaled by each star's flux, lowers
+    the median rms of the residual in the 6-24 pixel annulus from 37 to 24 MJy/sr and
+    the number of stars with a maximum above +500 MJy/sr from 37 to 20, and leaves the
+    number with a minimum below -500 MJy/sr at 23 -> 25.  A median template therefore
+    does not predict the dips.  Over the 177 isolated satstars (no other satstar
+    within 37 pixels) with `flux_fit >= 1e6` the median of residual / model in
+    1-pixel annuli is -0.059 (0.5 pixel), -0.078 (2.5), -0.085 (3.5), -0.046 (4.5),
+    +0.054 (5.5), +0.225 (6.5), +0.143 (7.5) and +0.080 (8.5): the model is 5-9 % too
+    bright inside 5 pixels and 5-23 % too faint at 5.5-8.5 pixels (beyond that the
+    annulus holds other stars' model).
+  - Caveat for every replay row above: each is the production m7 catalog with rows
+    appended or changed; `replace_saturated`, the dedup and the vetting have not been
+    rerun, so a restored row that vetting would remove is counted as kept.
 - **Products**: `*_satstar_{catalog,model,residual,flags}.fits`. The flags image
   is a uint8 bitmask — bit 1 partly saturated (recoverable), bit 2 totally
   saturated (NaN-variance core), bit 4 included in an accepted satstar fit.

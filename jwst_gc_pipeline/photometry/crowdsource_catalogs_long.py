@@ -15,6 +15,7 @@ from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
+from jwst_gc_pipeline.photometry import single_exposure_events as _single_exposure_events
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
@@ -3179,8 +3180,133 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     return infilled_filename
 
 
-def save_residual_datamodel(input_filename, output_filename, data, clear_dq=False):
+#: the last answer of ``single_exposure_event_masks`` (one mosaic is built at a time)
+_EVENT_MASK_CACHE = {}
+
+
+def single_exposure_event_masks(files):
+    """``{path: bool mask}`` of the pixels to drop from per-frame images before
+    they are resampled into one mosaic: the single-exposure transients of
+    ``single_exposure_events`` (env ``SINGLE_EXPOSURE_EVENT_MASK``) and the
+    extreme negative pixels (env ``NEGATIVE_PIXEL_MASK_NSIGMA``).
+
+    Empty unless one of the two is on.  ``files`` are all the per-frame images
+    of ONE filter that the mosaic is built from (the original frames, or the
+    ``--cutout-region`` crops).  An event is told from a star by the other
+    frames at its sky position, so a partial list tests against fewer frames
+    (and one file cannot be tested at all); a negative pixel is judged in its
+    own frame.  Only the frames that carry a masked pixel are keys.  The answer
+    is kept per (file, size, mtime) list and switch state, so the data and the
+    residual mosaic of one run share one detection.
     """
+    events_on = _single_exposure_events.event_mask_enabled()
+    nsigma = _single_exposure_events.negative_pixel_nsigma()
+    if not (events_on or nsigma):
+        return {}
+    files = sorted({os.fspath(f) for f in files})
+    key = (tuple((f, os.stat(f).st_size, os.stat(f).st_mtime_ns) for f in files),
+           events_on, nsigma)
+    hit = _EVENT_MASK_CACHE.get(key)
+    if hit is not None:
+        return hit
+    masks = {}
+    if events_on and len(files) >= 2:
+        t0 = time.time()
+        frames = [_single_exposure_events.CrfFrame(f) for f in files]
+        events = _single_exposure_events.find_events(frames)
+        by_name = _single_exposure_events.event_masks(
+            events, {fr.name: fr.shape for fr in frames})
+        path_of = {fr.name: fr.path for fr in frames}
+        masks = {path_of[name]: mask for name, mask in by_name.items()}
+        print(f"single-exposure events: {len(events)} in {len(masks)} of "
+              f"{len(files)} frames, {sum(int(m.sum()) for m in masks.values())} "
+              f"px set to DO_NOT_USE ({time.time() - t0:.0f} s)", flush=True)
+    if nsigma:
+        n_px = 0
+        n_fr = 0
+        for f in files:
+            with fits.open(f, memmap=False) as hdul:
+                neg = _single_exposure_events.negative_pixel_mask(
+                    hdul['SCI'].data, hdul['ERR'].data, hdul['DQ'].data, nsigma)
+            if neg.any():
+                n_px += int(neg.sum())
+                n_fr += 1
+                masks[f] = masks[f] | neg if f in masks else neg
+        print(f"negative pixels: {n_px} px below -{nsigma:g} ERR in {n_fr} of "
+              f"{len(files)} frames set to DO_NOT_USE "
+              f"(NEGATIVE_PIXEL_MASK_NSIGMA)", flush=True)
+    _EVENT_MASK_CACHE.clear()
+    _EVENT_MASK_CACHE[key] = masks
+    return masks
+
+
+def _event_masks_by_frame(frames, pipeline_dir, options):
+    """``{frame: bool mask}`` of the pixels :func:`single_exposure_event_masks`
+    drops (single-exposure events, extreme negative pixels) in the fitter inputs
+    of ``frames``: the frames themselves, or in a ``--cutout-region`` run their
+    crops under ``pipeline_dir``, which are what the per-frame residuals are
+    built on.  Only the frames that carry a masked pixel are keys."""
+    if getattr(options, 'cutout_region', ''):
+        label = _cutout_label_for(options)
+        fitter_input = {f: os.path.join(
+            pipeline_dir, os.path.basename(f).replace('.fits', f'_cutout_{label}.fits'))
+            for f in frames}
+    else:
+        fitter_input = {f: f for f in frames}
+    by_input = single_exposure_event_masks(list(fitter_input.values()))
+    return {f: by_input[p] for f, p in fitter_input.items() if p in by_input}
+
+
+def _event_masked_copies(files, masks, out_dir):
+    """``files`` with every frame of ``masks`` replaced by a copy in ``out_dir``
+    whose DQ carries DO_NOT_USE over the mask, so ``ResampleStep`` gives those
+    pixels no weight.  The other frames are returned as given and no input is
+    changed."""
+    import shutil
+    out = []
+    for f in files:
+        mask = masks.get(os.fspath(f))
+        if mask is None:
+            out.append(f)
+            continue
+        dst = os.path.join(out_dir, os.path.basename(f))
+        shutil.copyfile(f, dst)
+        with fits.open(dst, mode='update', memmap=False) as hdul:
+            dq = hdul['DQ'].data
+            if dq.shape != mask.shape:
+                raise ValueError(f'{f}: DQ {dq.shape} but event mask {mask.shape}')
+            hdul['DQ'].data = _single_exposure_events.apply_mask_to_dq(
+                dq, mask).astype(dq.dtype)
+        out.append(dst)
+    return out
+
+
+def _resample_event_masked(files, masks, pipeline_dir, product_name, **kwargs):
+    """``_resample_to_i2d`` of ``files`` with the pixels of ``masks`` set to
+    DO_NOT_USE.  The frames that carry one are resampled from copies in a private
+    directory below ``pipeline_dir``, removed afterwards; the mosaic is moved into
+    ``pipeline_dir`` when complete."""
+    import shutil
+    import tempfile
+    work = tempfile.mkdtemp(prefix='.eventmask_', dir=pipeline_dir)
+    try:
+        out = _resample_to_i2d(_event_masked_copies(sorted(set(files)), masks, work),
+                               work, product_name, **kwargs)
+        final = os.path.join(pipeline_dir, os.path.basename(out))
+        os.replace(out, final)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return final
+
+
+def save_residual_datamodel(input_filename, output_filename, data, clear_dq=False,
+                            bad_mask=None):
+    """
+    ``bad_mask``: boolean array of the frame's shape; DO_NOT_USE is set on it in
+    the written DQ, so ``ResampleStep`` gives those pixels no weight (the
+    single-exposure events of ``single_exposure_events``).  Not combined with
+    ``clear_dq``: a model carries no data to mask.
+
     ``clear_dq`` (2026-06-20): for the MODEL image, reset DQ to GOOD and make
     ERR/variance finite.  The model is a SYNTHETIC rendered image -- every pixel
     is a valid model value, even where the DATA was DQ-SATURATED (the bright
@@ -3218,6 +3344,14 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
         wcs = model.meta.wcs
         model.data = data
         model.meta.wcs = wcs  # explicit re-assignment ensures GWCS is serialized to ASDF extension
+        if bad_mask is not None:
+            if clear_dq:
+                raise ValueError('save_residual_datamodel: bad_mask and clear_dq '
+                                 'are exclusive (a model has no data to mask)')
+            if np.shape(bad_mask) != model.dq.shape:
+                raise ValueError(f'save_residual_datamodel: bad_mask '
+                                 f'{np.shape(bad_mask)} but DQ {model.dq.shape}')
+            model.dq = _single_exposure_events.apply_mask_to_dq(model.dq, bad_mask)
         if clear_dq:
             # synthetic model -> every pixel valid; drop the data's DQ/SATURATED
             # flags so ResampleStep keeps the satstar model cores (see docstring).
@@ -3458,9 +3592,15 @@ def mosaic_cutout_input_data(cut_bp, filtername, proposal_id, field, module,
     if input_files is not None:
         output_wcs = _reduction_mosaic_output_wcs(pipeline_dir, proposal_id,
                                                   field, inst_token, filtername)
-    out = _resample_to_i2d(files, pipeline_dir, product_name,
-                           crop_to_data=(output_wcs is None),
-                           output_wcs=output_wcs)
+    masks = single_exposure_event_masks(files)
+    if masks:
+        out = _resample_event_masked(files, masks, pipeline_dir, product_name,
+                                     crop_to_data=(output_wcs is None),
+                                     output_wcs=output_wcs)
+    else:
+        out = _resample_to_i2d(files, pipeline_dir, product_name,
+                               crop_to_data=(output_wcs is None),
+                               output_wcs=output_wcs)
     print(f'Wrote cutout data i2d {out}', flush=True)
     return out
 
@@ -3987,6 +4127,231 @@ def _uncovered_satstar_rows(sxx, syy, sat_flux, satstar_sm, cover_thresh,
     return render_idx, n_wing
 
 
+def _satrow_support_min():
+    """``MERGE_SATROW_DATA_SUPPORT_MIN``: the fraction of a replaced_saturated
+    row's merged flux that a frame's own data must show for that frame to
+    render the row at the merged flux (``_satrow_supported_flux``).  Unset,
+    blank or 0 is off, the default; a value that is not a finite number in
+    [0, 1] raises ``ValueError``."""
+    raw = os.environ.get('MERGE_SATROW_DATA_SUPPORT_MIN', '')
+    if not raw.strip():
+        return 0.0
+    try:
+        frac = float(raw)
+    except ValueError:
+        frac = np.nan
+    if not (np.isfinite(frac) and 0.0 <= frac <= 1.0):
+        raise ValueError(f"MERGE_SATROW_DATA_SUPPORT_MIN={raw!r}: "
+                         f"expected a finite number in [0, 1]")
+    return frac
+
+
+def _satrow_data_flux(base, sxx, syy, stamp_at, core_half=2,
+                      bkg_radii=(6.0, 10.0), min_bkg_px=20):
+    """The flux each position carries in one frame's data ``base``.
+
+    Least-squares amplitude of the unit-flux PSF at the position over the
+    central (2 * core_half + 1)^2 pixels, after subtracting the median of the
+    annulus ``bkg_radii`` (pixels).  ``stamp_at`` is ``psf_render.stamp_function``
+    of the frame's render grid.
+
+    NaN where the frame cannot test the position: a pixel of the core window
+    that is not finite (a saturated or masked core says nothing about the
+    peak), a window that leaves the frame, or fewer than ``min_bkg_px`` finite
+    annulus pixels.
+    """
+    sxx = np.asarray(sxx, dtype=float)
+    syy = np.asarray(syy, dtype=float)
+    ny, nx = base.shape
+    rmax = int(np.ceil(bkg_radii[1]))
+    yy, xx = np.mgrid[-rmax:rmax + 1, -rmax:rmax + 1]
+    in_ring = ((np.hypot(xx, yy) >= bkg_radii[0])
+               & (np.hypot(xx, yy) <= bkg_radii[1]))
+    out = np.full(len(sxx), np.nan)
+    for k in range(len(sxx)):
+        x0, y0 = sxx[k], syy[k]
+        if not (np.isfinite(x0) and np.isfinite(y0)):
+            continue
+        ix, iy = int(round(x0)), int(round(y0))
+        if not (rmax <= ix < nx - rmax and rmax <= iy < ny - rmax):
+            continue
+        core = base[iy - core_half:iy + core_half + 1,
+                    ix - core_half:ix + core_half + 1]
+        if not np.isfinite(core).all():
+            continue
+        ring = base[iy - rmax:iy + rmax + 1, ix - rmax:ix + rmax + 1][in_ring]
+        ring = ring[np.isfinite(ring)]
+        if len(ring) < min_bkg_px:
+            continue
+        stamp = np.asarray(stamp_at(ix - core_half, ix + core_half + 1,
+                                    iy - core_half, iy + core_half + 1,
+                                    1.0, x0, y0), dtype=float)
+        denom = float(np.sum(stamp * stamp))
+        if not denom > 0:
+            continue
+        out[k] = float(np.sum((core - np.median(ring)) * stamp) / denom)
+    return out
+
+
+def _satrow_supported_flux(base, sxx, syy, flux, stamp_at, min_frac, **kw):
+    """The flux each uncovered replaced_saturated row is rendered at in one
+    frame.
+
+    The merged flux of such a row comes from the frames whose satstar model
+    fitted it.  In a frame that did not, the row is rendered from the merged
+    catalog, and where the star is absent from that frame's data (a one-frame
+    saturated transient fitted as a star, or a star whose saturated-frame flux
+    is several times its flux elsewhere) the render digs a crater as deep as
+    the model peak.  A row whose data flux in this frame
+    (``_satrow_data_flux``) is below ``min_frac`` of the merged flux is
+    rendered at the data flux, floored at 0; any other row, and any row this
+    frame cannot test, keeps the merged flux.
+
+    Returns ``(flux_out, n_cut)``.
+    """
+    flux = np.asarray(flux, dtype=float)
+    f_data = _satrow_data_flux(base, sxx, syy, stamp_at, **kw)
+    cut = np.isfinite(f_data) & (flux > 0) & (f_data < min_frac * flux)
+    out = flux.copy()
+    out[cut] = np.clip(f_data[cut], 0.0, None)
+    return out, int(cut.sum())
+
+
+# a row whose rendered peak is below this (MJy/sr) cannot dig a crater worth
+# testing (_resid_supported_shrink)
+_RESID_SHRINK_MIN_PEAK = 25.0
+
+
+def _row_resid_support_params():
+    """``(MERGE_ROW_RESID_SUPPORT_MIN, MERGE_ROW_RESID_NMATCH_MAX)``.
+
+    ``MERGE_ROW_RESID_SUPPORT_MIN``: the fraction of a row's merged flux that
+    a frame's merged-catalog residual must leave standing for that frame to
+    render the row at the merged flux (``_resid_supported_shrink``).  Unset,
+    blank or 0 is off, the default; a value that is not a finite number in
+    [0, 1] raises ``ValueError``.
+
+    ``MERGE_ROW_RESID_NMATCH_MAX``: ordinary rows matched in at most this many
+    frame catalogs are tested (default 99, every row; 1 tests the
+    single-detection rows only); an integer >= 1, anything else raises
+    ``ValueError``.  Uncovered saturated rows are always tested.  On gc-treasury
+    10678 o105 F212N the single-detection rows alone cleared 71 -> 39 of the
+    craters deeper than 500 MJy/sr and every row 71 -> 32, with no new crater
+    in either.
+    """
+    raw = os.environ.get('MERGE_ROW_RESID_SUPPORT_MIN', '')
+    if not raw.strip():
+        frac = 0.0
+    else:
+        try:
+            frac = float(raw)
+        except ValueError:
+            frac = np.nan
+        if not (np.isfinite(frac) and 0.0 <= frac <= 1.0):
+            raise ValueError(f"MERGE_ROW_RESID_SUPPORT_MIN={raw!r}: "
+                             f"expected a finite number in [0, 1]")
+    raw_n = os.environ.get('MERGE_ROW_RESID_NMATCH_MAX', '')
+    if not raw_n.strip():
+        nmax = 99
+    else:
+        try:
+            nmax = int(raw_n)
+        except ValueError:
+            nmax = 0
+        if nmax < 1:
+            raise ValueError(f"MERGE_ROW_RESID_NMATCH_MAX={raw_n!r}: "
+                             f"expected an integer >= 1")
+    return frac, nmax
+
+
+def _resid_supported_shrink(resid, xs, ys, flux, stamp_at, psf_shape, min_frac,
+                            core_half=2, bkg_radii=(6.0, 10.0),
+                            min_core_px=12, min_bkg_px=20):
+    """Flux corrections for rows one frame's residual shows are over-subtracted.
+
+    ``resid`` is the frame's merged-catalog residual (data minus every rendered
+    row), ``flux`` the flux each row was rendered at.  The residual amplitude
+    of a row is the least-squares amplitude of its unit-flux PSF over the
+    central (2 * core_half + 1)^2 pixels of ``resid``, after subtracting the
+    median of the annulus ``bkg_radii`` (pixels); the finite pixels of the core
+    are used, and at least ``min_core_px`` of them (and ``min_bkg_px`` of the
+    annulus) must be finite, else the frame cannot test the row.  Every other
+    row is subtracted from ``resid``, so a neighbour's light does not count as
+    support.  A row whose amplitude is below ``-(1 - min_frac) * flux`` is
+    over-subtracted by more than that much of its flux: the frame's data show
+    less than ``min_frac`` of the merged flux.  Its correction is the
+    amplitude, floored at ``-flux`` (rendered flux 0).
+
+    Rows are corrected from the largest over-subtraction down, each amplitude
+    measured on the residual the earlier corrections left, so two rows that
+    dig one hole share the correction instead of each removing all of it.
+
+    Returns ``(corr, n_corrected)``; ``corr`` is 0 for the rows left alone and
+    is to be added to the rendered flux (``_render_model_from_table`` of the
+    corrected rows at their ``corr``).
+    """
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    flux = np.asarray(flux, dtype=float)
+    ny, nx = resid.shape
+    work = np.array(resid, dtype=np.float32)
+    rmax = int(np.ceil(bkg_radii[1]))
+    gy, gx = np.mgrid[-rmax:rmax + 1, -rmax:rmax + 1]
+    in_ring = ((np.hypot(gx, gy) >= bkg_radii[0])
+               & (np.hypot(gx, gy) <= bkg_radii[1]))
+    psf_h, psf_w = int(psf_shape[0]), int(psf_shape[1])
+
+    def amplitude(k):
+        x0, y0 = xs[k], ys[k]
+        if not (np.isfinite(x0) and np.isfinite(y0)):
+            return np.nan
+        ix, iy = int(round(x0)), int(round(y0))
+        cy0, cy1 = max(0, iy - core_half), min(ny, iy + core_half + 1)
+        cx0, cx1 = max(0, ix - core_half), min(nx, ix + core_half + 1)
+        wy0, wy1 = max(0, iy - rmax), min(ny, iy + rmax + 1)
+        wx0, wx1 = max(0, ix - rmax), min(nx, ix + rmax + 1)
+        if cy1 <= cy0 or cx1 <= cx0 or wy1 <= wy0 or wx1 <= wx0:
+            return np.nan
+        ring = work[wy0:wy1, wx0:wx1][
+            in_ring[wy0 - (iy - rmax):wy1 - (iy - rmax),
+                    wx0 - (ix - rmax):wx1 - (ix - rmax)]]
+        ring = ring[np.isfinite(ring)]
+        if len(ring) < min_bkg_px:
+            return np.nan
+        core = work[cy0:cy1, cx0:cx1].astype(float)
+        u = np.asarray(stamp_at(cx0, cx1, cy0, cy1, 1.0, x0, y0), dtype=float)
+        ok = np.isfinite(core) & np.isfinite(u)
+        if int(ok.sum()) < min_core_px:
+            return np.nan
+        denom = float(np.sum(u[ok] ** 2))
+        if not denom > 0:
+            return np.nan
+        return float(np.sum((core[ok] - np.median(ring)) * u[ok]) / denom)
+
+    amp = np.array([amplitude(k) for k in range(len(xs))])
+    hit = np.nonzero(np.isfinite(amp) & (flux > 0)
+                     & (amp < -(1.0 - min_frac) * flux))[0]
+    corr = np.zeros(len(xs))
+    n_corrected = 0
+    for k in hit[np.argsort(amp[hit])]:
+        a = amplitude(k)
+        if not (np.isfinite(a) and a < -(1.0 - min_frac) * flux[k]):
+            continue
+        c = max(a, -flux[k])
+        corr[k] = c
+        n_corrected += 1
+        x0, y0 = xs[k], ys[k]
+        ix, iy = int(round(x0)), int(round(y0))
+        y_lo = max(0, iy - psf_h // 2)
+        y_hi = min(ny, iy - psf_h // 2 + psf_h)
+        x_lo = max(0, ix - psf_w // 2)
+        x_hi = min(nx, ix - psf_w // 2 + psf_w)
+        if y_hi > y_lo and x_hi > x_lo:
+            work[y_lo:y_hi, x_lo:x_hi] -= np.asarray(
+                stamp_at(x_lo, x_hi, y_lo, y_hi, c, x0, y0), dtype=np.float32)
+    return corr, n_corrected
+
+
 def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               proposal_id, field, module, options,
                               overlapping_frames, iteration_label, kinds,
@@ -4045,6 +4410,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     mflux = _all_flux[~_satrow]
     sat_sc = _all_sc[_satrow]
     sat_flux = _all_flux[_satrow]
+    if 'nmatch' in merged.colnames:
+        mnmatch = np.ma.filled(np.ma.asarray(merged['nmatch']).astype(float),
+                               np.nan)[~_satrow]
+    else:
+        mnmatch = None
     print(f"mergedcat: {int((~_satrow).sum())} unsaturated + {int(_satrow.sum())} "
           f"saturated rows; saturated rendered per-frame ONLY where this frame's "
           f"satstar model does not cover them (thresh={satstar_cover_thresh})",
@@ -4106,6 +4476,31 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
           + (f" (the accepted rule is NIRCam-only; {filtername} is MIRI)"
              if _cover_mode != _mergedcat_satstar_cover_mode() else ''), flush=True)
 
+    # Uncovered saturated rows no frame's data support (_satrow_supported_flux);
+    # off by default.  MIRI renders its uncovered satstars through the flat-top
+    # path instead.
+    _satrow_min = (_satrow_support_min()
+                   if _instrument_from_filter(filtername) != 'MIRI' else 0.0)
+    if _satrow_min > 0:
+        print(f"mergedcat: an uncovered saturated row is rendered at the flux "
+              f"a frame's data show where that is < {_satrow_min:g} of the "
+              f"merged flux (MERGE_SATROW_DATA_SUPPORT_MIN)", flush=True)
+
+    # Rows a frame's own residual does not support (_resid_supported_shrink);
+    # off by default.
+    _resid_min, _resid_nmax = (_row_resid_support_params()
+                               if _instrument_from_filter(filtername) != 'MIRI'
+                               else (0.0, 1))
+    if _resid_min > 0:
+        print(f"mergedcat: a row is rendered at the flux a frame's residual "
+              f"supports where that is < {_resid_min:g} of the merged flux "
+              f"(MERGE_ROW_RESID_SUPPORT_MIN); tested: uncovered saturated "
+              f"rows"
+              + (f" and ordinary rows matched in <= {_resid_nmax} frame "
+                 f"catalogs (MERGE_ROW_RESID_NMATCH_MAX)" if mnmatch is not None
+                 else "; the merged catalog has no nmatch column, so no "
+                      "ordinary row is tested"), flush=True)
+
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
     # m3..m7 per-frame products carry this label (naming.perframe_label_token)
@@ -4125,6 +4520,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     _render_procs = max(1, int(getattr(options, 'mergedcat_render_procs', 1) or 1))
     import threading as _threading
     _save_lock = _threading.Lock()
+    # Single-exposure transients (env SINGLE_EXPOSURE_EVENT_MASK, off by default):
+    # the pixels of each frame's fitter input that only that frame sees, and the
+    # extreme negative pixels (env NEGATIVE_PIXEL_MASK_NSIGMA, off by default).
+    # They are written into the per-frame residual's DQ as DO_NOT_USE, so the
+    # residual mosaic does not carry them (see single_exposure_events).
+    _event_bad = _event_masks_by_frame(overlapping_frames, pipeline_dir, options)
 
     def _render_frame(orig):
         _result = {}
@@ -4227,6 +4628,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             kx = np.asarray(xx)[keep]
             ky = np.asarray(yy)[keep]
             kf = np.asarray(mflux)[keep]
+            kn = None if mnmatch is None else np.asarray(mnmatch)[keep]
             # BRIGHT / faint split (MIRI, gated by MERGE_SATSTAR_RENDER_CAP).  A very
             # bright star's broad near-saturation core is mis-fit by the peaked
             # STPSF -- over-predicted (a pedestal-gouging hole) or under-predicted
@@ -4252,6 +4654,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # bright non-saturated rows -> flat-topped with the saturated group
             bx = list(kx[bright_nonsat]); by = list(ky[bright_nonsat])
             bf = list(kf[bright_nonsat])
+            rn = None if kn is None else kn[faint]
             # Render only the saturated stars this frame's satstar model does not
             # already cover (covered = the model has a real peak there).  They go
             # in their own arrays so the model can be capped to the data below:
@@ -4278,6 +4681,15 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                              f"{satstar_cover_thresh:g} with no accepted fit of "
                              f"this frame within {_cover_radius_px:.1f} px "
                              f"(neighbour wing)" if n_wing else ''), flush=True)
+            if srx and _satrow_min > 0:
+                _sf, _n_cut = _satrow_supported_flux(
+                    base, srx, sry, srf, stamp_function(rg), _satrow_min)
+                srf = list(_sf)
+                if _n_cut:
+                    print(f"mergedcat {kind} {os.path.basename(orig)}: {_n_cut} "
+                          f"of {len(srx)} uncovered saturated rows rendered at "
+                          f"the flux this frame's data show (< "
+                          f"{_satrow_min:g} of the merged flux)", flush=True)
             tbl = Table({'x_fit': np.asarray(rx, dtype=float),
                          'y_fit': np.asarray(ry, dtype=float),
                          'flux_fit': np.asarray(rf, dtype=float)})
@@ -4317,6 +4729,38 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               'flux_fit': np.asarray(srf, dtype=float)})
                 mc_model = mc_model + _render_model_from_table(
                     stbl, rg, base.shape, psf_shape)
+            if _resid_min > 0:
+                # rows this frame's residual shows are over-subtracted: the
+                # uncovered saturated rows and the single-detection rows are
+                # drawn at the merged flux in every frame but that flux is
+                # the detecting frame's
+                _stamp_at = stamp_function(rg)
+                _unit_pk = float(np.nanmax(_stamp_at(
+                    0, psf_shape[1], 0, psf_shape[0], 1.0,
+                    psf_shape[1] // 2, psf_shape[0] // 2)))
+                _pick = (np.nonzero(rn <= _resid_nmax)[0] if rn is not None
+                         else np.zeros(0, dtype=int))
+                _cx = np.concatenate([np.asarray(rx, dtype=float)[_pick],
+                                      np.asarray(srx, dtype=float)])
+                _cy = np.concatenate([np.asarray(ry, dtype=float)[_pick],
+                                      np.asarray(sry, dtype=float)])
+                _cf = np.concatenate([np.asarray(rf, dtype=float)[_pick],
+                                      np.asarray(srf, dtype=float)])
+                _big = _cf * _unit_pk >= _RESID_SHRINK_MIN_PEAK
+                _cx, _cy, _cf = _cx[_big], _cy[_big], _cf[_big]
+                _corr, _n_fix = _resid_supported_shrink(
+                    base - mc_model, _cx, _cy, _cf, _stamp_at, psf_shape,
+                    _resid_min)
+                if _n_fix:
+                    _fix = _corr < 0
+                    mc_model = mc_model + _render_model_from_table(
+                        Table({'x_fit': _cx[_fix], 'y_fit': _cy[_fix],
+                               'flux_fit': _corr[_fix]}),
+                        rg, base.shape, psf_shape)
+                print(f"mergedcat {kind} {os.path.basename(orig)}: "
+                      f"{_n_fix} of {len(_cx)} tested rows rendered at the "
+                      f"flux this frame's residual supports (< "
+                      f"{_resid_min:g} of the merged flux)", flush=True)
             # What the two QA images must contain (test_residual_model_policy.py):
             #   residual  = background only, no stars.  base - mc_model, where
             #               base already has the satstars subtracted, so the
@@ -4365,7 +4809,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             out_resid = f'{stem}_mergedcat_residual.fits'
             out_model = f'{stem}_mergedcat_model.fits'
             with _save_lock:
-                save_residual_datamodel(raw_resid, out_resid, mc_resid)
+                # the keyword only when this frame carries an event: the default
+                # (switch off) call is the one every run made before it existed
+                _bad_kw = ({'bad_mask': _event_bad[orig]} if orig in _event_bad
+                           else {})
+                save_residual_datamodel(raw_resid, out_resid, mc_resid, **_bad_kw)
                 save_residual_datamodel(raw_model, out_model, mc_model_display,
                                         clear_dq=True)
             _result[kind] = (out_resid, out_model, raw_resid, raw_model)

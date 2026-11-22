@@ -3892,6 +3892,61 @@ def _satstar_replace_radius(filtername=None, basepath=None):
     return min(cap, _satstar_replace_radius_fwhm() * fwhm) * u.arcsec
 
 
+def _second_pass_neighbour_window():
+    """``(lo, hi)`` of ``SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN`` / ``_MAX``,
+    or None when the guard is off (the default).
+
+    A second-pass (mutual-nearest) pairing whose daophot row carries between
+    ``lo`` and ``hi`` of the satstar's flux is kept as two stars
+    (:func:`_second_pass_neighbour_veto`).  ``_MIN`` unset, blank or 0 turns
+    the guard off; ``_MAX`` defaults to 0.8.  A value that is not a finite
+    number, ``_MIN`` < 0 or ``_MAX`` <= ``_MIN`` raises ``ValueError``."""
+    raw_lo = os.environ.get('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', '')
+    if not raw_lo.strip():
+        return None
+    raw_hi = os.environ.get('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MAX', '')
+    vals = []
+    for name, raw, default in (
+            ('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', raw_lo, None),
+            ('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MAX', raw_hi, 0.8)):
+        if default is not None and not raw.strip():
+            vals.append(default)
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            val = np.nan
+        if not np.isfinite(val):
+            raise ValueError(f"{name}={raw!r}: expected a finite number")
+        vals.append(val)
+    lo, hi = vals
+    if lo < 0 or hi <= lo:
+        raise ValueError(
+            f"SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN={lo:g}, "
+            f"SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MAX={hi:g}: expected "
+            f"0 <= MIN < MAX")
+    return (lo, hi) if lo > 0 else None
+
+
+def _second_pass_neighbour_veto(catflux, satflux, lo, hi):
+    """True where a second-pass satstar/daophot-row pairing is a neighbour.
+
+    A satstar whose own daophot row is clipped pairs with it at a flux far
+    below the satstar's (0.5-3.6 mag too faint).  A row at ``lo`` <=
+    catflux / satflux < ``hi`` is a star in its own right: in o105 F212N
+    (gc-treasury 10678) the 59 second-pass pairs in that window at 0.2-0.8
+    have the data light centroid at the flux-weighted blend of the satstar
+    and the row, 0.04-0.2 px from it, so the row is a real neighbour at
+    0.075-0.105" and the pairing erased it (leftover 100-3000 MJy/sr beside
+    the satstar).  Non-finite fluxes and a non-positive satstar flux are
+    never vetoed."""
+    catflux = np.asarray(catflux, dtype=float)
+    satflux = np.asarray(satflux, dtype=float)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        frac = catflux / satflux
+    return np.isfinite(frac) & (satflux > 0) & (frac >= lo) & (frac < hi)
+
+
 def _satstar_dedup_radius():
     """Consolidation dedup radius for per-frame satstar fits.  Default 0.15";
     override with env SATSTAR_DEDUP_ARCSEC.  A saturated star's per-frame fit
@@ -5275,6 +5330,26 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                 if mutual and valid_cat_inds[ci] not in _already:
                     _newc.append(valid_cat_inds[ci])
                     _news.append(si)
+            _nbw = _second_pass_neighbour_window()
+            _spcol = ('flux' if 'flux' in cat.colnames
+                      else ('flux_fit' if 'flux_fit' in cat.colnames else None))
+            if _newc and _nbw is not None and _spcol is not None:
+                # a daophot row at lo-hi of the satstar flux is a neighbour,
+                # not the satstar's clipped own row: keep it and let the
+                # satstar be appended as its own row
+                _nv = _second_pass_neighbour_veto(
+                    np.asarray(cat[_spcol], dtype=float)[np.array(_newc, dtype=int)],
+                    np.asarray(satstar_cat['flux_fit'], dtype=float)[np.array(_news, dtype=int)],
+                    *_nbw)
+                if _nv.any():
+                    print(f"replace_saturated: second-pass neighbour guard "
+                          f"kept {int(_nv.sum())} of {len(_newc)} daophot "
+                          f"row(s) at {_nbw[0]:g} <= flux / satstar flux < "
+                          f"{_nbw[1]:g} (a neighbouring star, not the "
+                          f"satstar's clipped row); the satstar is appended",
+                          flush=True)
+                    _newc = [c for c, v in zip(_newc, _nv) if not v]
+                    _news = [x for x, v in zip(_news, _nv) if not v]
             if _newc:
                 print(f"replace_saturated: mutual-nearest second pass matched "
                       f"{len(_newc)} satstar(s) at {radius} < sep < {_wide} "
