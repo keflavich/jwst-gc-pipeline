@@ -804,6 +804,19 @@ these flag sets would remove the footgun of setting them individually.)*
     production rule that keeps a daophot-supported row (`nmatch >= 2`, flux within
     25 % of the satstar's) instead of overwriting or dropping it has not been
     written; the replay shows what such a rule can reach at most.
+  - Deblend rows on F480M (o105, the same replay on all 12 frames; the event mask,
+    negative-pixel mask and shrink 0.3 are on).  The consolidated satstar catalog goes
+    from 1703 rows (production) to 1559 (deblend): 77 new, 221 lost.  The lost rows are
+    the poorer fits (median qfit 5.5; n_frames_fit 1 / 2 / 3 or more = 105 / 60 / 56); the
+    new rows have median qfit 2.9.  Appending the 36 new rows with
+    `n_frames_fit >= 2` to the production vetted catalog takes the leftovers above 50 / 200 /
+    500 / 1000 / 2000 / 5000 MJy/sr from 274 / 165 / 110 / 84 / 24 / 2 to 264 / 156 / 101 /
+    77 / 22 / 0 and the craters deeper than 50 / 200 / 500 / 1000 / 2000 from
+    30 / 17 / 13 / 7 / 1 to 34 / 20 / 15 / 8 / 2.  Appending all 77 gives 262 / 154 / 99 / 75 /
+    22 / 0 and 36 / 22 / 17 / 10 / 3.  Also dropping the 213 base rows that match the lost
+    rows gives 311 / 202 / 147 / 99 / 22 / 0 and 31 / 19 / 14 / 8 / 2.  Of the 165 F480M
+    leftovers above 200 MJy/sr on the shrink-0.3 stack, 36 remain with the footprint mask
+    below, so most of them lie inside the mask footprint; the deblend rows change 165 to 156.
   - A footprint mask (emulation only, not in the pipeline).  Setting NaN in a disk
     of radius 1.0 x the satstar's saturated-area radius + 2 mosaic pixels around
     each consolidated satstar row, in the residual i2d, gives for o105 F212N
@@ -813,8 +826,12 @@ these flag sets would remove the footgun of setting them individually.)*
     89 / 35 / 5 / 0 / 0; the best stack with the deblend rows and the 18 supported
     rows 741 / 46 / 7 / 4 / 2 / 1 | 89 / 35 / 5 / 0 / 0.  o105 F480M production with
     the mask: 174 / 39 / 10 / 4 / 1 / 1 | 31 / 4 / 2 / 0 / 0 (production without it
-    303 / 168 / 111 / 84 / 24 / 2 | 69 / 28 / 16 / 7 / 1).  The mask hides the model
-    mismatch inside the footprint; it does not make the model fit.
+    303 / 168 / 111 / 84 / 24 / 2 | 69 / 28 / 16 / 7 / 1).  With the event mask,
+    negative-pixel mask and shrink 0.3 on, F480M with the mask gives 145 / 36 / 9 / 4 / 1 / 1 |
+    3 / 0 / 0 / 0 / 0, and 141 / 33 / 6 / 1 / 0 / 0 | 4 / 0 / 0 / 0 / 0 with the 36 deblend rows
+    as well.  The mask sets 1.66 % (F212N) and 2.19 % (F480M) of the finite pixels of the
+    residual i2d to NaN.  It hides the model mismatch inside the footprint; it does not make
+    the model fit.
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
@@ -848,6 +865,29 @@ these flag sets would remove the footgun of setting them individually.)*
     +0.054 (5.5), +0.225 (6.5), +0.143 (7.5) and +0.080 (8.5): the model is 5-9 % too
     bright inside 5 pixels and 5-23 % too faint at 5.5-8.5 pixels (beyond that the
     annulus holds other stars' model).
+  - Core pits and a radial profile correction (emulation only, o105 F212N).  The crater
+    counts above require a depth above 50 MJy/sr and above 0.3 x the model peak, which
+    leaves out the pits in the saturated cores of bright stars.  Over the 1522 isolated
+    satstars (no other satstar within 17 pixels) with `flux_fit >= 1e5` the minimum of
+    the residual within 4 pixels of the star has a median of -0.020 and a 5th percentile
+    of -0.083 times the model peak (-0.038 and -0.120 for the 226 with `flux_fit >= 1e6`);
+    194 stars have a minimum below -5000 MJy/sr, 64 below -10000 and 14 below -20000, the
+    same for the production residual and for the best stack with the deblend rows.  A
+    correction built from the data subtracts rho(r, flux) x (the star's own median model
+    profile x `flux_fit`) from the residual out to 14 pixels (tapering to zero at 16),
+    where rho is the median over isolated stars (no other satstar within 15 pixels) in six
+    `flux_fit` bins (1e5, 2e5, 5e5, 1e6, 2e6, 5e6, above) of the median residual / median
+    model in 1-pixel annuli (-0.061, -0.093 and +0.218 at 0.5, 3.5 and 6.5 pixels for the
+    1e6-2e6 bin).  Fitting rho on half of the stars (the even rows of the catalog) gives the
+    same result as fitting it on all.  The core minima then number 65 / 19 / 3 below -5000 /
+    -10000 / -20000 MJy/sr (65 / 21 / 2 for the half fit), the stars with a maximum above
+    +500 MJy/sr at 6-16 pixels fall from 46 to 31, and the stars with a minimum below
+    -500 MJy/sr there rise from 29 to 43.  The tile counts do not improve: leftovers above
+    500 MJy/sr 17 -> 17, craters deeper than 500 MJy/sr 23 -> 26 (27), craters deeper
+    than 50 MJy/sr 127 -> 150 (152).  With the footprint mask the same stars have no core
+    pixels left and 1 minimum below -500 MJy/sr and 3 maxima above +500 MJy/sr at
+    6-16 pixels.  An azimuthally averaged profile correction therefore removes about
+    two thirds of the deep pits and a third of the ring excess, and adds ring dips.
   - Caveat for every replay row above: each is the production m7 catalog with rows
     appended or changed; `replace_saturated`, the dedup and the vetting have not been
     rerun, so a restored row that vetting would remove is counted as kept.
