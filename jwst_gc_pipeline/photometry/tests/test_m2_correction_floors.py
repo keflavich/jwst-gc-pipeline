@@ -269,9 +269,9 @@ def test_the_o028_floor_covers_its_measured_scatter_with_margin():
 
 def test_g028_floor_covers_its_non_converging_exposure_only():
     """g028's F300M exposure 1 (both LW detectors) stopped three m2 cycles in a
-    row with the RA sign flipping each time: 2.04-2.72 mas after the first
-    correction (job 51788413 is the third stop).  The same exposure on the SW
-    channel converged, so the residual is not the exposure's pointing.
+    row.  Each applied correction overshot by 1.8-3.6x in RA, which left
+    2.04-2.72 mas after the first correction (job 51788413 is the third
+    stop).  The same exposure on the SW channel converged.
 
     The floor has to clear that residual, and it must leave the two F090W
     exposure-1 corrections above 4 mas (4.17, 5.15 on 2026-11-17) actionable.

@@ -414,15 +414,25 @@ PER_FIELD_FLOOR_MAS = {
     #     2026-11-17 (WARN_ONLY)  (-1.68, +1.15)         (-2.29, +1.47)
     #     2026-11-21 (51788413)   (+1.40, -2.03)         (+1.83, -1.86)
     #
-    # After the first correction, RA changes sign every cycle and the size
-    # stays at 2.0-2.7 mas: the non-converging case this module exists for.
+    # Both applied corrections overshot: the residual moved by 1.8-3.6x the
+    # applied correction in RA and 1.2-2.8x in Dec.  RA therefore changed sign
+    # at both cycles, and the size has stayed at 2.0-2.7 mas since the first
+    # correction: the non-converging case this module exists for.  The frames
+    # carry the rows 1:1 -- the exposure-1 minus exposure-2 WCS shift (crf
+    # against cal, CRVAL) equals the difference of their table rows to 0.01
+    # mas on both detectors -- so the overshoot is on the measurement side.
+    # Its cause is not identified.
+    #
     # F090W exposure 1 is the same exposure on the SW channel (vgroup 0210b,
-    # EXPSTART 60935.854926 in both headers), and it converged through the
-    # same cycles: about (+10, -8) mas on all eight detectors on 2026-11-12,
-    # about (-2.6, -0.5) on 2026-11-17, and no corrections on 2026-11-21
-    # (largest offset 2.42).  The simultaneous SW frames do not share the
-    # remaining F300M residual, so it is not a pointing error of the
-    # exposure.
+    # EXPSTART 60935.854926 in both headers).  Through the same cycles it
+    # responded at 0.9-1.3x and converged: about (+10, -8) mas on all eight
+    # detectors on 2026-11-12, about (-2.6, -0.5) on 2026-11-17, and no
+    # corrections on 2026-11-21 (largest offset 2.42).  On 2026-11-17 the two
+    # channels shared a negative RA residual; on 2026-11-21 the SW frames do
+    # not share the remaining F300M one.
+    #
+    # At this floor about 2.5 mas stays in the F300M exposure-1 LW frames.  It
+    # also stays in the merged catalogs unless ASTROM_MERGE_M2_REGISTRATION=1.
     #
     # Per-exposure tie offset (`off`, mas).  F070W-F300M are from the
     # 2026-11-21 records.  F335M-F480M are from the 2026-11-17 WARN_ONLY pass
