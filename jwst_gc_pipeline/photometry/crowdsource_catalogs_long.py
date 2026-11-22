@@ -16,6 +16,7 @@ from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry import single_exposure_events as _single_exposure_events
+from jwst_gc_pipeline.photometry import residual_footprint_mask as _residual_footprint_mask
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
@@ -4501,6 +4502,16 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                  else "; the merged catalog has no nmatch column, so no "
                       "ordinary row is tested"), flush=True)
 
+    # Blank the saturated footprints of the consolidated satstar catalog in the
+    # residual i2d (residual_footprint_mask); off by default.  Read here so a
+    # typo in the variable fails before the renders, not after them.
+    _fp_kfac, _fp_margin = _residual_footprint_mask.mask_params()
+    if _fp_kfac > 0:
+        print(f"mergedcat: the residual i2d is NaN inside {_fp_kfac:g} x the "
+              f"saturated-area radius + {_fp_margin:g} px of every consolidated "
+              f"satstar row ({_residual_footprint_mask.ENV_KFAC}, "
+              f"{_residual_footprint_mask.ENV_MARGIN})", flush=True)
+
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
     # m3..m7 per-frame products carry this label (naming.perframe_label_token)
@@ -4943,6 +4954,25 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               f"pit px (med={_med:.0f} nmad={_nmad:.0f})", flush=True)
             except (OSError, ValueError) as _e:
                 print(f"mergedcat: resid i2d pit cleanup skipped: {_e}", flush=True)
+        # Opt-in satstar footprint mask: the residual of a saturated star keeps
+        # a core pit and ring craters the model cannot remove, so blank the disk.
+        if _fp_kfac > 0 and outpaths[kind] and os.path.exists(outpaths[kind]):
+            try:
+                _fp = _residual_footprint_mask.mask_residual_i2d(
+                    outpaths[kind],
+                    _residual_footprint_mask.read_satstars(
+                        cut_bp, filtername, proposal_id, field,
+                        target=getattr(options, 'target', None)),
+                    filtername, instrument, _fp_kfac, _fp_margin)
+                print(f"  [resid i2d footprint mask] NaN'd {_fp['pixels']} px "
+                      f"({100.0 * _fp['pixels'] / max(_fp['finite'], 1):.2f}% of "
+                      f"the finite ones) around {_fp['rows']} satstar rows, "
+                      f"radius median {_fp['radius_p50']:.1f} / max "
+                      f"{_fp['radius_max']:.1f} px of {_fp['scale']:.4f} arcsec",
+                      flush=True)
+            except (OSError, ValueError) as _e:
+                print(f"WARNING mergedcat: resid i2d footprint mask skipped: "
+                      f"{_e}", flush=True)
         # also mosaic the merged-catalog MODEL so the CARTA loaders can show
         # data / model / residual / bg side by side.  This is a full 192-frame
         # resample (~20 min); it is display-only (no pipeline logic reads it and

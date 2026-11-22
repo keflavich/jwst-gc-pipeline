@@ -817,9 +817,35 @@ these flag sets would remove the footgun of setting them individually.)*
     rows gives 311 / 202 / 147 / 99 / 22 / 0 and 31 / 19 / 14 / 8 / 2.  Of the 165 F480M
     leftovers above 200 MJy/sr on the shrink-0.3 stack, 36 remain with the footprint mask
     below, so most of them lie inside the mask footprint; the deblend rows change 165 to 156.
-  - A footprint mask (emulation only, not in the pipeline).  Setting NaN in a disk
-    of radius 1.0 x the satstar's saturated-area radius + 2 mosaic pixels around
-    each consolidated satstar row, in the residual i2d, gives for o105 F212N
+  - `MERGEDCAT_FOOTPRINT_MASK_KFAC` with `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX`
+    (default 2; `residual_footprint_mask`; off unless `KFAC` is above 0).  After
+    the residual is resampled, the SCI plane of the residual i2d is set to NaN in
+    a disk of radius `KFAC` x sqrt(`sat_area` / pi) native detector pixels +
+    `MARGIN` mosaic pixels around the fitted position of every row of the
+    consolidated satstar catalog that the merge read (the native pixel is 0.031"
+    in the NIRCam short-wave filters, 0.063" in the long-wave ones and 0.11" in
+    MIRI).  A row without a positive `sat_area` has no footprint.  The SCI header
+    records `FPMASKK`, `FPMASKM` and `FPMASKN` (rows masked).  The mask is skipped
+    with a warning, and the image kept, when the consolidated catalog does not
+    exist or lacks `skycoord_fit` or `sat_area`, or when the merge read the NIRCam
+    `merged_i2d` primary catalog, which has no consolidated cache.  The model i2d,
+    the data i2d and the catalogs are as before.  The next phase of a manual run
+    takes its i2d seeds and its smoothed background map from this residual, so a
+    run that sets the switch in an intermediate phase changes those inputs; the
+    counts below are for the final residual only.  `GC_RESID_NAN_SATSTAR_FOOTPRINT`
+    (section 7) blanks the DQ-SATURATED pixels of accepted satstars in the per-frame
+    residuals of a manual pass; this switch acts on the coadd, on a disk with a margin
+    around every consolidated row, and needs no per-frame rerun.  The two have not
+    been compared.  The counts below were measured with an
+    emulation script before the switch existed.  The switch, applied to the same
+    scratch copies of the residual i2d (o105 F212N with the deblend rows and the
+    18 supported rows; o105 F480M with the shrink-0.3 stack, without and with the
+    deblend rows) at `KFAC` 1 and `MARGIN` 2, sets the same pixels to NaN
+    (3,227,541 NaN pixels of the F212N image and 667,561 of the F480M one on both
+    sides, none in only one) and leaves every other pixel unchanged (maximum
+    difference 0), so the counts of those three stacks are those of the switch;
+    the other counts came from the same emulation script.  With `KFAC` 1 and
+    `MARGIN` 2 the residual i2d gives for o105 F212N
     (leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper than
     50 / 200 / 500 / 1000 / 2000): production 845 / 178 / 133 / 116 / 66 / 18 |
     489 / 166 / 71 / 37 / 18; the best stack above 752 / 51 / 12 / 9 / 2 / 1 |
