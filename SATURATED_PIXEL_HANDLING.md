@@ -830,7 +830,22 @@ these flag sets would remove the footgun of setting them individually.)*
     500 MJy/sr, production -> replay: o045 F212N 140 -> 75 / 84 -> 20; o118 F212N
     72 -> 17 / 33 -> 3; o130 F212N 90 -> 16 / 28 -> 5; o138 F212N 89 -> 32 /
     52 -> 21; o105 F480M 111 -> 110 / 16 -> 13.  The F480M leftovers are mostly the
-    rings below, which the switches do not touch.
+    rings below, which the switches do not touch.  With the footprint mask on top
+    (`KFAC` 1, `MARGIN` 2, the production consolidated satstar catalog of each tile,
+    applied by an emulation script to scratch copies of the replays; the module was
+    not run on these tiles) the same two counts, replay -> replay with the mask, are
+    o045 F212N 75 -> 19 / 20 -> 4; o118 F212N 17 -> 8 / 3 -> 2; o130 F212N 16 -> 9 /
+    5 -> 0; o138 F212N 32 -> 17 / 21 -> 3; o045 F480M 120 -> 19 / 6 -> 0; o118 F480M
+    47 -> 10 / 4 -> 0; o130 F480M 19 -> 13 / 1 -> 0; o138 F480M 43 -> 12 / 2 -> 0;
+    o105 F480M 110 -> 9 / 13 -> 0.  The largest leftovers on o045 F212N ((266, 1113) at
+    48094 MJy/sr, (9317, 433) at 30406, (6296, 2636) at 10826) coincide with satstar
+    candidates that `fit_quality_gate` rejected (qfit 13-60).  For the first, in frame
+    `jw10678045001_02101_00004_nrca1`, the seed lies 5.5 pixels off the core of a
+    component of 143 pixels with about 40 pixels of saturated DQ in view (class D: a
+    union of components), and the fit collapses (flux 768076 -> 37910, implied peak
+    4106 against an observed 52625 MJy/sr).  In a 5-frame test of o045 F212N, 69 of
+    the 506 gate-rejected candidates with `flux_fit >= 1e4` have a
+    `--deblend-satstars` row within 8 pixels.
   - Rows that the pipeline drops, found by replay (o105 F212N, on top of the stack
     and neighbour guard above).  (1) `--deblend-satstars` (off in production; needs
     each frame's `_ramp.fits` and `_cal.fits`) run on all 48 F212N frames adds 1104
@@ -937,6 +952,42 @@ these flag sets would remove the footgun of setting them individually.)*
     leave out whatever lies inside the disks: a leftover or a crater there is not
     measured.  The mask hides the model mismatch inside the footprint; it does not
     make the model fit.
+  - Ring-zone extension (`MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN` with
+    `MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX`; `residual_footprint_mask`).  Off unless
+    `KFAC` and `RING_FLUX_MIN` are above 0; neither ring variable is read otherwise.  A
+    row of the consolidated satstar catalog whose `flux_fit` is at least `RING_FLUX_MIN`
+    gets a disk of at least `RING_RADIUS_PX` mosaic pixels (the larger of that and its
+    footprint radius above); every other row keeps its footprint disk.  A row without a
+    positive `sat_area` has no disk with or without the extension, and a NaN `flux_fit`
+    is not widened.  A consolidated cache without a `flux_fit` column skips the mask
+    with a warning and keeps the image.  `RING_FLUX_MIN` without a `RING_RADIUS_PX`
+    above 0, and a bad value of either, raise before any residual is rendered.  The SCI
+    header adds `FPRINGF` (flux), `FPRINGR` (radius in mosaic pixels) and `FPRINGN`
+    (rows at or above the flux).  The reason: 26 of the 39 craters deeper than 200
+    MJy/sr near a satstar (above) lie 12-20 pixels from it, outside the footprint disks
+    of median radius 4.7 pixels.  Emulation on scratch copies of the masked replays
+    (`RING_FLUX_MIN` 1e6; `RING_RADIUS_PX` 25 for F212N and 20 for F480M).  Craters
+    deeper than 50 / 200 / 500 MJy/sr and masked fraction of the finite pixels, mask ->
+    mask + ring:
+    - o045 F212N 139 / 57 / 4 -> 26 / 1 / 0, 1.90 -> 2.91 %.
+    - o118 F212N 75 / 26 / 2 -> 45 / 9 / 1, 0.57 -> 0.86 %.
+    - o130 F212N 55 / 9 / 0 -> 32 / 3 / 0, 0.47 -> 0.68 %.
+    - o138 F212N 92 / 27 / 3 -> 35 / 8 / 2, 0.86 -> 1.43 %.
+    - o105 F212N (deblend rows + 18 supported rows, mask 89 / 35 / 5): 43 / 13 / 3 at
+      20 pixels (+0.4 percentage points masked), 39 / 10 / 1 at 25 pixels (+0.7) and
+      38 / 8 / 1 at 34 pixels.
+    - o045, o118, o130, o138 and o105 F480M at 20 pixels: the mask leaves 0-3 craters
+      deeper than 50 MJy/sr, and the ring changes no crater count.
+    The leftovers above 500 MJy/sr change by at most two per image (o045 F212N 19 -> 18,
+    o138 F212N 17 -> 16, o045 F480M 19 -> 17, the others unchanged; o105 F212N 7 -> 8
+    at 20 pixels and 7 at 25 and 34).  The ring disk hides what is inside it: a real star
+    within 25 pixels (0.78") of a satstar with `flux_fit` of 1e6 and more is blanked
+    with it.  The module, applied to the unmasked scratch copy of the o105 F212N replay
+    (deblend rows + 18 supported rows) at 1e6 and 25 pixels, widens 239 of the 10356
+    rows, sets 1245111 more pixels to NaN (2.40 % of the 51825305 finite pixels) and gives
+    the 3611086 NaN pixels of the emulation, with every finite pixel identical (maximum
+    difference 0).  No full m7 + finalize run with the extension exists, and its radius
+    has no default.
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
@@ -1090,6 +1141,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `MIRI_EDGE_DETECT_MARGIN` | 8 | detection margin at the detector edge |
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
 | `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section) |
+| `MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN` / `MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX` | off / none | with the footprint mask on: a row of the consolidated satstar catalog with `flux_fit` of at least `RING_FLUX_MIN` gets a disk of at least `RING_RADIUS_PX` mosaic pixels (the ring craters lie 12-20 pixels out); off unless `KFAC` and `RING_FLUX_MIN` are above 0, and `RING_RADIUS_PX` has no default and must then be above 0; a bad value raises before any residual is rendered; the SCI header records `FPRINGF`, `FPRINGR`, `FPRINGN` (guards section) |
 | `SATSTAR_DAO_RESTORE_FRAC_MIN` / `SATSTAR_DAO_RESTORE_FRAC_MAX` / `SATSTAR_DAO_RESTORE_SEP_MAX_ARCSEC` / `SATSTAR_DAO_RESTORE_NEIGHBOUR_MIN_ARCSEC` | off / 1.25 / 0.03 / 0.1 | keep the daophot row a satstar overwrote when the in-field dedup would drop the satstar row: recorded flux in [`FRAC_MIN`, `FRAC_MAX`) of the satstar's, recorded position within `SEP_MAX_ARCSEC` of the satstar, no surviving satstar row within `NEIGHBOUR_MIN_ARCSEC` of it (0 turns that check off); off unless `FRAC_MIN` is above 0 (the other three are then not read); needs a merge that ran with the switch on (`satstar_dao_*` columns, section 6); a bad value raises at the start of `run_manual_pipeline` and `merge_individual_frames` |
 | `SATSTAR_SEED_REQUIRE_DO_NOT_USE` | 0 (**off**) | restrict SEEDING to truly-lost cores (debug only — see §2b) |
 | `SATSTAR_SEVERITY_FLOOR` | per-filter `SAT_SEVERITY_FLOOR` | override the daophot-mask severity floor |

@@ -4507,13 +4507,19 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # of MERGEDCAT_FOOTPRINT_MASK_PASSES (m7) when on.  Read here so a typo in a
     # variable fails before the renders, not after them.
     _fp_kfac, _fp_margin = _residual_footprint_mask.mask_params()
+    _fp_ring_flux, _fp_ring_px = _residual_footprint_mask.ring_params()
     _fp_on = _residual_footprint_mask.applies_to(iteration_label)
     if _fp_on:
         print(f"mergedcat: the {iteration_label} residual i2d is NaN inside "
               f"{_fp_kfac:g} x the saturated-area radius + {_fp_margin:g} px of "
               f"every consolidated satstar row "
               f"({_residual_footprint_mask.ENV_KFAC}, "
-              f"{_residual_footprint_mask.ENV_MARGIN})", flush=True)
+              f"{_residual_footprint_mask.ENV_MARGIN})"
+              + (f", and inside at least {_fp_ring_px:g} px of every row with "
+                 f"flux_fit >= {_fp_ring_flux:g} "
+                 f"({_residual_footprint_mask.ENV_RING_FLUX_MIN}, "
+                 f"{_residual_footprint_mask.ENV_RING_RADIUS_PX})"
+                 if _fp_ring_flux is not None else ""), flush=True)
     elif _fp_kfac > 0:
         print(f"mergedcat: {_residual_footprint_mask.ENV_KFAC} is set, but pass "
               f"{iteration_label} is not in {_residual_footprint_mask.ENV_PASSES} "
@@ -4970,11 +4976,17 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                     outpaths[kind],
                     _residual_footprint_mask.read_satstars(
                         cut_bp, filtername, proposal_id, field,
-                        target=getattr(options, 'target', None)),
-                    filtername, instrument, _fp_kfac, _fp_margin)
+                        target=getattr(options, 'target', None),
+                        need_flux=_fp_ring_flux is not None),
+                    filtername, instrument, _fp_kfac, _fp_margin,
+                    ring_flux_min=_fp_ring_flux, ring_radius_px=_fp_ring_px)
+                _fp_note = (f" ({_fp['ring_rows']} of them out to at least "
+                            f"{_fp_ring_px:g} px)" if _fp_ring_flux is not None
+                            else "")
                 print(f"  [resid i2d footprint mask] NaN'd {_fp['pixels']} px "
                       f"({100.0 * _fp['pixels'] / max(_fp['finite'], 1):.2f}% of "
-                      f"the finite ones) around {_fp['rows']} satstar rows, "
+                      f"the finite ones) around {_fp['rows']} satstar "
+                      f"rows{_fp_note}, "
                       f"radius median {_fp['radius_p50']:.1f} / max "
                       f"{_fp['radius_max']:.1f} px of {_fp['scale']:.4f} arcsec",
                       flush=True)
