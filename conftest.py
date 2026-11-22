@@ -63,6 +63,8 @@ def crds_reachable():
     What the probe saw is kept in `_crds_state['why']` (the HTTP status, or the
     exception type and message, plus the elapsed time), so a skip reason or a
     failing assertion can say why the server was judged unreachable.
+    `_crds_state['timed_out']` says whether it gave up on CRDS_PROBE_TIMEOUT:
+    a server slower than that is treated as an outage, the same as a 5xx.
     """
     if 'ok' in _crds_state:
         return _crds_state['ok']
@@ -74,6 +76,7 @@ def crds_reachable():
     except ImportError:
         pass
     start = time.monotonic()
+    _crds_state['timed_out'] = False
     try:
         resp = urllib.request.urlopen(CRDS_PROBE_URL,
                                       timeout=CRDS_PROBE_TIMEOUT)
@@ -92,6 +95,11 @@ def crds_reachable():
         _crds_state['ok'] = err.code < 500
     except tuple(errors) as err:
         seen = f'{type(err).__name__}: {err}'
+        # urllib raises a bare TimeoutError when the response is slow and wraps
+        # it in URLError when connect or the TLS handshake is.
+        _crds_state['timed_out'] = (
+            isinstance(err, TimeoutError)
+            or isinstance(getattr(err, 'reason', None), TimeoutError))
         _crds_state['ok'] = False
     _crds_state['why'] = f'{seen} after {time.monotonic() - start:.2f} s'
     return _crds_state['ok']
