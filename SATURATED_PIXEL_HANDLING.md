@@ -818,7 +818,8 @@ these flag sets would remove the footgun of setting them individually.)*
     leftovers above 200 MJy/sr on the shrink-0.3 stack, 36 remain with the footprint mask
     below, so most of them lie inside the mask footprint; the deblend rows change 165 to 156.
   - `MERGEDCAT_FOOTPRINT_MASK_KFAC` with `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX`
-    (default 2; `residual_footprint_mask`; off unless `KFAC` is above 0).  After
+    (default 2) and `MERGEDCAT_FOOTPRINT_MASK_PASSES` (default `m7`;
+    `residual_footprint_mask`; off unless `KFAC` is above 0).  After
     the residual is resampled, the SCI plane of the residual i2d is set to NaN in
     a disk of radius `KFAC` x sqrt(`sat_area` / pi) native detector pixels +
     `MARGIN` mosaic pixels around the fitted position of every row of the
@@ -831,8 +832,12 @@ these flag sets would remove the footgun of setting them individually.)*
     `merged_i2d` primary catalog, which has no consolidated cache.  The model i2d,
     the data i2d and the catalogs are as before.  The next phase of a manual run
     takes its i2d seeds and its smoothed background map from this residual, so a
-    run that sets the switch in an intermediate phase changes those inputs; the
-    counts below are for the final residual only.  `GC_RESID_NAN_SATSTAR_FOOTPRINT`
+    mask in an intermediate pass would change those inputs, and the counts below
+    are for the final residual only.  The mask is therefore applied to the passes
+    that `MERGEDCAT_FOOTPRINT_MASK_PASSES` lists (`m2` ... `m7`, comma- or
+    space-separated; unset or blank gives `m7`, as for `GC_RESID_NAN_SATSTAR_PASSES`)
+    and a run with the switch on prints which pass it left alone; an unknown label
+    raises before any residual is rendered.  `GC_RESID_NAN_SATSTAR_FOOTPRINT`
     (section 7) blanks the DQ-SATURATED pixels of accepted satstars in the per-frame
     residuals of a manual pass; this switch acts on the coadd, on a disk with a margin
     around every consolidated row, and needs no per-frame rerun.  The two have not
@@ -1010,6 +1015,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `MIRI_DAOPHOT_PROM_ROBUST` | 0 | neighbour-robust prominence on the daophot side |
 | `MIRI_EDGE_DETECT_MARGIN` | 8 | detection margin at the detector edge |
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
+| `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section) |
 | `SATSTAR_SEED_REQUIRE_DO_NOT_USE` | 0 (**off**) | restrict SEEDING to truly-lost cores (debug only — see §2b) |
 | `SATSTAR_SEVERITY_FLOOR` | per-filter `SAT_SEVERITY_FLOOR` | override the daophot-mask severity floor |
 | `SATSTAR_MIN_LOST_CORE` | 5 | min truly-lost core size (px) |

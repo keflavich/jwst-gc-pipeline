@@ -21,9 +21,10 @@ of the residual i2d changes; the model i2d, the data i2d and the catalogs do not
 
 The switch is off unless ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is a number above 0.
 The next phase of a manual run reads the residual i2d for its i2d seeds and its
-smoothed background map, so a run that sets the switch in an intermediate phase
-changes those inputs; the replays in ``SATURATED_PIXEL_HANDLING.md`` measured the
-final residual only.
+smoothed background map, and the replays in ``SATURATED_PIXEL_HANDLING.md``
+measured the final residual only, so the mask is scoped to the m7 pass unless
+``MERGEDCAT_FOOTPRINT_MASK_PASSES`` lists others (the scope of
+``GC_RESID_NAN_SATSTAR_PASSES``).
 """
 import math
 import os
@@ -44,6 +45,16 @@ ENV_KFAC = 'MERGEDCAT_FOOTPRINT_MASK_KFAC'
 ENV_MARGIN = 'MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX'
 
 DEFAULT_MARGIN_PX = 2.0
+
+#: manual passes whose residual i2d gets the mask, comma- or space-separated;
+#: unset or blank gives ``DEFAULT_PASSES``
+ENV_PASSES = 'MERGEDCAT_FOOTPRINT_MASK_PASSES'
+
+#: iteration labels ``build_mergedcat_residuals`` is called with (the ``m12``
+#: driver phase passes ``m2``)
+PASS_LABELS = ('m2', 'm3', 'm4', 'm5', 'm6', 'm7')
+
+DEFAULT_PASSES = ('m7',)
 
 
 class FootprintMaskUnavailable(ValueError):
@@ -75,6 +86,42 @@ def mask_params():
     if kfac == 0.0:
         return 0.0, DEFAULT_MARGIN_PX
     return kfac, _env_number(ENV_MARGIN, DEFAULT_MARGIN_PX)
+
+
+def mask_passes():
+    """Passes whose residual i2d gets the mask (``MERGEDCAT_FOOTPRINT_MASK_PASSES``).
+
+    Labels are comma- or space-separated (``m7`` or ``m6,m7``); unset or blank
+    gives ``('m7',)``.  The next pass reads the residual i2d of the m2-m6 passes
+    for its seeds and its background, and only the m7 residual has been replayed
+    with the mask.
+
+    Raises ``ValueError`` naming the variable when a label is not one of
+    ``PASS_LABELS``; a typo would otherwise switch the mask off for every pass
+    without a word.
+    """
+    raw = os.environ.get(ENV_PASSES, '')
+    passes = tuple(tok.lower() for tok in raw.replace(',', ' ').split())
+    bad = [tok for tok in passes if tok not in PASS_LABELS]
+    if bad:
+        raise ValueError(
+            f"{ENV_PASSES}={raw!r}: {bad} not pass labels (any of "
+            f"{', '.join(PASS_LABELS)}, e.g. 'm7' or 'm6,m7'; unset applies the "
+            f"mask to m7 only)")
+    return passes or DEFAULT_PASSES
+
+
+def applies_to(iteration_label):
+    """Whether the residual i2d of ``iteration_label``'s pass gets the mask.
+
+    ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` above 0 and the label in
+    ``mask_passes()``.  The pass list is read only when the switch is on, so a
+    stray ``MERGEDCAT_FOOTPRINT_MASK_PASSES`` cannot break a default run.  A
+    caller without an iteration label (``None``) is never masked.
+    """
+    if mask_params()[0] <= 0.0:
+        return False
+    return iteration_label in mask_passes()
 
 
 def native_pixel_scale_arcsec(filtername, instrument=None):

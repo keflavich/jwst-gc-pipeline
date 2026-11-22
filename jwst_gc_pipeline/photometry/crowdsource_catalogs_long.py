@@ -4503,14 +4503,22 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                       "ordinary row is tested"), flush=True)
 
     # Blank the saturated footprints of the consolidated satstar catalog in the
-    # residual i2d (residual_footprint_mask); off by default.  Read here so a
-    # typo in the variable fails before the renders, not after them.
+    # residual i2d (residual_footprint_mask); off by default, and in the passes
+    # of MERGEDCAT_FOOTPRINT_MASK_PASSES (m7) when on.  Read here so a typo in a
+    # variable fails before the renders, not after them.
     _fp_kfac, _fp_margin = _residual_footprint_mask.mask_params()
-    if _fp_kfac > 0:
-        print(f"mergedcat: the residual i2d is NaN inside {_fp_kfac:g} x the "
-              f"saturated-area radius + {_fp_margin:g} px of every consolidated "
-              f"satstar row ({_residual_footprint_mask.ENV_KFAC}, "
+    _fp_on = _residual_footprint_mask.applies_to(iteration_label)
+    if _fp_on:
+        print(f"mergedcat: the {iteration_label} residual i2d is NaN inside "
+              f"{_fp_kfac:g} x the saturated-area radius + {_fp_margin:g} px of "
+              f"every consolidated satstar row "
+              f"({_residual_footprint_mask.ENV_KFAC}, "
               f"{_residual_footprint_mask.ENV_MARGIN})", flush=True)
+    elif _fp_kfac > 0:
+        print(f"mergedcat: {_residual_footprint_mask.ENV_KFAC} is set, but pass "
+              f"{iteration_label} is not in {_residual_footprint_mask.ENV_PASSES} "
+              f"({', '.join(_residual_footprint_mask.mask_passes())}); the "
+              f"residual i2d is not masked", flush=True)
 
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
@@ -4956,7 +4964,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 print(f"mergedcat: resid i2d pit cleanup skipped: {_e}", flush=True)
         # Opt-in satstar footprint mask: the residual of a saturated star keeps
         # a core pit and ring craters the model cannot remove, so blank the disk.
-        if _fp_kfac > 0 and outpaths[kind] and os.path.exists(outpaths[kind]):
+        if _fp_on and outpaths[kind] and os.path.exists(outpaths[kind]):
             try:
                 _fp = _residual_footprint_mask.mask_residual_i2d(
                     outpaths[kind],

@@ -1,6 +1,8 @@
 """The opt-in satstar footprint mask of the merged-catalog residual i2d (env
-``MERGEDCAT_FOOTPRINT_MASK_KFAC``, off by default): the switch, the disk
-geometry, the catalog reader and the hand-over from ``build_mergedcat_residuals``."""
+``MERGEDCAT_FOOTPRINT_MASK_KFAC``, off by default, applied to the m7 pass unless
+``MERGEDCAT_FOOTPRINT_MASK_PASSES`` says otherwise): the switch, the pass scope,
+the disk geometry, the catalog reader and the hand-over from
+``build_mergedcat_residuals``."""
 import math
 import os
 
@@ -34,6 +36,7 @@ SHAPE = (60, 80)
 def _clean_env(monkeypatch):
     monkeypatch.delenv(fm.ENV_KFAC, raising=False)
     monkeypatch.delenv(fm.ENV_MARGIN, raising=False)
+    monkeypatch.delenv(fm.ENV_PASSES, raising=False)
 
 
 def _i2d_wcs(scale=SCALE):
@@ -96,6 +99,42 @@ def test_switch_typo_raises_naming_the_variable(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError, match=name):
         fm.mask_params()
+
+
+def test_the_mask_is_scoped_to_m7_by_default():
+    assert fm.mask_passes() == fm.DEFAULT_PASSES == ('m7',)
+
+
+@pytest.mark.parametrize('raw, expected', [
+    ('m7', ('m7',)), ('m6,m7', ('m6', 'm7')), ('m3 m4  m7', ('m3', 'm4', 'm7')),
+    ('M7, M2', ('m7', 'm2')), ('  ', ('m7',)),
+])
+def test_pass_list_values(monkeypatch, raw, expected):
+    monkeypatch.setenv(fm.ENV_PASSES, raw)
+    assert fm.mask_passes() == expected
+
+
+@pytest.mark.parametrize('raw', ['m1', 'm12', 'm8', 'm7,m9', 'final', 'iter7'])
+def test_pass_list_typo_raises_naming_the_variable(monkeypatch, raw):
+    monkeypatch.setenv(fm.ENV_PASSES, raw)
+    with pytest.raises(ValueError, match=fm.ENV_PASSES):
+        fm.mask_passes()
+
+
+def test_applies_to_needs_the_switch_on_and_the_pass_selected(monkeypatch):
+    assert not any(fm.applies_to(label) for label in fm.PASS_LABELS)
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    assert [label for label in fm.PASS_LABELS if fm.applies_to(label)] == ['m7']
+    assert not fm.applies_to(None) and not fm.applies_to('')
+    monkeypatch.setenv(fm.ENV_PASSES, 'm3, m7')
+    assert [label for label in fm.PASS_LABELS if fm.applies_to(label)] == ['m3', 'm7']
+
+
+def test_a_stray_pass_list_cannot_break_a_run_with_the_switch_off(monkeypatch):
+    monkeypatch.setenv(fm.ENV_PASSES, 'not a pass')
+    assert fm.applies_to('m7') is False
+    monkeypatch.setenv(fm.ENV_KFAC, '0')
+    assert fm.applies_to('m7') is False
 
 
 def test_native_pixel_scale_follows_the_channel():
@@ -265,11 +304,13 @@ def test_read_satstars_for_an_unregistered_target_does_not_look_for_a_primary(tm
 
 # --- build_mergedcat_residuals -> the mask -----------------------------------------------
 
-def _build(root, monkeypatch, capsys, env=None, cache=True, written=None):
+def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
+           iteration_label=E2E_ITER):
     """Run build_mergedcat_residuals on the render-procs fixture with ``_resample_to_i2d``
     writing a real i2d, optionally with the footprint mask on and a consolidated
     satstar cache beside it.  ``written`` collects the per-frame files the residual
-    writer was given.  Returns (residual i2d path, captured stdout)."""
+    writer was given.  ``iteration_label`` is the pass the residual is built for.
+    Returns (residual i2d path, captured stdout)."""
     for var in ('MERGEDCAT_SATSTAR_COVER', 'MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM',
                 'MERGE_RENDER_PSF_SHAPE', 'MERGE_RENDER_FWHM_MULT',
                 'MERGE_SATSTAR_RENDER_CAP', 'GC_INSTRUMENT_OVERRIDE'):
@@ -277,7 +318,7 @@ def _build(root, monkeypatch, capsys, env=None, cache=True, written=None):
     for name, value in (env or {}).items():
         monkeypatch.setenv(name, value)
     root.mkdir()
-    frames, merged = _setup(root)
+    frames, merged = _setup(root, iteration_label)
     if cache:
         path = merge_catalogs.consolidated_satstar_cache_path(
             str(root), 'F480M', merge_catalogs.satstar_obs_scope(E2E_PID, E2E_FIELD))
@@ -299,7 +340,7 @@ def _build(root, monkeypatch, capsys, env=None, cache=True, written=None):
     monkeypatch.setattr(L, '_resample_to_i2d', _resample)
     outpaths = L.build_mergedcat_residuals(
         str(root), str(root), merged, 'F480M', E2E_PID, E2E_FIELD, 'merged',
-        _e2e_options(), frames, E2E_ITER, ['basic'], satstar_label=None,
+        _e2e_options(), frames, iteration_label, ['basic'], satstar_label=None,
         write_model_i2d=False)
     return outpaths['basic'], capsys.readouterr().out
 
@@ -339,4 +380,34 @@ def test_a_typo_in_the_switch_fails_before_any_residual_is_rendered(tmp_path, mo
     with pytest.raises(ValueError, match=fm.ENV_KFAC):
         _build(tmp_path / 'd', monkeypatch, capsys, env={fm.ENV_KFAC: 'oops'},
                written=written)
+    assert written == []
+
+
+def test_the_switch_leaves_the_residual_i2d_of_an_earlier_pass_alone(tmp_path, monkeypatch,
+                                                                     capsys):
+    path, out = _build(tmp_path / 'e', monkeypatch, capsys,
+                       env={fm.ENV_KFAC: '1'}, iteration_label='m3')
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert 'FPMASKK' not in h['SCI'].header
+    assert f'pass m3 is not in {fm.ENV_PASSES} (m7)' in out
+    assert 'resid i2d footprint mask' not in out
+
+
+def test_the_pass_list_selects_the_pass_to_mask(tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'f', monkeypatch, capsys,
+                       env={fm.ENV_KFAC: '1', fm.ENV_PASSES: 'm3,m7'},
+                       iteration_label='m3')
+    with fits.open(path) as h:
+        assert np.isnan(h['SCI'].data).any()
+        assert h['SCI'].header['FPMASKN'] == 2
+    assert 'the m3 residual i2d is NaN inside' in out
+
+
+def test_a_typo_in_the_pass_list_fails_before_any_residual_is_rendered(tmp_path, monkeypatch,
+                                                                       capsys):
+    written = []
+    with pytest.raises(ValueError, match=fm.ENV_PASSES):
+        _build(tmp_path / 'g', monkeypatch, capsys,
+               env={fm.ENV_KFAC: '1', fm.ENV_PASSES: 'm77'}, written=written)
     assert written == []
