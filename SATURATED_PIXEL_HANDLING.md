@@ -1067,6 +1067,14 @@ these flag sets would remove the footgun of setting them individually.)*
       0 / 0 / 0 / 0 / 0; 1.081 %.
     - o138 F480M 116 / 19 / 4 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 115 / 18 / 3 / 0 / 0 / 0 |
       0 / 0 / 0 / 0 / 0; 1.126 %.
+    - o105 F212N 740 / 46 / 7 / 4 / 2 / 1 | 39 / 10 / 1 / 0 / 0 -> 726 / 45 / 6 / 3 / 1 / 0 |
+      28 / 9 / 1 / 0 / 0; 0.331 %.
+    - o105 F480M 145 / 36 / 9 / 4 / 1 / 1 | 3 / 0 / 0 / 0 / 0 -> 120 / 24 / 3 / 0 / 0 / 0 |
+      1 / 0 / 0 / 0 / 0; 2.068 %.
+    The two o105 replays are older stacks than those of the other tiles.  o105 F212N carries
+    the deblend rows, the DAO restore, the disks and the ring zone (`RING_FLUX_MIN` 1e6,
+    `RING_RADIUS_PX` 25); o105 F480M carries the disks and the ring zone (`RING_RADIUS_PX` 20)
+    and no deblend rows.  The module was not run on o105.
 
     The F212N masks depend on the component size and the radius.  At `DQSAT_MIN_PX` 15 the
     F212N leftovers above 500 MJy/sr are 8 / 7 / 7 / 2 for o045 / o118 / o130 / o138, against
@@ -1082,12 +1090,43 @@ these flag sets would remove the footgun of setting them individually.)*
     residual, the same dilation of 4 pixels sets 1303 / 1386 / 1390 / 1245 more pixels to
     NaN (0.002-0.003 % of the finite pixels) for o045 / o118 / o130 / o138 and leaves every
     count above unchanged; the 41 x 41 pixel boxes of the data i2d around o130 (349, 2907)
-    and (4934, 195) hold no NaN pixel.  It is not in the module.  The module,
-    run on a scratch copy of the o138 F212N replay (48 per-frame residual files, 3558
-    saturated components of at least 4 pixels with 115890 detector pixels, 57455 flagged
-    mosaic pixels), sets 159492 pixels to NaN (0.312 % of the 51081875 finite pixels) and
-    gives the NaN pixels of the emulation exactly: no pixel differs, and every finite pixel
-    is identical.  No full m7 + finalize run with the extension exists.
+    and (4934, 195) hold no NaN pixel.  It is not in the module.
+    Module against the emulation.  `mask_residual_dqsat`, run on scratch copies of the
+    residual i2d of the eight tile-bands o045 / o118 / o130 / o138 x F212N / F480M with the
+    per-frame residual files of the same replays (F212N `swapdblfs3`, 48 frames; F480M
+    `sdbl`, 12 frames; `DQSAT_PX` and `DQSAT_MIN_PX` as above), gives the NaN pixels of the
+    emulation exactly: in each of the eight no pixel differs in NaN state and every finite
+    pixel is identical.  Saturated components of at least 4 pixels / saturated detector
+    pixels in them / flagged mosaic pixels / pixels set to NaN (percentage of the finite
+    pixels of the copy):
+    - o045 F212N 5193 / 193245 / 83819 / 164621 (0.327 %).
+    - o118 F212N 2738 / 79778 / 44676 / 160957 (0.313 %).
+    - o130 F212N 2556 / 65068 / 39934 / 167418 (0.325 %).
+    - o138 F212N 3558 / 115890 / 57455 / 159492 (0.312 %).
+    - o045 F480M 10089 / 722880 / 232716 / 246159 (2.026 %).
+    - o118 F480M 4927 / 322422 / 107186 / 156425 (1.266 %).
+    - o130 F480M 4109 / 225779 / 78851 / 133880 (1.081 %).
+    - o138 F480M 4382 / 271664 / 93746 / 139252 (1.126 %).
+    End to end.  The F480M residual i2d of o045 / o118 / o130 / o138 was rendered twice
+    with `build_mergedcat_residuals` (12 frames each; `KFAC` 1, `MARGIN_PX` 2), without and
+    with `DQSAT_PX` 3.  The scratch render root has no consolidated satstar catalog, so the
+    disks are skipped and the render without the setting carries no mask.  In each tile the
+    render with the setting has the NaN pixels of the emulation applied to the render
+    without it (0 pixels in only one of them; 932593 / 658388 / 602473 / 627223 NaN pixels),
+    keeps every NaN pixel of the render without it, and has the same value in every pixel
+    that is finite in both (0 differ).  The step reports the component, saturated pixel and
+    flagged pixel counts of the module run above, the header has `FPDQSATD` 3, `FPDQSATM` 4
+    and `FPDQSATN` 12, and the render without the setting has none of the three cards.  The
+    mask sets 4.325 / 2.164 / 1.732 / 1.925 % of the finite pixels of the unmasked render to
+    NaN, against 2.026 / 1.266 / 1.081 / 1.126 % on the replays that already have the disks
+    and the ring zone.  The same pair for o138 F212N (48 frames, `DQSAT_PX` 4, `FPDQSATN` 48)
+    gives the same result: 2631358 NaN pixels in the render with the setting and in the
+    emulation applied to the render without it (0 pixels in only one of them; 2363634 NaN
+    pixels without the setting), every NaN pixel of the render without it kept, 0 of 51559922
+    pixels that are finite in both differ, and 0.517 % of the finite pixels of the unmasked
+    render set to NaN (0.312 % on the replay that already has the disks and the ring zone).
+    No full m7 + finalize run with the disks, the ring zone and the extension on the real
+    consolidated satstar catalog exists.
     What the DQ_SAT mask leaves on F212N (`DQSAT_PX` 4, `DQSAT_MIN_PX` 4).  The craters deeper
     than 200 MJy/sr (o118 6, o138 5) belong to stars whose nearest vetted row is not a satstar
     row: model peaks of 423-3247 MJy/sr, depths of 30-56 % of the model peak, 0.53-1.46" from the
