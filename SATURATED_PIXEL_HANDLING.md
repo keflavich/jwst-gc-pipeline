@@ -444,6 +444,24 @@ returns 53004 / 49732 rows, identical in every column to the unflagged run
   go from 55 to 61 and 32 to 38, five of those new ones 112-170 MJy/sr deep at
   0.27 arcsec from the star. The waived rows of the 30 replayed frames are the only
   ones in these renders; the other frames of each tile were not replayed.
+- **Maskable sidelobe rejects** (`SATSTAR_SIDELOBE_MASK_FRAC_MIN` = f, default 0 =
+  off, NIRCam only). The criterion of the waiver above at its own fraction, but a fit
+  it would keep stays rejected: no model row, no catalog row, nothing subtracted.
+  Its row in `*_satstar_rejected.fits` gets `sidelobe_maskable = True`, for
+  `residual_footprint_mask` (#1361, #1364) to blank its footprint in the residual
+  i2d, so the star leaves neither a leftover nor the over-subtracted ring a waived
+  fit leaves. The flag is evaluated as if the fit were kept: it has to clear every
+  gate after the accept gate too (the implied-peak / severity gate), so an
+  over-flagged unsaturated star is not marked. Forced and position-only
+  (sibling-seeded) fits are never marked. With the switch on, the rejected table of
+  every NIRCam in-FOV frame has the `sidelobe_resid_frac` and `sidelobe_maskable`
+  columns (True or False) and the satstar catalog has `sidelobe_resid_frac`. With
+  `SATSTAR_SIDELOBE_FRAC_MIN` also set, a fit that waiver keeps is accepted as
+  before and only a fit it still rejects can be marked, so a mask fraction below the
+  waiver marks nothing. The switch keys the satstar cache (`sm<f>`). The star is
+  not modelled, so its flux is in no catalog, and a mask hides the residual inside
+  the footprint without making the model fit; whatever the star leaves outside the
+  footprint stays in the residual.
 - The MIRI seed gate, spike-merge, 2-D background, and satstar-coincidence
   exclusion are MIRI-only (§4).
 - **Detector1 provides the ramp** (`PipelineRerunNIRCAM-LONG.py`): the sibling
@@ -818,6 +836,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_OPTIN_FILTERS` | (unset: every bandpass) | bandpasses (`F480M` or `F480M,F405N`) that keep the opt-in fit switches `SATSTAR_ZF_KEEP_FINITE`, `SATSTAR_OBS_PK_FROM_CRF`, `SATSTAR_QFIT_LOCAL_GATE`, `SATSTAR_QFIT_LOCAL_R` and `SATSTAR_DEBLEND_ORDER`; for any other bandpass those five are unset for the whole per-frame fit (`satstar_optin_scoped` on `load_or_make_satstar_catalog`), so the frame fits and keys its cache (`SATFITSW`) as if they were never exported.  A chain takes one environment, so gc-treasury sets the switches once with `SATSTAR_OPTIN_FILTERS=F480M`; a malformed name raises |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
 | `SATSTAR_SIDELOBE_FRAC_MIN` | 0 (off) | NIRCam in-FOV fits: a fit that fails only the absolute sidelobe cut (`sidelobe_resid_sigma` ≤ −10) is kept when `sidelobe_resid_frac` (median residual / median model of the same r = 2–10 px annulus) is > −value; the column is written to the satstar catalog and the rejected table; a non-numeric, negative or non-finite value raises; keys the satstar cache (`sf<value>` in `SATFITSW`); see the accept-gate bullet in §3 |
+| `SATSTAR_SIDELOBE_MASK_FRAC_MIN` | 0 (off) | NIRCam in-FOV fits: a fit that fails only the absolute sidelobe cut, has `sidelobe_resid_frac` > −value and clears the gates after the accept gate stays rejected (no model row, no catalog row) and its row in `*_satstar_rejected.fits` gets `sidelobe_maskable = True`, for `residual_footprint_mask`; every rejected row gets the column (True or False) and the `sidelobe_resid_frac` column is written; forced and position-only fits are never marked; a non-numeric, negative or non-finite value raises; keys the satstar cache (`sm<value>` in `SATFITSW`); see the maskable bullet in §3 |
 | `DAOPHOT_HANDOFF_UNACCEPTED_SAT` / `DAOPHOT_HANDOFF_DATA_FLOOR` | on for the targets in `_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS` (gc-treasury), off elsewhere; an export wins / 0 | NIRCam only: hand every SATURATED component without an accepted satstar to daophot and return its valid-rate late-group pixels to the fit; limited to the bandpasses in `DAOPHOT_HANDOFF_FILTERS` when that is set; recorded per frame as catalog header `HNDOFFSA` |
 | `SATPROX_SEEDED_COMPANION` | off | NIRCam m3..m7 daophot passes on frames whose hand-off restored pixels: a fit within 0.5 px of a seed-catalog position (the pass's `prev_seed_catalog`) is exempt from the `_filter_near_saturation` veto when its nearest SATURATED pixel NOT restored to the fit (`_handoff_restore_pixels`) is more than `near_sat_dist_pix` away and it has finite `flux_fit > 0` and finite `qfit`. Keeps companions 4-5 px from a handed-off bright star whose restored late-group footprint reaches within 1 px of them (gc-treasury F480M); fresh, unseeded fits on the restored footprint stay vetoed (`cataloging.py::_seeded_companion_kwargs`). On/off values follow the hand-off convention; an unknown value raises |
 | `DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE` | 0 (off) | m3..m7 daophot pass: seeds whose 3x3 data peak exceeds this multiple of the frame's median local noise are fit first and their model is subtracted before the detection that builds the seed, so faint neighbours within ~14 px of a bright daophot-fit star are not lost to the bright star's inflated local-noise map (the satstar channel already subtracts its stars first); the bright seeds plus the residual detections then go to the one full fit; non-numeric, negative or non-finite raises (#991) |
@@ -837,13 +856,14 @@ covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
 
 The seven `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows,
-`SATSTAR_SEED_CORE_DQ`, `SATSTAR_ERR_BKG_SCATTER` and `SATSTAR_SIDELOBE_FRAC_MIN` are read by
+`SATSTAR_SEED_CORE_DQ`, `SATSTAR_ERR_BKG_SCATTER`, `SATSTAR_SIDELOBE_FRAC_MIN` and
+`SATSTAR_SIDELOBE_MASK_FRAC_MIN` are read by
 `satstar_fit_switches`, and the
 per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
 one refits the cached catalogs it affects. Their on/off values follow the
 daophot hand-off convention: unset or blank gives the default, `1/true/yes/on`
-and `0/false/no/off` are accepted in any case, and any other value raises (`SATSTAR_SIDELOBE_FRAC_MIN` is a number, 0 = off).
+and `0/false/no/off` are accepted in any case, and any other value raises (`SATSTAR_SIDELOBE_FRAC_MIN` and `SATSTAR_SIDELOBE_MASK_FRAC_MIN` are numbers, 0 = off).
 A cap-on run (`NIRCAM_SATSTAR_RECOVERED_CAP=1`, read as an integer like the
 fitter reads it) adds `cs<NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC>` to the key, so
 catalogs fitted before the cap read only the seed's share of a blended

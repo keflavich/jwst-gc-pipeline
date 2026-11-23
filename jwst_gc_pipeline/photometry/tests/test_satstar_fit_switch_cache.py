@@ -239,6 +239,7 @@ def test_catalog_built_without_the_guard_is_refit_once(tmp_path, monkeypatch):
     ('SATSTAR_ZF_RCURVE_MAXSTEP', '2'),
     ('SATSTAR_ERR_BKG_SCATTER', '1'),
     ('SATSTAR_SIDELOBE_FRAC_MIN', '0.15'),
+    ('SATSTAR_SIDELOBE_MASK_FRAC_MIN', '0.5'),
     ('SATSTAR_ZF_G0_GROUPDQ', '1'),
     ('SATSTAR_ZF_FIRST_FRAME', '1'),
     ('SATSTAR_ZF_RIM_BADPIX', '0'),
@@ -547,3 +548,36 @@ def test_fractional_sidelobe_waiver_is_off_by_default(monkeypatch):
     assert SSF.satstar_fit_switches()['sidelobe_frac_min'] == 0.0
     monkeypatch.setenv('SATSTAR_SIDELOBE_FRAC_MIN', ' 0.2 ')
     assert SSF.satstar_fit_switches()['sidelobe_frac_min'] == 0.2
+
+
+def test_signature_keys_the_sidelobe_mask_fraction_with_or_without_a_ramp(
+        tmp_path, monkeypatch):
+    """The mask switch adds a column to the rejected table of every NIRCam
+    in-FOV frame, so it keys the cache whether or not the frame has a ramp, and
+    it keys separately from the waiver it can be combined with."""
+    (tmp_path / 'noramp').mkdir()
+    (tmp_path / 'ramp').mkdir()
+    no_ramp = _frame(tmp_path / 'noramp', with_ramp=False)
+    ramp = _frame(tmp_path / 'ramp', with_ramp=True)
+    monkeypatch.setenv('SATSTAR_SIDELOBE_MASK_FRAC_MIN', '0.5')
+    assert satstar_fit_switch_signature(no_ramp) == 'sm0.5'
+    assert satstar_fit_switch_signature(ramp) == 'zfg1.3bc_sm0.5'
+    monkeypatch.setenv('SATSTAR_SIDELOBE_FRAC_MIN', '0.15')
+    assert satstar_fit_switch_signature(no_ramp) == 'sf0.15_sm0.5'
+    monkeypatch.setenv('SATSTAR_SIDELOBE_MASK_FRAC_MIN', '0')
+    assert satstar_fit_switch_signature(no_ramp) == 'sf0.15'
+
+
+@pytest.mark.parametrize('value', ['abc', '-0.1', 'nan', 'inf'])
+def test_sidelobe_mask_fraction_rejects_a_bad_value(monkeypatch, value):
+    monkeypatch.setenv('SATSTAR_SIDELOBE_MASK_FRAC_MIN', value)
+    with pytest.raises(ValueError, match='SATSTAR_SIDELOBE_MASK_FRAC_MIN'):
+        SSF.satstar_fit_switches()
+
+
+def test_sidelobe_mask_fraction_is_off_by_default(monkeypatch):
+    assert SSF.satstar_fit_switches()['sidelobe_mask_frac_min'] == 0.0
+    monkeypatch.setenv('SATSTAR_SIDELOBE_MASK_FRAC_MIN', ' 0.5 ')
+    assert SSF.satstar_fit_switches()['sidelobe_mask_frac_min'] == 0.5
+    # the waiver keeps its own value
+    assert SSF.satstar_fit_switches()['sidelobe_frac_min'] == 0.0
