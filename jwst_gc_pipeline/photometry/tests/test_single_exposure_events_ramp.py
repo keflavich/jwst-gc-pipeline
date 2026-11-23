@@ -14,6 +14,7 @@ NY = NX = 96
 NGROUP = 4
 READ_NOISE = 3.0          # DN per read
 CRF_PER_DN = 0.1          # MJy/sr per DN of the group-mean level
+CRF_PER_RATE = 2.5 * CRF_PER_DN    # MJy/sr per DN per group (the group mean of 4 groups of a ramp is 2.5 rates)
 
 
 def _profile(x, y, sigma=1.1):
@@ -21,10 +22,15 @@ def _profile(x, y, sigma=1.1):
     return np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma ** 2))
 
 
-def _cube(nint=2, seed=0, stars=(), hits=(), noise=READ_NOISE):
+CALIB = (15, 75, 20000.0)    # the bright star every frame is calibrated on, away from the hits
+
+
+def _cube(nint=2, seed=0, stars=None, hits=(), noise=READ_NOISE):
     """Ramp cube (integration, group, y, x) in DN.  ``stars`` = (x, y, rate): rate DN per
-    group in every integration.  ``hits`` = (integration, x, y, rate[, first_group]): the
-    same ramp in one integration only, from ``first_group`` on."""
+    group in every integration (default: the calibration star ``CALIB``).  ``hits`` =
+    (integration, x, y, rate[, first_group]): the same ramp in one integration only,
+    from ``first_group`` on."""
+    stars = (CALIB,) if stars is None else stars
     rng = np.random.default_rng(seed)
     cube = rng.normal(0.0, noise, (nint, NGROUP, NY, NX)) if noise else np.zeros((nint, NGROUP, NY, NX))
     for x, y, rate in stars:
@@ -38,20 +44,29 @@ def _cube(nint=2, seed=0, stars=(), hits=(), noise=READ_NOISE):
     return cube.astype(np.float32)
 
 
+def _crf(cube, seed=1):
+    """The crf of an exposure that kept everything its ramp holds: sky noise plus the
+    mean over the integrations."""
+    rng = np.random.default_rng(seed)
+    w = np.arange(cube.shape[1]) - (cube.shape[1] - 1) / 2.0
+    rate = np.tensordot(cube.astype(float), w, axes=([1], [0])) / (w * w).sum()      # least-squares slope
+    return 10.0 + rng.normal(0.0, 2.0, (NY, NX)) + CRF_PER_RATE * rate.mean(axis=0)
+
+
 class FakeFrame:
     """A frame with a crf image derived from its own ramp (the mean over integrations)."""
 
-    def __init__(self, name, cube, seed=1, sci=None):
+    def __init__(self, name, cube, seed=1, sci=None, dq=None):
         self.name = name
         self.cube = cube
         self.shape = (NY, NX)
-        rng = np.random.default_rng(seed)
         if sci is None:
-            sci = 10.0 + rng.normal(0.0, 2.0, (NY, NX)) + CRF_PER_DN * cube.mean(axis=1).mean(axis=0)
+            sci = _crf(cube, seed)
         self.sci = sci
+        self.dq = np.zeros(self.shape, dtype=np.int64) if dq is None else dq
 
     def load(self):
-        return self.sci.astype(float).copy(), np.zeros(self.shape, dtype=np.int64)
+        return self.sci.astype(float).copy(), self.dq.copy()
 
     def load_ramp(self):
         return self.cube
@@ -93,19 +108,19 @@ def test_hit_in_the_first_integration_and_a_hit_that_starts_in_the_third_group()
 
 def test_weaker_integration_above_the_fraction_is_not_an_event():
     # a 30% hit on a star: the integrations differ by far more than the noise,
-    # but the weaker one holds 77% of the stronger
-    fr = FakeFrame('f0', _cube(stars=[STAR], hits=[(0, 30, 30, 0.3 * STAR[2])]))
-    assert se.find_ramp_events([fr])[0] == []
+    # but the weaker one holds 77% of the stronger (the frame is calibrated on a second star)
+    fr = FakeFrame('f0', _cube(stars=[STAR, CALIB], hits=[(0, 30, 30, 0.3 * STAR[2])]))
+    assert se.find_ramp_events([fr]) == ([], 1)
     events, _n = se.find_ramp_events([fr], params=se.RampParams(min_diff_frac=0.1))
     assert _xy(events) == [('f0', 30, 30)]
 
 
 def test_difference_must_exceed_nsigma_times_the_scatter():
-    # a faint hit: its box sum differs by about 17 times the scatter of the integration difference
-    lev = se.ramp_levels(_cube(hits=[(1, 50, 50, 8.0)]), 3)
+    # a faint hit: its box sum differs by about 19 times the scatter of the integration difference
+    lev = se.box_sums(se.ramp_slopes(_cube(hits=[(1, 50, 50, 20.0)])), 3)
     loose, _strong, _weak, sigma = se.ramp_event_pixels(lev, se.RampParams(nsigma=10.0))
     strict, *_rest = se.ramp_event_pixels(lev, se.RampParams(nsigma=40.0))
-    assert 4.0 < sigma < 9.0                      # 3 * 1.5 DN per integration, times sqrt(2)
+    assert 4.0 < sigma < 9.0                      # 3 * 1.34 DN per group of an integration, times sqrt(2)
     assert loose[50, 50] and not strict[50, 50]
     assert (strict & ~loose).sum() == 0
 
@@ -116,6 +131,82 @@ def test_event_below_min_excess_is_ignored():
     assert se.find_ramp_events([fr])[0] == []
     events, _n = se.find_ramp_events([fr], params=se.RampParams(min_excess=50.0))
     assert _xy(events) == [('f0', 50, 50)]
+
+
+def _cleaned_crf(clean, hit, carried, seed=1):
+    """The crf of an exposure whose jump step left the fraction ``carried`` of the hit."""
+    base = _crf(clean, seed)
+    return base + carried * (_crf(hit, seed) - base)
+
+
+def test_hit_the_crf_does_not_carry_is_not_an_event():
+    # the jump step removed the hit from the rate image: the ramp still shows it, the mosaic does not
+    clean = _cube(seed=0)
+    hit = _cube(seed=0, hits=[HIT])
+    fr = FakeFrame('f0', hit, sci=_crf(clean))
+    assert se.find_ramp_events([fr]) == ([], 1)
+
+
+@pytest.mark.parametrize('carried, found', [(0.05, False), (0.1, True), (1.0, True)])
+def test_what_a_cleaned_hit_leaves_is_an_event_when_it_reaches_min_excess(carried, found):
+    # the hit adds CRF_PER_RATE * 20000 / 2 = 2500 to the crf; 5 % of it is 125, below the default 200
+    clean = _cube(seed=0)
+    hit = _cube(seed=0, hits=[HIT])
+    fr = FakeFrame('f0', hit, sci=_cleaned_crf(clean, hit, carried))
+    events, n_tested = se.find_ramp_events([fr])
+    assert n_tested == 1
+    assert _xy(events) == ([('f0', 60, 50)] if found else [])
+    if found:
+        assert events[0].excess == pytest.approx(carried * 2500.0, rel=0.1)
+        assert events[0].peak == pytest.approx(events[0].bkg + events[0].excess)
+
+
+def test_pixels_beside_a_one_pixel_hit_pass_the_box_test_but_are_not_event_pixels():
+    # the 3x3 box sum carries the hit onto its eight neighbours, among them pixels of a star whose
+    # crf does not hold the hit
+    cube = _cube(stars=[CALIB, (40, 40, 3000.0)])
+    for g in range(NGROUP):
+        cube[1, g, 40, 42] += 30000.0 * (g + 1)
+    box = se.ramp_event_pixels(se.box_sums(se.ramp_slopes(cube), 3), se.RampParams())[0]
+    assert box[39:42, 41:44].all()
+    bare, _n = se.find_ramp_events([FakeFrame('f0', cube)], params=se.RampParams(dilate=0))
+    assert [(round(e.x), round(e.y)) for e in bare] == [(42, 40)]
+    assert set(zip(bare[0].xs.tolist(), bare[0].ys.tolist())) == {(42, 40)}
+    dilated, _n = se.find_ramp_events([FakeFrame('f0', cube)])
+    assert set(zip(dilated[0].xs.tolist(), dilated[0].ys.tolist())) == {
+        (x, y) for x in (41, 42, 43) for y in (39, 40, 41)}
+
+
+def test_pixels_already_flagged_do_not_use_are_not_event_pixels():
+    dq = np.zeros((NY, NX), dtype=np.int64)
+    dq[40:61, 50:71] |= se.DO_NOT_USE
+    assert se.find_ramp_events([FakeFrame('f0', _cube(hits=[HIT]), dq=dq)]) == ([], 1)
+
+
+def test_frame_without_bright_pixels_to_calibrate_on_is_not_tested():
+    assert se.find_ramp_events([FakeFrame('dark', _cube(stars=[], hits=[HIT]))]) == ([], 0)
+
+
+def test_calibration_is_the_median_crf_per_rate_of_the_bright_agreeing_pixels():
+    cube = _cube(stars=[STAR, CALIB], hits=[HIT])
+    sci, dq = FakeFrame('f0', cube).load()
+    rate = se.ramp_slopes(cube)
+    params = se.RampParams()
+    assert se.ramp_calibration(sci, dq, rate, params) == pytest.approx(CRF_PER_RATE, rel=0.05)
+    assert np.isnan(se.ramp_calibration(sci, np.full((NY, NX), se.SATURATED), rate, params))
+    assert np.isnan(se.ramp_calibration(sci, np.full((NY, NX), se.DO_NOT_USE), rate, params))
+    assert np.isnan(se.ramp_calibration(sci, dq, rate, se.RampParams(calib_min_pixels=10 ** 6)))
+    # a pixel the integrations disagree on is no calibrator: the only bright pixels left are the hit's
+    only_hit = se.ramp_slopes(_cube(stars=[], hits=[HIT]))
+    assert np.isnan(se.ramp_calibration(sci, dq, only_hit, se.RampParams(calib_rate=10.0)))
+
+
+def test_offset_of_one_integration_is_not_an_event():
+    # a pedestal that differs between the integrations moves no rate: the box test does not see it
+    # and the crf, which is made from the rates, does not hold it
+    cube = _cube()
+    cube[1, :, 50:56, 50:56] += 5000.0
+    assert se.find_ramp_events([FakeFrame('f0', cube)]) == ([], 1)
 
 
 def test_three_integrations_compare_with_the_lower_median():
@@ -176,13 +267,32 @@ def test_duplicate_frame_names_are_refused():
         se.find_ramp_events(frames)
 
 
-def test_ramp_levels_sum_the_group_mean_over_the_box():
+def test_ramp_slopes_are_least_squares_rates_without_the_offset():
     cube = np.zeros((2, NGROUP, NY, NX), dtype=np.float32)
-    cube[0] = 5.0
-    cube[1, :, :, :] = np.arange(NGROUP, dtype=np.float32)[:, None, None]
-    lev = se.ramp_levels(cube, 3)
-    assert lev.shape == (2, NY, NX)
-    assert np.allclose(lev[0], 5.0 * 9) and np.allclose(lev[1], 1.5 * 9)
+    cube[0] = 3.0 * np.arange(NGROUP, dtype=np.float32)[:, None, None] + 700.0     # rate 3 on a pedestal of 700
+    cube[1] = -250.0                                                               # no signal, a negative offset
+    rate = se.ramp_slopes(cube)
+    assert rate.shape == (2, NY, NX) and rate.dtype == np.float32
+    assert np.allclose(rate[0], 3.0) and np.allclose(rate[1], 0.0)
+    # a ramp that is not linear: the slope of [0, 0, 0, 4] is 1.5 * 4 / 5
+    step = np.zeros((1, NGROUP, 2, 2), dtype=np.float32)
+    step[0, 3] = 4.0
+    assert np.allclose(se.ramp_slopes(step), 1.2)
+
+
+def test_ramp_slopes_need_two_groups():
+    with pytest.raises(ValueError, match='two or more groups'):
+        se.ramp_slopes(np.zeros((2, 1, 4, 4), dtype=np.float32))
+
+
+def test_box_sums_add_the_box():
+    values = np.zeros((2, NY, NX), dtype=np.float32)
+    values[0] = 2.0
+    values[1, 10, 10] = 9.0
+    sums = se.box_sums(values, 3)
+    assert sums.shape == (2, NY, NX)
+    assert np.allclose(sums[0], 18.0) and sums[1, 10, 10] == pytest.approx(9.0)
+    assert sums[1, 9:12, 9:12].sum() == pytest.approx(81.0) and sums[1, 12, 12] == 0.0
 
 
 def test_ramp_event_pixels_needs_two_integrations():
