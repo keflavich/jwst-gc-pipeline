@@ -24,7 +24,22 @@ holds a SATURATED pixel counts as bright (the star saturates there too), and a
 frame with too few finite pixels is not counted at all.  Positions covered by
 one frame only cannot be tested and are left alone.
 
-The footprint of an event (``footprint``) is its SATURATED core, dilated, plus
+``find_ramp_events`` (env ``SINGLE_EXPOSURE_EVENT_RAMP``) asks the exposure
+itself instead of its neighbours, so it also tests positions that one frame
+covers and events that saturate no pixel.  An exposure reads every pixel in two
+integrations (the sibling Detector1 ``_ramp.fits``, ``SCI[integration, group,
+y, x]``): a star gives the same counts in each of them, a cosmic-ray hit adds
+counts to one.  Per frame the group-mean level of each integration is summed
+over ``box`` x ``box`` pixels; a pixel is an event pixel when the strongest
+integration exceeds the weakest (the lower median, for more than two
+integrations) by ``nsigma`` times the frame's own scatter of that difference and
+the weakest stays below ``1 - min_diff_frac`` of the strongest.  A connected set
+of event pixels is an event when its brightest crf pixel is ``min_excess`` over
+the local background of the crf; its footprint is the set, dilated.  A frame
+without a usable ramp (no sibling file, one integration, a cutout) is not tested;
+the mosaic builders print how many frames were.
+
+The footprint of a saturated-core event (``footprint``) is its SATURATED core, dilated, plus
 the connected pixels above ``max(wing_sigma * sigma, wing_frac * excess)``,
 limited to ``max_radius`` pixels.  The result is a boolean mask per frame;
 ``apply_mask_to_dq`` sets DO_NOT_USE on it, which is what the mosaic builders
@@ -40,6 +55,7 @@ the frame's own noise is a detector defect, not sky, and it enters the data
 mosaic and the merged-catalog residual as a one-pixel crater.
 """
 import os
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -52,15 +68,23 @@ SATURATED = 2
 #: environment switch of the mosaic builders; off unless set
 ENV_FLAG = 'SINGLE_EXPOSURE_EVENT_MASK'
 
+#: environment switch of the integration-consistency (ramp) test; off unless set
+ENV_RAMP = 'SINGLE_EXPOSURE_EVENT_RAMP'
+
 #: environment switch of the extreme-negative-pixel mask; off unless set
 ENV_NEGATIVE = 'NEGATIVE_PIXEL_MASK_NSIGMA'
 
+#: detector name of a crf file, and the sibling Detector1 ramp it is made from
+#: (the pattern of ``cataloging._load_ramp_group0``)
+_RAMP_NAME = re.compile(r'(_nrc[ab](?:long|[1-4]))_.*\.fits$')
 
-def event_mask_enabled():
-    """``SINGLE_EXPOSURE_EVENT_MASK``: unset or blank is off; ``1/true/yes/on`` and
-    ``0/false/no/off`` are accepted in any case.  Any other value raises
-    ``ValueError`` naming the variable, so a typo is not read as either state."""
-    raw = os.environ.get(ENV_FLAG)
+
+def _switch(name):
+    """The on/off environment variable ``name``: unset or blank is off;
+    ``1/true/yes/on`` and ``0/false/no/off`` are accepted in any case.  Any other
+    value raises ``ValueError`` naming the variable, so a typo is not read as
+    either state."""
+    raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return False
     word = raw.strip().lower()
@@ -68,7 +92,19 @@ def event_mask_enabled():
         return True
     if word in ('0', 'false', 'no', 'off'):
         return False
-    raise ValueError(f'{ENV_FLAG}={raw!r}: expected 1/true/yes/on or 0/false/no/off')
+    raise ValueError(f'{name}={raw!r}: expected 1/true/yes/on or 0/false/no/off')
+
+
+def event_mask_enabled():
+    """``SINGLE_EXPOSURE_EVENT_MASK``: the cross-frame test of ``find_events``.
+    Values as ``_switch``."""
+    return _switch(ENV_FLAG)
+
+
+def ramp_event_enabled():
+    """``SINGLE_EXPOSURE_EVENT_RAMP``: the integration-consistency test of
+    ``find_ramp_events``.  Values as ``_switch``."""
+    return _switch(ENV_RAMP)
 
 
 @dataclass(frozen=True)
@@ -99,6 +135,25 @@ class EventParams:
     edge_margin: float = 6.0
 
 
+@dataclass(frozen=True)
+class RampParams:
+    # the integrations are compared in the sum over box x box pixels
+    box: int = 3
+    # the strongest integration must exceed the weakest by this many times the
+    # frame's scatter (1.4826 MAD) of the difference of the first two integrations
+    nsigma: float = 10.0
+    # ... and the weakest must stay below (1 - min_diff_frac) of the strongest
+    min_diff_frac: float = 0.5
+    # MJy/sr over the local crf background that the brightest crf pixel of the
+    # event must reach; a smaller one is below the leftover scan's floor
+    min_excess: float = 200.0
+    # the footprint is the event pixels dilated by this many pixels
+    dilate: int = 1
+    # a connected set of event pixels larger than this is a detector or frame
+    # defect, not a hit, and is left alone
+    max_area: int = 5000
+
+
 @dataclass
 class Event:
     frame: str
@@ -112,6 +167,7 @@ class Event:
     others: list = field(default_factory=list)   # (frame name, excess) of the frames compared
     ys: np.ndarray = None                        # footprint pixels
     xs: np.ndarray = None
+    ramp: tuple = None                           # (strongest, weakest) integration level at the peak, DN
 
 
 class CrfFrame:
@@ -130,6 +186,28 @@ class CrfFrame:
         with fits.open(self.path, memmap=False) as hdul:
             return (np.asarray(hdul['SCI'].data, dtype=float),
                     np.asarray(hdul['DQ'].data).astype(np.int64))
+
+    def ramp_path(self):
+        """The sibling Detector1 ramp of this crf (``jw..._nrcb3_ramp.fits``), or
+        None when the file name carries no NIRCam detector."""
+        path = _RAMP_NAME.sub(r'\1_ramp.fits', self.path)
+        return None if path == self.path else path
+
+    def load_ramp(self):
+        """SCI cube of the sibling ramp, (integration, group, y, x) float32, or None
+        when there is no sibling file, no SCI cube, or the cube is not on the
+        detector grid of this frame (a ``--cutout-region`` crop)."""
+        path = self.ramp_path()
+        if path is None or not os.path.exists(path):
+            return None
+        with fits.open(path, memmap=False) as hdul:
+            try:
+                data = hdul['SCI'].data
+            except KeyError:
+                return None
+            if data is None or data.ndim != 4 or tuple(data.shape[-2:]) != self.shape:
+                return None
+            return np.asarray(data, dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +385,141 @@ def find_events(frames, params=EventParams(), log=None):
                             others=[(names[g], e) for g, e in others[j]],
                             ys=ys, xs=xs))
     return events
+
+
+# ---------------------------------------------------------------------------
+# One frame, one exposure's integrations: the ramp test
+# ---------------------------------------------------------------------------
+
+def ramp_levels(ramp, box):
+    """Group-mean level of each integration of ``ramp`` (integration, group, y, x),
+    summed over ``box`` x ``box`` pixels: (integration, y, x) float32."""
+    level = np.asarray(ramp, dtype=np.float32).mean(axis=1)
+    return np.stack([ndimage.uniform_filter(level[i], size=box, mode='nearest')
+                     * np.float32(box * box) for i in range(level.shape[0])])
+
+
+def ramp_event_pixels(levels, params):
+    """Pixels where one integration holds counts the others do not.
+
+    ``levels`` is the output of ``ramp_levels`` for two or more integrations.
+    Returns ``(mask, strongest, weakest, sigma)``: ``strongest`` is the largest
+    level over the integrations, ``weakest`` the lower median (the smallest for
+    two integrations, the middle one for three), and ``sigma`` the 1.4826 MAD of
+    the difference of the first two integrations over the frame.  ``mask`` is
+    True where ``strongest - weakest >= nsigma * sigma``, ``strongest`` is
+    positive and ``weakest <= (1 - min_diff_frac) * strongest``.  None when
+    ``sigma`` is not a positive number (a frame that cannot tell noise from
+    signal).
+    """
+    nint = levels.shape[0]
+    if nint < 2:
+        raise ValueError(f'ramp_event_pixels needs two or more integrations, got {nint}')
+    d01 = levels[0] - levels[1]
+    with np.errstate(invalid='ignore'):
+        sigma = float(1.4826 * np.nanmedian(np.abs(d01 - np.nanmedian(d01))))
+    if not (np.isfinite(sigma) and sigma > 0.0):
+        return None
+    strongest = levels.max(axis=0)
+    weakest = np.sort(levels, axis=0)[(nint - 1) // 2]
+    with np.errstate(invalid='ignore'):
+        mask = ((strongest - weakest >= params.nsigma * sigma) & (strongest > 0)
+                & (weakest <= (1.0 - params.min_diff_frac) * strongest))
+    return mask, strongest, weakest, sigma
+
+
+def find_ramp_candidates(sci, levels, params, event_params=EventParams()):
+    """Events of one frame from the integrations of its exposure.
+
+    ``sci`` is the crf image and ``levels`` the ``ramp_levels`` of the sibling
+    ramp, on the same pixel grid.  Returns ``(found, sigma)``: ``found`` is a
+    list of dicts ``x, y, area, peak, excess, bkg, sigma, strongest, weakest,
+    ys, xs`` (the footprint), ``sigma`` the scatter of ``ramp_event_pixels``
+    (NaN when the frame cannot be tested).
+    """
+    got = ramp_event_pixels(levels, params)
+    if got is None:
+        return [], np.nan
+    mask, strongest, weakest, sigma = got
+    ny, nx = sci.shape
+    lab, n = ndimage.label(mask, structure=np.ones((3, 3)))
+    found = []
+    if n == 0:
+        return found, sigma
+    areas = np.bincount(lab.ravel(), minlength=n + 1)
+    pad = int(params.dilate)
+    for k, sl in enumerate(ndimage.find_objects(lab), 1):
+        if areas[k] > params.max_area:
+            continue
+        sub = lab[sl] == k
+        yy, xx = np.nonzero(sub)
+        yy = yy + sl[0].start
+        xx = xx + sl[1].start
+        crf = sci[yy, xx]
+        fin = np.isfinite(crf)
+        if not fin.any():
+            continue                      # nothing of the event is in the crf
+        j = int(np.argmax(np.where(fin, crf, -np.inf)))
+        xc, yc = float(xx[j]), float(yy[j])
+        bkg, sig = _annulus_stats(sci, xc, yc, event_params.bkg_r_in, event_params.bkg_r_out)
+        if not np.isfinite(bkg):
+            continue
+        peak = float(crf[j])
+        if peak - bkg < params.min_excess:
+            continue
+        y0, y1 = max(sl[0].start - pad, 0), min(sl[0].stop + pad, ny)
+        x0, x1 = max(sl[1].start - pad, 0), min(sl[1].stop + pad, nx)
+        patch = np.zeros((y1 - y0, x1 - x0), dtype=bool)
+        patch[sl[0].start - y0:sl[0].stop - y0, sl[1].start - x0:sl[1].stop - x0] = sub
+        if pad:
+            patch = ndimage.binary_dilation(patch, structure=np.ones((3, 3)), iterations=pad)
+        fy, fx = np.nonzero(patch)
+        found.append(dict(x=xc, y=yc, area=int(areas[k]), peak=peak, excess=peak - bkg,
+                          bkg=bkg, sigma=sig,
+                          strongest=float(strongest[int(yc), int(xc)]),
+                          weakest=float(weakest[int(yc), int(xc)]),
+                          ys=fy + y0, xs=fx + x0))
+    return found, sigma
+
+
+def find_ramp_events(frames, params=RampParams(), event_params=EventParams(), log=None):
+    """Single-integration events of ``frames`` (one filter, one tile).
+
+    Each frame needs ``name``, ``shape``, ``load()`` (SCI, DQ) and ``load_ramp()``
+    (the ``(integration, group, y, x)`` cube of its exposure, or None).  A frame
+    without a cube of two or more integrations on its own pixel grid is not
+    tested.  Returns ``(events, n_tested)``: a list of ``Event`` with
+    ``others == []`` and ``ramp`` = (strongest, weakest) level at the peak, and
+    the number of frames that were tested.  ``log`` is an optional ``print``-like
+    callable.
+    """
+    log = log or (lambda *a, **k: None)
+    names = [f.name for f in frames]
+    if len(set(names)) != len(names):
+        raise ValueError('find_ramp_events: frame names are not unique')
+    events = []
+    n_tested = 0
+    for fr in frames:
+        ramp = fr.load_ramp()
+        if (ramp is None or ramp.ndim != 4 or ramp.shape[0] < 2
+                or tuple(ramp.shape[-2:]) != tuple(fr.shape)):
+            log(f'  ramp {fr.name}: no usable ramp')
+            continue
+        sci, _dq = fr.load()
+        found, sigma = find_ramp_candidates(sci, ramp_levels(ramp, params.box), params,
+                                            event_params)
+        del ramp
+        if not np.isfinite(sigma):
+            log(f'  ramp {fr.name}: no usable scatter of the integration difference, not tested')
+            continue
+        n_tested += 1
+        for c in found:
+            events.append(Event(frame=fr.name, x=c['x'], y=c['y'], area=c['area'],
+                                peak=c['peak'], excess=c['excess'], bkg=c['bkg'],
+                                sigma=c['sigma'], others=[], ys=c['ys'], xs=c['xs'],
+                                ramp=(c['strongest'], c['weakest'])))
+        log(f'  ramp {fr.name}: {len(found)} events (difference scatter {sigma:.3g} DN)')
+    return events, n_tested
 
 
 def event_masks(events, shapes):
