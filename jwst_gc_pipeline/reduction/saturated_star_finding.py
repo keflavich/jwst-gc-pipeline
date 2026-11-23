@@ -3166,8 +3166,10 @@ SATSTAR_EDGE_TOUCH_PX = 6
 
 #: Saturated pixels an edge-clipped component needs before ``SATSTAR_EDGE_POS_BOUND``
 #: applies to it, unless ``SATSTAR_EDGE_MIN_AREA`` says otherwise.  The components
-#: this near the edge with fewer are mostly detector features (sat_area 63-75 at
-#: the nrca2 / nrcb1 corner) whose fits carry no star.
+#: this near the edge with fewer include detector-corner features: the same
+#: saturated-pixel count in every frame of a detector, whatever the pointing
+#: (o045-o138 F212N: 75 on nrca2, 63 on nrcb1, 42 on nrca1, 40 on nrcb3), so
+#: not sky stars.
 SATSTAR_EDGE_MIN_AREA_DEFAULT = 100
 
 
