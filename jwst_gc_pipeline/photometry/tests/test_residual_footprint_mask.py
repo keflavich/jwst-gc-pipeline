@@ -3,7 +3,8 @@
 ``MERGEDCAT_FOOTPRINT_MASK_PASSES`` says otherwise): the switch, the pass scope,
 the disk geometry, the ring-zone extension of the disks of the brightest rows
 (``MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN`` and ``..._RING_RADIUS_PX``), the catalog
-reader and the hand-over from ``build_mergedcat_residuals``."""
+reader, the gate-rejected fits that ``MERGEDCAT_FOOTPRINT_MASK_REJECTED`` adds to the
+disks, and the hand-over from ``build_mergedcat_residuals``."""
 import math
 import os
 
@@ -40,6 +41,7 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv(fm.ENV_PASSES, raising=False)
     monkeypatch.delenv(fm.ENV_RING_FLUX_MIN, raising=False)
     monkeypatch.delenv(fm.ENV_RING_RADIUS_PX, raising=False)
+    monkeypatch.delenv(fm.ENV_REJECTED, raising=False)
 
 
 def _i2d_wcs(scale=SCALE):
@@ -454,12 +456,14 @@ def test_read_satstars_reads_the_flux_column_only_for_the_ring_extension(tmp_pat
 # --- build_mergedcat_residuals -> the mask -----------------------------------------------
 
 def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
-           iteration_label=E2E_ITER, flux=None):
+           iteration_label=E2E_ITER, flux=None, rejected=None):
     """Run build_mergedcat_residuals on the render-procs fixture with ``_resample_to_i2d``
     writing a real i2d, optionally with the footprint mask on and a consolidated
     satstar cache beside it (with a ``flux_fit`` column when ``flux`` is given).
     ``written`` collects the per-frame files the residual writer was given.
-    ``iteration_label`` is the pass the residual is built for.
+    ``iteration_label`` is the pass the residual is built for.  ``rejected`` is a
+    table written as the ``iteration_label`` rejected-satstar file of the first
+    frame.
     Returns (residual i2d path, captured stdout)."""
     for var in ('MERGEDCAT_SATSTAR_COVER', 'MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM',
                 'MERGE_RENDER_PSF_SHAPE', 'MERGE_RENDER_FWHM_MULT',
@@ -475,6 +479,8 @@ def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
         os.makedirs(os.path.dirname(path), exist_ok=True)
         _satstars(_i2d_wcs(), [(30.0, 25.0), (55.3, 40.6)], [20.0, 45.0],
                   flux=flux).write(path)
+    if rejected is not None:
+        rejected.write(frames[0].replace('.fits', f'_{iteration_label}_satstar_rejected.fits'))
     written = [] if written is None else written
 
     def _resample(files, pdir, name, **kw):
@@ -603,3 +609,412 @@ def test_ring_variables_do_nothing_while_the_mask_is_off(tmp_path, monkeypatch, 
     with fits.open(path) as h:
         assert np.all(h['SCI'].data == 1.0)
     assert 'footprint mask' not in out
+
+
+# --- the gate-rejected fits (MERGEDCAT_FOOTPRINT_MASK_REJECTED) ----------------------------
+
+def test_the_rejected_extension_is_off_by_default_and_unread_while_the_mask_is_off(monkeypatch):
+    assert fm.rejected_enabled() is False
+    monkeypatch.setenv(fm.ENV_REJECTED, 'oops')
+    assert fm.rejected_enabled() is False
+
+
+@pytest.mark.parametrize('raw, expected', [
+    ('1', True), ('true', True), (' YES ', True), ('On', True),
+    ('0', False), ('false', False), ('no', False), ('OFF', False), ('', False), ('  ', False)])
+def test_rejected_switch_values(monkeypatch, raw, expected):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_REJECTED, raw)
+    assert fm.rejected_enabled() is expected
+
+
+@pytest.mark.parametrize('raw', ['maybe', '2', 'tru'])
+def test_rejected_switch_typo_raises_naming_the_variable(monkeypatch, raw):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_REJECTED, raw)
+    with pytest.raises(ValueError, match=fm.ENV_REJECTED):
+        fm.rejected_enabled()
+
+
+def _flagged(wcs, xy, area, flag, flux=None):
+    tbl = _satstars(wcs, xy, area, flux=flux)
+    tbl[fm.MASKABLE_COLUMN] = np.asarray(flag, bool)
+    return tbl
+
+
+def test_residual_i2d_masks_the_rejected_rows_with_the_same_radius(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    wcs = _i2d_wcs()
+    stars = _satstars(wcs, [(20.0, 20.0)], [20.0])
+    rejected = _satstars(wcs, [(55.0, 40.0), (40.0, 10.0)], [45.0, 0.0])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               rejected=rejected)
+    r = [math.sqrt(a / math.pi) + 2.0 for a in (20.0, 45.0)]
+    # the second rejected row has no saturated area: no footprint
+    expected = _disk(20.0, 20.0, r[0]) | _disk(55.0, 40.0, r[1])
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert hdr['FPMASKN'] == 1 and hdr['FPREJN'] == 1
+    assert out['rows'] == 1 and out['rejected_rows'] == 1
+    assert out['pixels'] == int(expected.sum())
+    assert out['radius_max'] == pytest.approx(r[1])
+
+
+def test_residual_i2d_without_rejected_rows_records_no_rejected_count(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    out = fm.mask_residual_i2d(path, _satstars(_i2d_wcs(), [(20.0, 20.0)], [20.0]),
+                               'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0)
+    assert out['rejected_rows'] == 0
+    with fits.open(path) as h:
+        assert 'FPREJN' not in h['SCI'].header
+
+
+def test_residual_i2d_with_an_empty_rejected_table_records_a_zero_count(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    wcs = _i2d_wcs()
+    rejected = _satstars(wcs, [(55.0, 40.0)], [45.0])[:0]
+    out = fm.mask_residual_i2d(path, _satstars(wcs, [(20.0, 20.0)], [20.0]),
+                               'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0, rejected=rejected)
+    expected = _disk(20.0, 20.0, math.sqrt(20.0 / math.pi) + 2.0)
+    assert out['rows'] == 1 and out['rejected_rows'] == 0
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        assert h['SCI'].header['FPREJN'] == 0
+
+
+def test_residual_i2d_masks_the_rejected_rows_alone_when_there_is_no_consolidated_row(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    wcs = _i2d_wcs()
+    out = fm.mask_residual_i2d(path, _satstars(wcs, [(20.0, 20.0)], [0.0]), 'F480M',
+                               'NIRCAM', kfac=1.0, margin_px=2.0,
+                               rejected=_satstars(wcs, [(55.0, 40.0)], [45.0]))
+    assert out['rows'] == 0 and out['rejected_rows'] == 1
+    assert out['pixels'] == int(_disk(55.0, 40.0, math.sqrt(45.0 / math.pi) + 2.0).sum())
+
+
+def test_residual_i2d_ring_extension_widens_the_rejected_rows_too(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    wcs = _i2d_wcs()
+    stars = _satstars(wcs, [(20.0, 20.0)], [20.0], flux=[2e6])
+    rejected = _satstars(wcs, [(55.0, 40.0), (40.0, 10.0)], [20.0, 20.0], flux=[1e6, 5e5])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               ring_flux_min=1e6, ring_radius_px=9.3, rejected=rejected)
+    small = math.sqrt(20.0 / math.pi) + 2.0
+    expected = _disk(20.0, 20.0, 9.3) | _disk(55.0, 40.0, 9.3) | _disk(40.0, 10.0, small)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert [hdr[k] for k in ('FPMASKN', 'FPREJN', 'FPRINGN')] == [1, 2, 2]
+    assert out['rows'] == 1 and out['rejected_rows'] == 2 and out['ring_rows'] == 2
+
+
+def test_residual_i2d_ring_extension_needs_the_flux_column_of_the_rejected_rows_too(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    wcs = _i2d_wcs()
+    stars = _satstars(wcs, [(40.0, 30.0)], [20.0], flux=[1e6])
+    rejected = _satstars(wcs, [(20.0, 20.0)], [20.0])
+    with pytest.raises(fm.FootprintMaskUnavailable,
+                       match='rejected satstar catalog has no flux_fit'):
+        fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                             ring_flux_min=1e6, ring_radius_px=9.0, rejected=rejected)
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert 'FPMASKK' not in h['SCI'].header
+
+
+# --- the rejected-fit reader ---------------------------------------------------------------
+
+#: the observation the readers are scoped to (PID/FIELD above) and one exposure of it in
+#: the two frame variants that coexist in a tree
+FRAME_A = 'jw10678105001_02101_00001_nrca1_destreak_o105_crf'
+FRAME_A_ALIGN = 'jw10678105001_02101_00001_nrca1_align_o105_crf'
+FRAME_B = 'jw10678105001_02101_00002_nrca1_destreak_o105_crf'
+FRAME_OTHER_OBS = 'jw10678130001_02101_00001_nrca1_destreak_o130_crf'
+
+
+def _moved_wcs():
+    """The WCS the rejected files were written under: 90 mas from the frames'."""
+    w = _i2d_wcs()
+    w.wcs.crval = [w.wcs.crval[0] + 0.09 / 3600.0 / math.cos(math.radians(-28.9)),
+                   w.wcs.crval[1]]
+    return w
+
+
+def _rejected_file(root, stem, phase, xy, area, flag=True, filtername='F212N', flux=None):
+    """Write ``stem``'s frame (if it is not there) and its ``phase`` rejected file with the
+    stored sky under the moved WCS.  ``flag`` is one flag per row (a bool for every row), or
+    None to leave the column out.  Returns the frame path."""
+    pdir = root / filtername / 'pipeline'
+    pdir.mkdir(parents=True, exist_ok=True)
+    frame = pdir / f'{stem}.fits'
+    if not frame.exists():
+        _write_i2d(str(frame))
+    x = np.array([p[0] for p in xy], float)
+    y = np.array([p[1] for p in xy], float)
+    tbl = Table({'xcentroid': x, 'ycentroid': y,
+                 'skycoord_fit': _moved_wcs().pixel_to_world(x, y),
+                 'sat_area': np.asarray(area, float)})
+    if flux is not None:
+        tbl['flux_fit'] = np.asarray(flux, float)
+    if flag is not None:
+        tbl[fm.MASKABLE_COLUMN] = (np.full(len(xy), flag) if isinstance(flag, bool)
+                                   else np.asarray(flag, bool))
+    tbl.write(str(pdir / f'{stem}_{phase}_satstar_rejected.fits'))
+    return str(frame)
+
+
+def _sky_sep_mas(tbl, x, y):
+    now = _i2d_wcs().pixel_to_world(np.asarray(x, float), np.asarray(y, float))
+    return tbl['skycoord_fit'].separation(now).to('mas').value
+
+
+def test_read_maskable_rejected_returns_the_flagged_rows_on_the_current_frame(tmp_path):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0), (30.0, 20.0), (50.0, 40.0)],
+                           [20.0, 20.0, 45.0], flag=[True, False, True])
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                    frames=[frame])
+    assert len(got) == 2
+    assert list(got['sat_area']) == [20.0, 45.0]
+    # stored under the moved WCS, served on the frame's current one
+    assert np.all(_sky_sep_mas(got, [10.0, 50.0], [10.0, 40.0]) < 0.01)
+    assert np.all(_moved_wcs().pixel_to_world([10.0, 50.0], [10.0, 40.0])
+                  .separation(got['skycoord_fit']).to('mas').value > 50)
+
+
+def test_read_maskable_rejected_follows_the_phase_of_the_merge(tmp_path):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm6', [(5.0, 5.0)], [20.0])
+    _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0])
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                    frames=[frame])
+    assert np.all(_sky_sep_mas(got, [10.0], [10.0]) < 0.01) and len(got) == 1
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m6',
+                                    frames=[frame])
+    assert np.all(_sky_sep_mas(got, [5.0], [5.0]) < 0.01) and len(got) == 1
+
+
+def test_read_maskable_rejected_follows_the_frame_variant_of_the_merge(tmp_path):
+    frame_a = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0])
+    frame_b = _rejected_file(tmp_path, FRAME_A_ALIGN, 'm7', [(20.0, 20.0)], [20.0])
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                    frames=[frame_a])
+    assert len(got) == 1 and np.all(_sky_sep_mas(got, [10.0], [10.0]) < 0.01)
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                    frames=[frame_b])
+    assert len(got) == 1 and np.all(_sky_sep_mas(got, [20.0], [20.0]) < 0.01)
+
+
+def test_read_maskable_rejected_is_scoped_to_the_observation(tmp_path):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0])
+    _rejected_file(tmp_path, FRAME_OTHER_OBS, 'm7', [(40.0, 40.0)], [20.0])
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                    frames=[frame])
+    assert len(got) == 1 and np.all(_sky_sep_mas(got, [10.0], [10.0]) < 0.01)
+
+
+def test_read_maskable_rejected_masks_nothing_of_a_file_written_without_the_flag(tmp_path):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0])
+    # an exposure an older satstar run wrote: no flag column
+    _rejected_file(tmp_path, FRAME_B, 'm7', [(40.0, 40.0)], [20.0], flag=None)
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                    frames=[frame])
+    assert len(got) == 1 and np.all(_sky_sep_mas(got, [10.0], [10.0]) < 0.01)
+
+
+def test_read_maskable_rejected_with_every_row_unflagged_returns_an_empty_table(tmp_path):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0], flag=False)
+    got = fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                    frames=[frame])
+    assert len(got) == 0
+
+
+def test_read_maskable_rejected_without_the_flag_column_names_it(tmp_path):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0], flag=None)
+    with pytest.raises(fm.FootprintMaskUnavailable, match=fm.MASKABLE_COLUMN):
+        fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                  frames=[frame])
+
+
+def test_read_maskable_rejected_without_rejected_files_says_so(tmp_path):
+    with pytest.raises(fm.FootprintMaskUnavailable, match='no gate-rejected satstar files'):
+        fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7')
+
+
+def test_read_maskable_rejected_reads_the_flux_column_only_for_the_ring_extension(tmp_path):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0])
+    assert len(fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                         frames=[frame])) == 1
+    with pytest.raises(fm.FootprintMaskUnavailable, match='flux_fit'):
+        fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, phase='m7',
+                                  frames=[frame], need_flux=True)
+
+
+def test_read_maskable_rejected_leaves_the_primary_catalog_to_the_merge(tmp_path, monkeypatch):
+    frame = _rejected_file(tmp_path, FRAME_A, 'm7', [(10.0, 10.0)], [20.0])
+    monkeypatch.setattr(merge_catalogs, '_obs_filters_for', lambda t: {'10678': ['f212n']})
+    monkeypatch.setattr(merge_catalogs, '_primary_satstar_catalog_path',
+                        lambda *a, **k: '/x/primary_satstar_catalog.fits')
+    with pytest.raises(fm.FootprintMaskUnavailable, match='primary_satstar_catalog'):
+        fm.read_maskable_rejected(str(tmp_path), 'F212N', PID, FIELD, target='gc-treasury',
+                                  phase='m7', frames=[frame])
+
+
+@pytest.mark.parametrize('target, passed', [('gc-treasury', {'target': 'gc-treasury'}),
+                                            (None, {}), ('', {})])
+def test_read_maskable_rejected_hands_the_merges_scope_to_the_loader(monkeypatch, target, passed):
+    seen = {}
+
+    def _loader(filtername, **kwargs):
+        seen.update(kwargs, filtername=filtername)
+        return _flagged(_i2d_wcs(), [(10.0, 10.0)], [20.0], [True])
+
+    monkeypatch.setattr(merge_catalogs, '_obs_filters_for', lambda t: None)
+    monkeypatch.setattr(merge_catalogs, 'load_rejected_satstar_catalog', _loader)
+    got = fm.read_maskable_rejected(
+        '/base', 'F212N', PID, FIELD, target=target, phase='m7',
+        frames=[f'/p/{FRAME_A}.fits', f'/p/{FRAME_A_ALIGN}.fits', '/p/not_an_exposure.fits'])
+    assert len(got) == 1
+    assert seen == dict(passed, filtername='F212N', basepath='/base', proposal_id=PID,
+                        field=FIELD, phase='m7', refresh_sky=True,
+                        frame_variants=frozenset({'destreak_o105_crf', 'align_o105_crf'}))
+
+
+# --- build_mergedcat_residuals -> the rejected fits --------------------------------------
+
+@pytest.fixture
+def _registered_target(monkeypatch):
+    """The render fixture's target ('e2e') is not in the target registry, and the loader of the
+    rejected files looks its primary catalog up there; a real run's target is always registered.
+    Register it with no filters: it then has no primary catalog."""
+    monkeypatch.setattr(merge_catalogs, '_obs_filters_for', lambda target: {})
+
+
+#: a flagged and an unflagged rejected fit of the first frame, beside the two consolidated rows
+#: at (30, 25) and (55.3, 40.6) of ``_build``
+def _rejected_of_build(flux=None):
+    return _flagged(_i2d_wcs(), [(12.0, 45.0), (70.0, 10.0)], [30.0, 30.0], [True, False],
+                    flux=flux)
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_extension_blanks_the_flagged_rejected_fits_in_the_render(
+        tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'r1', monkeypatch, capsys, rejected=_rejected_of_build(),
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_REJECTED: '1'})
+    r = [1.5 * math.sqrt(a / math.pi) + 1.0 for a in (20.0, 45.0, 30.0)]
+    expected = _disk(30.0, 25.0, r[0]) | _disk(55.3, 40.6, r[1]) | _disk(12.0, 45.0, r[2])
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        assert h['SCI'].header['FPMASKN'] == 2 and h['SCI'].header['FPREJN'] == 1
+    assert f"and of every gate-rejected satstar fit flagged {fm.MASKABLE_COLUMN}" in out
+    assert f"1 gate-rejected satstar fit(s) flagged {fm.MASKABLE_COLUMN}" in out
+    assert 'around 2 satstar rows and 1 gate-rejected fit(s)' in out
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_fits_stay_in_the_image_while_the_extension_is_off(tmp_path, monkeypatch,
+                                                                       capsys):
+    path, out = _build(tmp_path / 'r2', monkeypatch, capsys, rejected=_rejected_of_build(),
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1'})
+    r = [1.5 * math.sqrt(a / math.pi) + 1.0 for a in (20.0, 45.0)]
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data),
+                              _disk(30.0, 25.0, r[0]) | _disk(55.3, 40.6, r[1]))
+        assert 'FPREJN' not in h['SCI'].header
+    assert 'gate-rejected' not in out
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_extension_without_the_flag_column_warns_and_masks_the_consolidated_rows(
+        tmp_path, monkeypatch, capsys):
+    rejected = _rejected_of_build()
+    rejected.remove_column(fm.MASKABLE_COLUMN)
+    path, out = _build(tmp_path / 'r3', monkeypatch, capsys, rejected=rejected,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_REJECTED: '1'})
+    r = [1.5 * math.sqrt(a / math.pi) + 1.0 for a in (20.0, 45.0)]
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data),
+                              _disk(30.0, 25.0, r[0]) | _disk(55.3, 40.6, r[1]))
+        assert 'FPREJN' not in h['SCI'].header
+    assert 'WARNING mergedcat: resid i2d footprint mask: the gate-rejected satstar fits are ' \
+           f'skipped' in out
+    assert fm.MASKABLE_COLUMN in out
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_extension_without_rejected_files_warns_and_masks_the_consolidated_rows(
+        tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'r4', monkeypatch, capsys,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_REJECTED: '1'})
+    with fits.open(path) as h:
+        assert h['SCI'].header['FPMASKN'] == 2 and 'FPREJN' not in h['SCI'].header
+        assert np.isnan(h['SCI'].data).any()
+    assert 'the gate-rejected satstar fits are skipped: no gate-rejected satstar files' in out
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_ring_extension_needs_the_flux_of_the_rejected_fits(tmp_path, monkeypatch,
+                                                                         capsys):
+    path, out = _build(tmp_path / 'r5', monkeypatch, capsys, rejected=_rejected_of_build(),
+                       env={fm.ENV_KFAC: '1', fm.ENV_REJECTED: '1',
+                            fm.ENV_RING_FLUX_MIN: '1e6', fm.ENV_RING_RADIUS_PX: '12'},
+                       flux=[2e6, 1e5])
+    with fits.open(path) as h:
+        assert 'FPREJN' not in h['SCI'].header
+        assert h['SCI'].header['FPRINGN'] == 1
+    assert 'the gate-rejected satstar fits are skipped' in out and 'flux_fit' in out
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_ring_extension_widens_the_bright_rejected_fit(tmp_path, monkeypatch,
+                                                                     capsys):
+    path, out = _build(tmp_path / 'r6', monkeypatch, capsys,
+                       rejected=_rejected_of_build(flux=[3e6, 3e6]),
+                       env={fm.ENV_KFAC: '1', fm.ENV_MARGIN: '1', fm.ENV_REJECTED: '1',
+                            fm.ENV_RING_FLUX_MIN: '1e6', fm.ENV_RING_RADIUS_PX: '9.3'},
+                       flux=[2e6, 1e5])
+    small = math.sqrt(45.0 / math.pi) + 1.0
+    # the unflagged rejected fit at (70, 10) is not masked however bright it is
+    expected = _disk(30.0, 25.0, 9.3) | _disk(55.3, 40.6, small) | _disk(12.0, 45.0, 9.3)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        assert h['SCI'].header['FPRINGN'] == 2
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_a_typo_in_the_rejected_switch_fails_before_any_residual_is_rendered(
+        tmp_path, monkeypatch, capsys):
+    written = []
+    with pytest.raises(ValueError, match=fm.ENV_REJECTED):
+        _build(tmp_path / 'r7', monkeypatch, capsys, written=written,
+               env={fm.ENV_KFAC: '1', fm.ENV_REJECTED: 'maybe'})
+    assert written == []
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_switch_does_nothing_while_the_mask_is_off(tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'r8', monkeypatch, capsys, rejected=_rejected_of_build(),
+                       env={fm.ENV_REJECTED: 'maybe'})
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+    assert 'footprint mask' not in out
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_rejected_files_are_not_read_for_a_pass_the_mask_skips(tmp_path, monkeypatch,
+                                                                  capsys):
+    def _never(*a, **k):
+        raise AssertionError('the rejected files are read for the masked pass only')
+
+    monkeypatch.setattr(merge_catalogs, 'load_rejected_satstar_catalog', _never)
+    path, out = _build(tmp_path / 'r9', monkeypatch, capsys, iteration_label='m3',
+                       rejected=_rejected_of_build(),
+                       env={fm.ENV_KFAC: '1', fm.ENV_REJECTED: '1'})
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)

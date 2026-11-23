@@ -430,3 +430,90 @@ def test_consolidated_cache_is_still_reused_when_nothing_moved(tmp_path, capsys)
     out = capsys.readouterr().out
     assert 'Using consolidated satstar catalog' in out, out
     assert 'Rebuilding' not in out, out
+
+
+# --- the gate-rejected channel ---------------------------------------------------------
+
+def _rejected_tree(tmp_path, fit_wcs, now_wcs, x, y):
+    """One exposure whose rejected file was written under ``fit_wcs`` and whose
+    frame has since moved to ``now_wcs``.  Returns the frame path."""
+    pdir = tmp_path / 'F182M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    frame = pdir / 'jw02221001001_02101_00001_nrca1_o001_crf.fits'
+    _write_frame(str(frame), now_wcs)
+    rejected = _satstar_table(fit_wcs, x, y)
+    rejected['reject_reason'] = 'fit_quality_gate'
+    rejected.write(str(frame).replace('.fits', '_m6_satstar_rejected.fits'))
+    return str(frame)
+
+
+def test_rejected_loader_serves_the_stored_sky_unless_asked_to_refresh(tmp_path):
+    """``refresh_sky`` is opt-in: the merge's flagging of gate-taper rows reads the
+    rejected table as it always did."""
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    fit_wcs = _wcs()
+    now_wcs = _wcs(crval1=266.5 + 90e-3 / 3600.0 / np.cos(np.radians(-28.7)))
+    x = np.array([25.0, 75.0])
+    y = np.array([35.0, 85.0])
+    _rejected_tree(tmp_path, fit_wcs, now_wcs, x, y)
+
+    got = MC.load_rejected_satstar_catalog('F182M', basepath=str(tmp_path))
+    assert len(got) == 2
+    assert np.all(_seps(got, fit_wcs.pixel_to_world(x, y)) < 0.01)
+    assert np.all(_seps(got, now_wcs.pixel_to_world(x, y)) > 50)
+
+
+def test_rejected_loader_refresh_sky_reprojects_onto_the_current_frame(tmp_path):
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    fit_wcs = _wcs()
+    now_wcs = _wcs(crval1=266.5 + 90e-3 / 3600.0 / np.cos(np.radians(-28.7)))
+    x = np.array([25.0, 75.0])
+    y = np.array([35.0, 85.0])
+    _rejected_tree(tmp_path, fit_wcs, now_wcs, x, y)
+
+    got = MC.load_rejected_satstar_catalog('F182M', basepath=str(tmp_path),
+                                           refresh_sky=True)
+    assert len(got) == 2
+    assert np.all(_seps(got, now_wcs.pixel_to_world(x, y)) < 0.01)
+    assert np.all(_seps(got, fit_wcs.pixel_to_world(x, y)) > 50)
+    np.testing.assert_array_equal(np.asarray(got['xcentroid']), x)
+    np.testing.assert_array_equal(np.asarray(got['ycentroid']), y)
+
+
+def test_rejected_loader_refresh_sky_keeps_the_stored_sky_without_a_frame(tmp_path):
+    """A rejected file with no frame beside it cannot be re-projected: it is
+    served as stored, with the warning the accepted channel gives."""
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    fit_wcs = _wcs()
+    x = np.array([25.0])
+    y = np.array([35.0])
+    pdir = tmp_path / 'F182M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    _satstar_table(fit_wcs, x, y).write(
+        str(pdir / 'jw02221001001_02101_00001_nrca1_o001_crf_m6_satstar_rejected.fits'))
+    with pytest.warns(MissingSatstarFrameWarning):
+        got = MC.load_rejected_satstar_catalog('F182M', basepath=str(tmp_path),
+                                               refresh_sky=True)
+    assert np.all(_seps(got, fit_wcs.pixel_to_world(x, y)) < 0.01)
+
+
+def test_the_shared_refresh_reads_each_frames_wcs_once(tmp_path):
+    """The rejected loader and the accepted reader share one helper; its cache
+    keys on the frame, so two files of one exposure read the frame once."""
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    fit_wcs = _wcs()
+    now_wcs = _wcs(crval1=266.6)
+    frame = str(tmp_path / 'exp_crf.fits')
+    _write_frame(frame, now_wcs)
+    cache = {}
+    for phase in ('_m5', '_m6'):
+        cat = str(tmp_path / f'exp_crf{phase}_satstar_catalog.fits')
+        tbl = MC._refresh_satstar_sky_on_current_frame(
+            _satstar_table(fit_wcs, np.array([25.0]), np.array([35.0])), cat, cache)
+        assert _seps(tbl, now_wcs.pixel_to_world(np.array([25.0]),
+                                                 np.array([35.0])))[0] < 0.01
+    assert list(cache) == [frame]

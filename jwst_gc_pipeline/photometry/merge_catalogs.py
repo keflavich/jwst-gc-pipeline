@@ -3219,6 +3219,15 @@ def _read_satstar_catalog_on_current_frame(filename, wcs_cache):
     # _dedup_satstar_catalog, which otherwise sees a filename-free vstack.
     tbl[_SATSTAR_EXPKEY_COL] = np.full(len(tbl), satstar_exposure_key(filename))
     tbl[_SATSTAR_ITER_COL] = np.full(len(tbl), satstar_iteration_token(filename))
+    return _refresh_satstar_sky_on_current_frame(tbl, filename, wcs_cache)
+
+
+def _refresh_satstar_sky_on_current_frame(tbl, filename, wcs_cache):
+    """``tbl``, read from the per-exposure satstar catalog ``filename`` (a
+    ``*_satstar_catalog.fits`` name, which locates the frame), with its sky
+    columns re-projected through the frame's CURRENT GWCS; see
+    :func:`_read_satstar_catalog_on_current_frame`.  ``wcs_cache`` maps a frame
+    path to its WCS and is filled here."""
     frame = frame_path_for_satstar_catalog(filename)
     if frame is None:
         refresh_satstar_skycoords(tbl, catalog_path=filename)
@@ -4207,7 +4216,7 @@ def apply_pooled_wingcal(satstar_cat, filtername,
 def load_rejected_satstar_catalog(filtername, target='brick',
                                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
                                   proposal_id=None, field=None, phase=None,
-                                  frame_variants=None):
+                                  frame_variants=None, refresh_sky=False):
     """Table of gate-REJECTED satstar candidates for this band.
 
     The satstar channel (Phase A2, *_satstar_rejected.fits) records candidates
@@ -4240,6 +4249,14 @@ def load_rejected_satstar_catalog(filtername, target='brick',
     ``frame_variants`` is the set :func:`load_satstar_catalog` takes; it
     chooses the accepted catalogs the rejected files follow.  Like the accepted
     channel, the primary-catalog branch above ignores it.
+
+    ``refresh_sky`` (default False, which serves ``skycoord_fit`` as stored)
+    re-projects each per-exposure file's ``skycoord_fit`` from its pixel
+    centroid through its frame's current GWCS, as the accepted channel does on
+    every read (:func:`_read_satstar_catalog_on_current_frame`, issue #193); a
+    stored position can predate a re-alignment of the frame by tens of mas.  The
+    primary-catalog branch is served as stored either way, as the accepted
+    channel serves that catalog.
     """
     # The accepted channel reads the NIRCam merged_i2d primary catalog when it
     # exists; the rejected candidates then come from that same product's
@@ -4308,6 +4325,7 @@ def load_rejected_satstar_catalog(filtername, target='brick',
         return None
     parts = []
     part_frames = []
+    wcs_cache = {}
     for f in files:
         try:
             tt = Table.read(f)
@@ -4315,9 +4333,11 @@ def load_rejected_satstar_catalog(filtername, target='brick',
             print(f"WARNING: unreadable rejected-satstar file {f}: {err}")
             continue
         if len(tt) and 'skycoord_fit' in tt.colnames:
+            _cat_path = f.replace('_satstar_rejected.fits', '_satstar_catalog.fits')
+            if refresh_sky:
+                tt = _refresh_satstar_sky_on_current_frame(tt, _cat_path, wcs_cache)
             parts.append(tt)
-            part_frames.append(frame_path_for_satstar_catalog(
-                f.replace('_satstar_rejected.fits', '_satstar_catalog.fits')))
+            part_frames.append(frame_path_for_satstar_catalog(_cat_path))
     if not parts:
         return None
     # Same per-frame pixel area as the accepted channel (load_satstar_catalog):

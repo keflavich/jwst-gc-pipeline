@@ -988,6 +988,36 @@ these flag sets would remove the footgun of setting them individually.)*
     the 3611086 NaN pixels of the emulation, with every finite pixel identical (maximum
     difference 0).  No full m7 + finalize run with the extension exists, and its radius
     has no default.
+  - Gate-rejected fits (`MERGEDCAT_FOOTPRINT_MASK_REJECTED`; `residual_footprint_mask`).
+    A bright saturated star whose fit the satstar gates reject has no row in the
+    consolidated catalog and no model, so its residual is the whole star, and the disks
+    above do not cover it.  The extension adds the disks of those fits.  Off unless
+    `KFAC` is above 0 and the variable is `1/true/yes/on`; it is not read otherwise
+    (`0/false/no/off`, unset and blank are off; any other value raises before any
+    residual is rendered).  The rows come from the `*_satstar_rejected.fits` files that
+    the merge reads with `load_rejected_satstar_catalog`: this observation's files
+    (observation scope), one phase per exposure (the pass being built, as for the
+    consolidated catalog), and the frame variants of the frames being merged.  A file
+    contributes the rows whose `sidelobe_maskable` is true.  That column is written by
+    the satstar stage when `SATSTAR_SIDELOBE_MASK_FRAC_MIN` is set: a fit
+    that only the sidelobe cut rejects, and whose annulus fraction the mask fraction
+    keeps.  A file written without it (the switch was off, or an older run) contributes
+    no row.  If no file has the column the extension is skipped with a warning and the
+    consolidated rows are still masked, so that a run which turned the extension on is
+    not left with nothing masked in silence; the same holds when the merge read the
+    NIRCam `merged_i2d` primary catalog (the rejected file beside it is not read), when
+    there are no rejected files, and, with the ring extension on, when the rejected rows
+    have no `flux_fit`.  The disk of a row is the footprint radius above, with the
+    ring-zone extension applied to the union of the consolidated and the rejected rows.
+    Unlike the accepted channel, `load_rejected_satstar_catalog` serves `skycoord_fit` as
+    stored; the mask reads it with `refresh_sky=True`, which re-projects each file's
+    pixel centroids through its frame's current GWCS as the accepted channel does on
+    every read (a stored position can be tens of mas, up to about three F212N mosaic
+    pixels, off after an offsets-table correction; issue #193).  The SCI header adds
+    `FPREJN` (rejected rows masked) when the extension is on.  The passes the mask skips
+    do not read the rejected files.  The default of the loader is unchanged.  The model
+    i2d, the data i2d and the catalogs are as before: a rejected row has no model row
+    and no catalog entry.
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
@@ -1142,6 +1172,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
 | `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section) |
 | `MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN` / `MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX` | off / none | with the footprint mask on: a row of the consolidated satstar catalog with `flux_fit` of at least `RING_FLUX_MIN` gets a disk of at least `RING_RADIUS_PX` mosaic pixels (the ring craters lie 12-20 pixels out); off unless `KFAC` and `RING_FLUX_MIN` are above 0, and `RING_RADIUS_PX` has no default and must then be above 0; a bad value raises before any residual is rendered; the SCI header records `FPRINGF`, `FPRINGR`, `FPRINGN` (guards section) |
+| `MERGEDCAT_FOOTPRINT_MASK_REJECTED` | off | with the footprint mask on: also NaN the disks (same radius, same ring-zone extension) of the gate-rejected satstar fits whose `sidelobe_maskable` is true in the `*_satstar_rejected.fits` the merge reads (observation scope, phase of the pass, frame variants of its frames; `skycoord_fit` re-projected through each frame's current GWCS); `1/true/yes/on` or `0/false/no/off`, anything else raises before any residual is rendered; not read while `KFAC` is off; rows are marked by `SATSTAR_SIDELOBE_MASK_FRAC_MIN` in the satstar stage, and a missing column warns and keeps the consolidated rows' mask; the SCI header records `FPREJN` (guards section) |
 | `SATSTAR_DAO_RESTORE_FRAC_MIN` / `SATSTAR_DAO_RESTORE_FRAC_MAX` / `SATSTAR_DAO_RESTORE_SEP_MAX_ARCSEC` / `SATSTAR_DAO_RESTORE_NEIGHBOUR_MIN_ARCSEC` | off / 1.25 / 0.03 / 0.1 | keep the daophot row a satstar overwrote when the in-field dedup would drop the satstar row: recorded flux in [`FRAC_MIN`, `FRAC_MAX`) of the satstar's, recorded position within `SEP_MAX_ARCSEC` of the satstar, no surviving satstar row within `NEIGHBOUR_MIN_ARCSEC` of it (0 turns that check off); off unless `FRAC_MIN` is above 0 (the other three are then not read); needs a merge that ran with the switch on (`satstar_dao_*` columns, section 6); a bad value raises at the start of `run_manual_pipeline` and `merge_individual_frames` |
 | `SATSTAR_SEED_REQUIRE_DO_NOT_USE` | 0 (**off**) | restrict SEEDING to truly-lost cores (debug only — see §2b) |
 | `SATSTAR_SEVERITY_FLOOR` | per-filter `SAT_SEVERITY_FLOOR` | override the daophot-mask severity floor |

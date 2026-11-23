@@ -4508,6 +4508,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # variable fails before the renders, not after them.
     _fp_kfac, _fp_margin = _residual_footprint_mask.mask_params()
     _fp_ring_flux, _fp_ring_px = _residual_footprint_mask.ring_params()
+    _fp_rej_on = _residual_footprint_mask.rejected_enabled()
     _fp_on = _residual_footprint_mask.applies_to(iteration_label)
     if _fp_on:
         print(f"mergedcat: the {iteration_label} residual i2d is NaN inside "
@@ -4519,12 +4520,32 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                  f"flux_fit >= {_fp_ring_flux:g} "
                  f"({_residual_footprint_mask.ENV_RING_FLUX_MIN}, "
                  f"{_residual_footprint_mask.ENV_RING_RADIUS_PX})"
-                 if _fp_ring_flux is not None else ""), flush=True)
+                 if _fp_ring_flux is not None else "")
+              + (f", and of every gate-rejected satstar fit flagged "
+                 f"{_residual_footprint_mask.MASKABLE_COLUMN} "
+                 f"({_residual_footprint_mask.ENV_REJECTED})"
+                 if _fp_rej_on else ""), flush=True)
     elif _fp_kfac > 0:
         print(f"mergedcat: {_residual_footprint_mask.ENV_KFAC} is set, but pass "
               f"{iteration_label} is not in {_residual_footprint_mask.ENV_PASSES} "
               f"({', '.join(_residual_footprint_mask.mask_passes())}); the "
               f"residual i2d is not masked", flush=True)
+    # The rejected fits are read once, before the renders: a missing column (the
+    # satstar stage ran without SATSTAR_SIDELOBE_MASK_FRAC_MIN) is then in the
+    # log before the long part, and the mask keeps the consolidated rows only.
+    _fp_rejected = None
+    if _fp_on and _fp_rej_on:
+        try:
+            _fp_rejected = _residual_footprint_mask.read_maskable_rejected(
+                cut_bp, filtername, proposal_id, field,
+                target=getattr(options, 'target', None), phase=iteration_label,
+                frames=overlapping_frames, need_flux=_fp_ring_flux is not None)
+            print(f"mergedcat: {len(_fp_rejected)} gate-rejected satstar fit(s) "
+                  f"flagged {_residual_footprint_mask.MASKABLE_COLUMN} for the "
+                  f"{iteration_label} footprint mask", flush=True)
+        except (OSError, ValueError) as _e:
+            print(f"WARNING mergedcat: resid i2d footprint mask: the "
+                  f"gate-rejected satstar fits are skipped: {_e}", flush=True)
 
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
@@ -4979,10 +5000,13 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                         target=getattr(options, 'target', None),
                         need_flux=_fp_ring_flux is not None),
                     filtername, instrument, _fp_kfac, _fp_margin,
-                    ring_flux_min=_fp_ring_flux, ring_radius_px=_fp_ring_px)
-                _fp_note = (f" ({_fp['ring_rows']} of them out to at least "
-                            f"{_fp_ring_px:g} px)" if _fp_ring_flux is not None
-                            else "")
+                    ring_flux_min=_fp_ring_flux, ring_radius_px=_fp_ring_px,
+                    rejected=_fp_rejected)
+                _fp_note = ((f" and {_fp['rejected_rows']} gate-rejected fit(s)"
+                             if _fp_rejected is not None else "")
+                            + (f" ({_fp['ring_rows']} of them out to at least "
+                               f"{_fp_ring_px:g} px)" if _fp_ring_flux is not None
+                               else ""))
                 print(f"  [resid i2d footprint mask] NaN'd {_fp['pixels']} px "
                       f"({100.0 * _fp['pixels'] / max(_fp['finite'], 1):.2f}% of "
                       f"the finite ones) around {_fp['rows']} satstar "
