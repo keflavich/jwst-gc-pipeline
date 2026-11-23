@@ -91,3 +91,37 @@ def test_miri_ignores_ssr():
 
 def test_miri_requires_positive_qfit():
     assert accept_satstar_fit(**_fit(qfit=-1.0), **MIRI) is False
+
+
+# ---- fractional sidelobe waiver (SATSTAR_SIDELOBE_FRAC_MIN) ---------------------
+# A bright star with a good fit by every other measure that the cut in noise units
+# fails at a few percent of its model (o130 F212N frame 00005 nrca1: snr 1328, qfit
+# 0.66, ssr 0.67, sidelobe -22.95 sigma).
+BRIGHT = dict(snr=1328.0, qfit=0.66, ssr_ratio=0.67, sidelobe_resid_sigma=-22.95)
+
+
+def test_sidelobe_cut_rejects_the_bright_star_by_default():
+    assert accept_satstar_fit(**_fit(**BRIGHT), sidelobe_resid_frac=-0.09, **NRC) is False
+
+
+def test_waiver_keeps_a_star_whose_annulus_residual_is_a_small_fraction_of_its_model():
+    assert accept_satstar_fit(**_fit(**BRIGHT), sidelobe_resid_frac=-0.09,
+                              sidelobe_frac_min=0.15, **NRC) is True
+
+
+@pytest.mark.parametrize('frac', [-0.4, -0.15, float('nan')])
+def test_waiver_does_not_cover_a_deeper_or_unmeasured_residual(frac):
+    assert accept_satstar_fit(**_fit(**BRIGHT), sidelobe_resid_frac=frac,
+                              sidelobe_frac_min=0.15, **NRC) is False
+
+
+@pytest.mark.parametrize('over', [dict(qfit=9.0), dict(snr=1.0), dict(flux=-1.0),
+                                  dict(snr=5.0, qfit=4.0, ssr_ratio=3.0)])
+def test_waiver_leaves_the_other_gates_alone(over):
+    fit = _fit(**{**BRIGHT, **over})
+    assert accept_satstar_fit(**fit, sidelobe_resid_frac=-0.01, sidelobe_frac_min=0.15, **NRC) is False
+
+
+def test_waiver_is_nircam_only():
+    fit = _fit(snr=1525.0, qfit=1.3, ssr_ratio=1.0, sidelobe_resid_sigma=-60.0)
+    assert accept_satstar_fit(**fit, sidelobe_resid_frac=-0.01, sidelobe_frac_min=0.15, **MIRI) is False
