@@ -1365,6 +1365,17 @@ def satstar_fit_switches(env=None):
       model.  Writes the ``sidelobe_resid_frac`` column; NIRCam only (the MIRI
       cut is already looser).  A non-numeric, negative or non-finite value
       raises.
+    * ``SATSTAR_SIDELOBE_MASK_FRAC_MIN`` (default 0 = OFF): the same criterion
+      at this fraction, but a fit it would keep stays rejected (no model row, no
+      catalog row, not subtracted) and its row in ``*_satstar_rejected.fits``
+      gets ``sidelobe_maskable`` = True, for ``residual_footprint_mask`` to blank
+      its footprint in the residual i2d.  A fit that fails the implied-peak gate
+      or any other gate after the accept gate is not marked.  Writes the
+      ``sidelobe_resid_frac`` column and ``sidelobe_maskable`` (every rejected
+      row, True or False); NIRCam only.  A non-numeric, negative or non-finite
+      value raises.  With ``SATSTAR_SIDELOBE_FRAC_MIN`` also set, a fit that
+      the waiver keeps is accepted as before and only a fit it still rejects
+      can be marked.
     * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
       ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
       recovered-core cap and the PSF fraction below which it is skipped
@@ -1376,13 +1387,17 @@ def satstar_fit_switches(env=None):
     qloc_r = float(env.get('SATSTAR_QFIT_LOCAL_R', '') or (10.0 if qloc_gate else 0.0))
     # Parsed like the cap itself (get_saturated_stars).
     cap_on = bool(int(env.get('NIRCAM_SATSTAR_RECOVERED_CAP', '') or 0))
-    frac_raw = env.get('SATSTAR_SIDELOBE_FRAC_MIN', '') or '0'
-    try:
-        frac_min = float(frac_raw)
-    except ValueError:
-        raise ValueError(f"SATSTAR_SIDELOBE_FRAC_MIN={frac_raw!r} is not a number") from None
-    if not (np.isfinite(frac_min) and frac_min >= 0.0):
-        raise ValueError(f"SATSTAR_SIDELOBE_FRAC_MIN={frac_raw!r} must be a finite number >= 0")
+    def _fraction(name):
+        raw = env.get(name, '') or '0'
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(f"{name}={raw!r} is not a number") from None
+        if not (np.isfinite(value) and value >= 0.0):
+            raise ValueError(f"{name}={raw!r} must be a finite number >= 0")
+        return value
+    frac_min = _fraction('SATSTAR_SIDELOBE_FRAC_MIN')
+    mask_frac_min = _fraction('SATSTAR_SIDELOBE_MASK_FRAC_MIN')
     return {
         'rcurve_guard': _env_switch('SATSTAR_ZF_RCURVE_GUARD', True, env),
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
@@ -1402,6 +1417,7 @@ def satstar_fit_switches(env=None):
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
         'recovered_cap': cap_on,
         'sidelobe_frac_min': frac_min,
+        'sidelobe_mask_frac_min': mask_frac_min,
         'deblend_psf_margin': max(
             float(env.get('SATSTAR_DEBLEND_PSF_MARGIN', '') or 0.0), 0.0),
         'cap_min_psf_frac': float(
@@ -1806,6 +1822,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
         # Changes which fits pass the accept gate of every NIRCam in-FOV
         # frame, with or without a ramp.
         parts.append(f"sf{sw['sidelobe_frac_min']:g}")
+    if sw['sidelobe_mask_frac_min'] > 0:
+        # Adds sidelobe_maskable to the rejected table of every NIRCam in-FOV
+        # frame, with or without a ramp; a catalog fitted without it has none.
+        parts.append(f"sm{sw['sidelobe_mask_frac_min']:g}")
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
@@ -5987,7 +6007,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             ssr_ratio = float('nan')
 
         result['sidelobe_resid_sigma'] = [sidelobe_resid_sigma] * len(result)
-        if _fit_switches['sidelobe_frac_min'] > 0:
+        if (_fit_switches['sidelobe_frac_min'] > 0
+                or _fit_switches['sidelobe_mask_frac_min'] > 0):
             result['sidelobe_resid_frac'] = [sidelobe_resid_frac] * len(result)
         result['ssr_ratio'] = [ssr_ratio] * len(result)
 
@@ -6088,15 +6109,28 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             qfit, qfit_local, _qfit_max_keep, is_miri=_is_miri,
             forced_source=forced_source, sat_flagged=_comp_sat_dq,
             switches=_fit_switches)
-        accept_source = accept_satstar_fit(
+        _accept_kw = dict(
             result_is_none=(result is None), fluxerr=fluxerr, snr=snr,
             flux=flux, qfit=_qfit_gate, sidelobe_resid_sigma=sidelobe_resid_sigma,
             ssr_ratio=ssr_ratio, is_miri=_is_miri,
             qfit_max_keep=_qfit_gate_max, sidelobe_min_keep=_sidelobe_min_keep,
             ssr_ratio_max_keep=_ssr_ratio_max_keep, snr_min_keep=_snr_min_keep,
-            sidelobe_resid_frac=sidelobe_resid_frac,
-            sidelobe_frac_min=_fit_switches['sidelobe_frac_min'])
-        if not accept_source:
+            sidelobe_resid_frac=sidelobe_resid_frac)
+        accept_source = accept_satstar_fit(
+            **_accept_kw, sidelobe_frac_min=_fit_switches['sidelobe_frac_min'])
+        # SATSTAR_SIDELOBE_MASK_FRAC_MIN: a fit the live gate rejects that
+        # passes with the sidelobe cut waived at this fraction runs the gates
+        # below as if kept; if it clears them it is rejected after all and
+        # marked ``sidelobe_maskable`` (see the check before ``if accept_source``).
+        _mask_only = (not accept_source
+                      and _fit_switches['sidelobe_mask_frac_min'] > 0
+                      and not forced_source and not _position_only
+                      and accept_satstar_fit(
+                          **_accept_kw,
+                          sidelobe_frac_min=_fit_switches['sidelobe_mask_frac_min']))
+        if _mask_only:
+            accept_source = True
+        elif not accept_source:
             _reject_reason = 'fit_quality_gate'
 
         # Post-fit severity gate (NIRCam in-FOV): a genuine saturated star's
@@ -6377,6 +6411,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             result['satstar_implied_peak'] = _implied_diag
             result['satstar_observed_peak'] = _obs_pk_diag
 
+        _maskable = bool(_mask_only and accept_source)
+        if _maskable:
+            # Cleared every gate with the sidelobe cut waived: not subtracted
+            # and not in the catalog, but its footprint is recorded.
+            accept_source = False
+            _reject_reason = 'fit_quality_gate'
         if accept_source:
             # FLAT-TOPPED CORE (MIRI in-FOV, env-gated).  The gates above used
             # the peaked amp*PSF model_image; now, before it is subtracted,
@@ -6497,6 +6537,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if result is not None:
                 _rej = result.copy()
                 _rej['reject_reason'] = _reject_reason or 'unspecified'
+                if _fit_switches['sidelobe_mask_frac_min'] > 0:
+                    _rej['sidelobe_maskable'] = _maskable
                 _rejected_rows.append(_rej)
 
     # Per-frame summary (retains the accept/skip signal the now-silenced
