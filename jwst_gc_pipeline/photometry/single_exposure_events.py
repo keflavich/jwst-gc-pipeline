@@ -39,8 +39,9 @@ the strongest.  The mosaic is built from the crf, not from the ramp, and the jum
 step has already removed most hits from it, so a disagreeing pixel is an event
 pixel only where the crf itself holds the extra counts: its value exceeds
 ``calibration * rate`` of the weakest integration (``calibration`` = the frame's
-median crf per DN per group on bright pixels that agree between the integrations)
-by ``vis_min`` and by ``vis_rel`` of that prediction.  The box sum leaks the
+median crf per DN per group on bright pixels that agree between the integrations;
+the prediction is floored at zero, since the crf does not follow an integration
+whose ramp falls) by ``vis_min`` and by ``vis_rel`` of that prediction.  The box sum leaks the
 disagreement onto the neighbours of a hit, and a real star next to it passes the
 box test but not this one.  A connected set of event pixels is an event when its
 pixel of largest excess over the prediction reaches ``min_excess``; its footprint
@@ -154,8 +155,8 @@ class RampParams:
     # ... and the weakest must stay below (1 - min_diff_frac) of the strongest
     min_diff_frac: float = 0.5
     # such a pixel belongs to an event only where the crf exceeds what the weakest
-    # integration alone gives (calibration * rate) by vis_min MJy/sr and by
-    # vis_rel of that prediction (the pixel-to-pixel scatter of the calibration)
+    # integration alone gives (calibration * rate, floored at zero) by vis_min MJy/sr
+    # and by vis_rel of that prediction (the pixel-to-pixel scatter of the calibration)
     vis_min: float = 50.0
     vis_rel: float = 0.1
     # the calibration is the median crf per DN per group over the pixels with at
@@ -501,7 +502,10 @@ def find_ramp_candidates(sci, dq, rate, params, event_params=EventParams()):
         return [], sigma, np.nan
     strongest = rate.max(axis=0)
     weakest = np.sort(rate, axis=0)[(rate.shape[0] - 1) // 2]
-    predicted = calibration * weakest.astype(float)
+    # A negative rate (a ramp that falls in one integration, which the crf does not
+    # follow) predicts no crf below zero: without the floor the crf of such a pixel
+    # exceeds its negative prediction by hundreds of MJy/sr and the pixel passes.
+    predicted = calibration * np.maximum(weakest.astype(float), 0.0)
     over = sci - predicted                          # what the crf holds beyond the weakest integration
     with np.errstate(invalid='ignore'):
         mask &= over >= np.maximum(params.vis_min, params.vis_rel * np.abs(predicted))
@@ -583,7 +587,7 @@ def find_ramp_events(frames, params=RampParams(), event_params=EventParams(), lo
                                 peak=c['peak'], excess=c['excess'], bkg=c['bkg'],
                                 sigma=c['sigma'], others=[], ys=c['ys'], xs=c['xs'],
                                 ramp=(c['strongest'], c['weakest'])))
-        log(f'  ramp {fr.name}: {len(found)} events (difference scatter {sigma:.3g} DN, '
+        log(f'  ramp {fr.name}: {len(found)} events (difference scatter {sigma:.3g} DN/group, '
             f'calibration {calibration:.4g} MJy/sr per DN/group)')
     return events, n_tested
 

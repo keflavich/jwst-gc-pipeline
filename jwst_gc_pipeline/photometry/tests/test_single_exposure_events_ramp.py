@@ -209,6 +209,26 @@ def test_offset_of_one_integration_is_not_an_event():
     assert se.find_ramp_events([FakeFrame('f0', cube)]) == ([], 1)
 
 
+@pytest.mark.parametrize('cleaned', [False, True])
+def test_integration_whose_ramp_falls_is_not_an_event(cleaned):
+    # a ramp that falls in one integration (a negative rate): the box test sees the difference, and the
+    # crf, which is above that negative rate, would seem to hold hundreds of MJy/sr beyond it; the crf
+    # of the other integration holds nothing (``cleaned``: the crf did not follow the falling one)
+    fall = _cube(hits=[(1, 50, 50, -20000.0)])
+    box = se.ramp_event_pixels(se.box_sums(se.ramp_slopes(fall), 3), se.RampParams())[0]
+    assert box[50, 50]
+    fr = FakeFrame('f0', fall, sci=_crf(_cube()) if cleaned else None)
+    assert se.find_ramp_events([fr]) == ([], 1)
+
+
+def test_hit_on_a_pixel_whose_other_integration_falls_slightly_is_still_an_event():
+    # the floor at zero moves the prediction of a noisy sky pixel by a few MJy/sr and no more
+    cube = _cube(hits=[HIT])
+    cube[0, :, 60, 50] -= 20.0 * np.arange(1, NGROUP + 1)
+    events, _n = se.find_ramp_events([FakeFrame('f0', cube)])
+    assert _xy(events) == [('f0', 60, 50)]
+
+
 def test_three_integrations_compare_with_the_lower_median():
     one = FakeFrame('one', _cube(nint=3, hits=[(2, 50, 50, 20000.0)]))
     two = FakeFrame('two', _cube(nint=3, hits=[(1, 50, 50, 20000.0), (2, 50, 50, 20000.0)]))
