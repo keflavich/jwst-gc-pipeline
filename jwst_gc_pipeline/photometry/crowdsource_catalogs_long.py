@@ -4539,8 +4539,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     import threading as _threading
     _save_lock = _threading.Lock()
     # Single-exposure transients (env SINGLE_EXPOSURE_EVENT_MASK, off by default):
-    # the pixels of each frame's fitter input that only that frame sees, and the
-    # extreme negative pixels (env NEGATIVE_PIXEL_MASK_NSIGMA, off by default).
+    # the pixels of each frame's fitter input that only that frame sees, the counts
+    # that only one integration of a frame holds (env SINGLE_EXPOSURE_EVENT_RAMP,
+    # off by default), and the extreme negative pixels (env NEGATIVE_PIXEL_MASK_NSIGMA,
+    # off by default).
     # They are written into the per-frame residual's DQ as DO_NOT_USE, so the
     # residual mosaic does not carry them (see single_exposure_events).
     _event_bad = _event_masks_by_frame(overlapping_frames, pipeline_dir, options)

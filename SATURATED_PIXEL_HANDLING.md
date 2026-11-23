@@ -888,6 +888,45 @@ these flag sets would remove the footgun of setting them individually.)*
     pixels left and 1 minimum below -500 MJy/sr and 3 maxima above +500 MJy/sr at
     6-16 pixels.  An azimuthally averaged profile correction therefore removes about
     two thirds of the deep pits and a third of the ring excess, and adds ring dips.
+  - `SINGLE_EXPOSURE_EVENT_RAMP=1` (`single_exposure_events.find_ramp_events`; off
+    unless set).  Sets DO_NOT_USE, in the same two places as the event mask, on the
+    pixels where one integration of an exposure holds counts that the other
+    integrations do not.  An exposure has 2 integrations of 4 groups; the crf's
+    sibling `_ramp.fits` gives the group-mean level of every pixel per integration.
+    The 3x3 box sum of that level is the same in both integrations for a star and
+    differs for a cosmic-ray hit or a snowball.  A pixel is an event pixel when the
+    strongest integration exceeds the weakest (the lower median for three or more
+    integrations) by 10 x 1.4826 x the median absolute deviation of the integration
+    difference over the frame (92-124 DN in the box sum) and the weakest holds at
+    most half of the strongest.  An 8-connected set of event pixels is an event when
+    its brightest crf pixel is at least 200 MJy/sr above the median of the 8-20
+    pixel annulus around it; the footprint is the set dilated by 1 pixel (sets of
+    more than 5000 pixels are left alone; the largest snowball seen covers 1768).
+    The cross-frame test above needs a second exposure over the position and a
+    SATURATED core; this one needs neither, so it also finds unsaturated hits and
+    events where a single exposure covers the position.  A frame with no sibling
+    ramp, one integration, or a ramp that is not on the frame's pixel grid
+    (`--cutout-region` crops) is not tested, and the mosaic builders print how many.
+    Prototype on F212N (nsigma 10, minimum difference 0.5, excess 200 MJy/sr):
+    1728 events in the 48 frames of o045, 688 in o118, 579 in o130 and 996 in o138,
+    about 0.015 % of the pixels, most of them ordinary cosmic-ray hits.  The
+    whole-star leftovers of the best-stack render (deblend rows + pair-rescue rows,
+    footprint mask and ring on) that lie within 4 pixels of an event in a covering
+    exposure, leftovers above 500 MJy/sr: o045 2 of 12, o118 4 of 7, o130 3 of 9, o138
+    4 of 15; above 2000 MJy/sr: 1 of 2, 2 of 2, 3 of 6, 2 of 5.  Ten leftovers lie on
+    an event in one of the 1-6 exposures that cover them (mosaic pixel x, y: o045
+    (6296,2636); o118 (163,2127), (5457,2808), (8399,3256), (1265,3438); o130
+    (11316,4440), (423,2053), (4934,195); o138 (1311,4560), (6391,2609)).  The 3x3 box
+    sums of the group-mean level in integration 0 and 1 at the event's brightest crf
+    pixel are 133251 and -1823 DN at o045 (6296,2636) and -144 and 120177 DN at o130
+    (11316,4440).  The leftovers above 2000 MJy/sr with no event within 4 pixels are
+    o045 (14,2277); o130 (501,2193), (349,2907), (3091,4576); o138 (3204,4577), (9,880),
+    (3207,4569); the test flags none of them.  Two edge-star leftovers of o138, (20,889)
+    and (24,888), lie on one event of nrca1 exposure 4 whose box sums are 6511 and
+    14709 DN in the two integrations: both integrations hold counts, so this is a star
+    with a hit in one of them or a star whose integrations differ, and the mask there
+    removes pixels of a real star.  An event mask leaves a hole in the mosaic where a
+    single exposure covers the position; listing the events instead keeps the pixels.
   - Caveat for every replay row above: each is the production m7 catalog with rows
     appended or changed; `replace_saturated`, the dedup and the vetting have not been
     rerun, so a restored row that vetting would remove is counted as kept.
