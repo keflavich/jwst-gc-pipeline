@@ -4,7 +4,9 @@
 the disk geometry, the ring-zone extension of the disks of the brightest rows
 (``MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN`` and ``..._RING_RADIUS_PX``), the catalog
 reader, the gate-rejected fits that ``MERGEDCAT_FOOTPRINT_MASK_REJECTED`` adds to the
-disks, and the hand-over from ``build_mergedcat_residuals``."""
+disks, the dilated DQ_SATURATED footprint of the resampled frames
+(``MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX`` and ``..._DQSAT_MIN_PX``), and the hand-over from
+``build_mergedcat_residuals``."""
 import math
 import os
 
@@ -13,6 +15,7 @@ import pytest
 from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
+from scipy import ndimage
 
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as L
 from jwst_gc_pipeline.photometry import merge_catalogs
@@ -32,6 +35,7 @@ pytestmark = [
 
 SCALE = 0.063                       # arcsec per pixel of the test i2d: the F480M native scale
 SHAPE = (60, 80)
+FRAME_SHAPE = (40, 50)              # rows, columns of a test detector frame
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +46,8 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv(fm.ENV_RING_FLUX_MIN, raising=False)
     monkeypatch.delenv(fm.ENV_RING_RADIUS_PX, raising=False)
     monkeypatch.delenv(fm.ENV_REJECTED, raising=False)
+    monkeypatch.delenv(fm.ENV_DQSAT_PX, raising=False)
+    monkeypatch.delenv(fm.ENV_DQSAT_MIN_PX, raising=False)
 
 
 def _i2d_wcs(scale=SCALE):
@@ -73,6 +79,40 @@ def _satstars(wcs, xy, area, flux=None):
 def _disk(x, y, radius):
     yy, xx = np.mgrid[0:SHAPE[0], 0:SHAPE[1]]
     return np.hypot(xx - x, yy - y) <= radius
+
+
+def _frame_wcs(dx=0.0, dy=0.0):
+    """WCS of a test frame: its pixel (x, y) is the pixel (x + dx, y + dy) of the test i2d."""
+    w = _i2d_wcs()
+    w.wcs.crpix = [40.5 - dx, 30.5 - dy]
+    return w
+
+
+def _frame_dq(blocks):
+    """DQ image of a test frame with a ``bits`` block at each ``(x0, y0, width, height, bits)``."""
+    dq = np.zeros(FRAME_SHAPE, 'uint32')
+    for x0, y0, width, height, bits in blocks:
+        dq[y0:y0 + height, x0:x0 + width] |= bits
+    return dq
+
+
+def _write_frame(path, dq, shift=(0.0, 0.0)):
+    """A per-frame product: SCI with the WCS of ``_frame_wcs(*shift)`` and, unless ``dq`` is
+    None, a DQ extension."""
+    hdus = [fits.PrimaryHDU(),
+            fits.ImageHDU(np.zeros(FRAME_SHAPE, 'float32'),
+                          header=_frame_wcs(*shift).to_header(), name='SCI')]
+    if dq is not None:
+        hdus.append(fits.ImageHDU(dq, name='DQ'))
+    fits.HDUList(hdus).writeto(path)
+
+
+def _mosaic_flags(blocks):
+    """Boolean mosaic image with a True block at each ``(x0, y0, width, height)``."""
+    flagged = np.zeros(SHAPE, bool)
+    for x0, y0, width, height in blocks:
+        flagged[y0:y0 + height, x0:x0 + width] = True
+    return flagged
 
 
 # --- the switch ---------------------------------------------------------------------
@@ -456,14 +496,17 @@ def test_read_satstars_reads_the_flux_column_only_for_the_ring_extension(tmp_pat
 # --- build_mergedcat_residuals -> the mask -----------------------------------------------
 
 def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
-           iteration_label=E2E_ITER, flux=None, rejected=None):
+           iteration_label=E2E_ITER, flux=None, rejected=None, frame_dq=None):
     """Run build_mergedcat_residuals on the render-procs fixture with ``_resample_to_i2d``
     writing a real i2d, optionally with the footprint mask on and a consolidated
     satstar cache beside it (with a ``flux_fit`` column when ``flux`` is given).
     ``written`` collects the per-frame files the residual writer was given.
     ``iteration_label`` is the pass the residual is built for.  ``rejected`` is a
     table written as the ``iteration_label`` rejected-satstar file of the first
-    frame.
+    frame.  ``frame_dq`` is a list with one ``(dq, shift)`` per frame in render order: the
+    residual writer then writes a real per-frame file (``_write_frame``) with that DQ
+    (None for no DQ extension) and the WCS of ``_frame_wcs(*shift)``; a frame beyond the list
+    gets an all-zero DQ and no shift.
     Returns (residual i2d path, captured stdout)."""
     for var in ('MERGEDCAT_SATSTAR_COVER', 'MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM',
                 'MERGE_RENDER_PSF_SHAPE', 'MERGE_RENDER_FWHM_MULT',
@@ -491,9 +534,18 @@ def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
     monkeypatch.setattr(L.psf_preflight, 'preflight_psf_data', lambda *a, **k: None)
     monkeypatch.setattr(L, 'get_psf_model', lambda *a, module=None, **k: (_e2e_grid(), None))
     monkeypatch.setattr(filtering, 'get_fwhm', lambda hdr, *a, **k: (0.164, E2E_FWHM_PIX))
-    monkeypatch.setattr(L, 'save_residual_datamodel',
-                        lambda input_filename, output_filename, data, **kw:
-                        written.append(output_filename))
+    n_residuals = [0]
+
+    def _save(input_filename, output_filename, data, **kw):
+        written.append(output_filename)
+        if frame_dq is not None and output_filename.endswith('_mergedcat_residual.fits'):
+            k = n_residuals[0]
+            n_residuals[0] += 1
+            dq, shift = (frame_dq[k] if k < len(frame_dq)
+                         else (np.zeros(FRAME_SHAPE, 'uint32'), (0.0, 0.0)))
+            _write_frame(output_filename, dq, shift)
+
+    monkeypatch.setattr(L, 'save_residual_datamodel', _save)
     monkeypatch.setattr(L, '_resample_to_i2d', _resample)
     outpaths = L.build_mergedcat_residuals(
         str(root), str(root), merged, 'F480M', E2E_PID, E2E_FIELD, 'merged',
@@ -1018,3 +1070,304 @@ def test_the_rejected_files_are_not_read_for_a_pass_the_mask_skips(tmp_path, mon
                        env={fm.ENV_KFAC: '1', fm.ENV_REJECTED: '1'})
     with fits.open(path) as h:
         assert np.all(h['SCI'].data == 1.0)
+
+
+# --- the DQ_SATURATED footprint (MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX) ------------------------
+
+def test_the_dqsat_extension_is_off_by_default_and_unread_while_it_is_off(monkeypatch):
+    assert fm.dqsat_params() == (0.0, fm.DEFAULT_DQSAT_MIN_PX) == (0.0, 4)
+    # the mask itself is off: neither variable is read
+    monkeypatch.setenv(fm.ENV_DQSAT_PX, 'abc')
+    monkeypatch.setenv(fm.ENV_DQSAT_MIN_PX, '-3')
+    assert fm.dqsat_params() == (0.0, 4)
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    with pytest.raises(ValueError, match=fm.ENV_DQSAT_PX):
+        fm.dqsat_params()
+    # a dilation of 0 or a blank one is off, and the component size is then not read
+    monkeypatch.setenv(fm.ENV_DQSAT_PX, '0')
+    assert fm.dqsat_params() == (0.0, 4)
+    monkeypatch.setenv(fm.ENV_DQSAT_PX, '  ')
+    assert fm.dqsat_params() == (0.0, 4)
+
+
+@pytest.mark.parametrize('dilate, min_px, expected', [
+    ('4', None, (4.0, 4)),
+    ('3', '15', (3.0, 15)),
+    ('2.5', '1', (2.5, 1)),
+])
+def test_dqsat_values(monkeypatch, dilate, min_px, expected):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_DQSAT_PX, dilate)
+    if min_px is not None:
+        monkeypatch.setenv(fm.ENV_DQSAT_MIN_PX, min_px)
+    assert fm.dqsat_params() == expected
+
+
+@pytest.mark.parametrize('name, value', [
+    (fm.ENV_DQSAT_PX, 'abc'), (fm.ENV_DQSAT_PX, '-1'), (fm.ENV_DQSAT_PX, 'nan'),
+    (fm.ENV_DQSAT_PX, 'inf'), (fm.ENV_DQSAT_MIN_PX, 'abc'), (fm.ENV_DQSAT_MIN_PX, '0'),
+    (fm.ENV_DQSAT_MIN_PX, '2.5'), (fm.ENV_DQSAT_MIN_PX, '-4'), (fm.ENV_DQSAT_MIN_PX, 'nan'),
+])
+def test_dqsat_typo_raises_naming_the_variable(monkeypatch, name, value):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_DQSAT_PX, '3')
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=name):
+        fm.dqsat_params()
+
+
+@pytest.mark.parametrize('shift, x0, y0', [
+    ((5.0, 3.0), 15, 23),
+    ((5.4, 3.4), 15, 23),       # nearest mosaic pixel
+    ((5.6, 3.6), 16, 24),
+])
+def test_dqsat_footprint_lands_each_frame_on_the_mosaic_grid(tmp_path, shift, x0, y0):
+    frame = str(tmp_path / 'f.fits')
+    _write_frame(frame, _frame_dq([(10, 20, 3, 3, fm.DQ_SATURATED)]), shift)
+    flagged, components, pixels = fm.dqsat_footprint([frame], _i2d_wcs(), SHAPE)
+    assert np.array_equal(flagged, _mosaic_flags([(x0, y0, 3, 3)]))
+    assert (components, pixels) == (1, 9)
+
+
+@pytest.mark.parametrize('min_px, components, pixels', [
+    (1, 5, 25),         # the 2 px component counts as well
+    (4, 4, 23),         # the chain of 4 px touching at corners is one component
+    (5, 2, 15),         # the two 4 px components drop out
+    (7, 1, 9),
+    (10, 0, 0),
+])
+def test_dqsat_footprint_keeps_only_the_connected_components_of_the_minimum_size(
+        tmp_path, min_px, components, pixels):
+    sat = fm.DQ_SATURATED
+    dq = _frame_dq([(10, 20, 3, 3, sat),            # 9 px
+                    (30, 10, 2, 1, sat),            # 2 px
+                    (20, 5, 2, 2, sat | 1),         # 4 px: saturated and DO_NOT_USE
+                    (5, 36, 3, 2, sat),             # 6 px
+                    (0, 0, 5, 5, 1)])               # DO_NOT_USE only: never counts
+    for k in range(4):                              # 4 px, touching at corners only
+        dq[30 + k, 40 + k] |= sat
+    frame = str(tmp_path / 'f.fits')
+    _write_frame(frame, dq)
+    flagged, n, px = fm.dqsat_footprint([frame], _i2d_wcs(), SHAPE, min_px)
+    assert (n, px) == (components, pixels)
+    assert int(flagged.sum()) == pixels
+
+
+def test_dqsat_footprint_is_the_union_over_the_frames(tmp_path):
+    sat = fm.DQ_SATURATED
+    a, b = str(tmp_path / 'a.fits'), str(tmp_path / 'b.fits')
+    _write_frame(a, _frame_dq([(10, 20, 3, 3, sat)]))
+    _write_frame(b, _frame_dq([(11, 21, 3, 3, sat)]), shift=(2.0, 1.0))
+    flagged, components, pixels = fm.dqsat_footprint([a, b], _i2d_wcs(), SHAPE)
+    # frame b lands on mosaic columns 13-15, rows 22-24; frame a on columns 10-12, rows 20-22
+    assert np.array_equal(flagged, _mosaic_flags([(10, 20, 3, 3), (13, 22, 3, 3)]))
+    assert (components, pixels) == (2, 18)
+
+
+def test_dqsat_footprint_drops_the_pixels_outside_the_mosaic(tmp_path):
+    sat = fm.DQ_SATURATED
+    partly, outside = str(tmp_path / 'p.fits'), str(tmp_path / 'o.fits')
+    _write_frame(partly, _frame_dq([(10, 20, 3, 3, sat)]), shift=(-11.0, 0.0))
+    _write_frame(outside, _frame_dq([(10, 20, 3, 3, sat)]), shift=(200.0, 0.0))
+    flagged, _, _ = fm.dqsat_footprint([partly, outside], _i2d_wcs(), SHAPE)
+    # the block lands on mosaic columns -1 to 1: columns 0 and 1 stay
+    assert np.array_equal(flagged, _mosaic_flags([(0, 20, 2, 3)]))
+
+
+def test_dqsat_footprint_without_a_dq_extension_is_unavailable(tmp_path):
+    frame = str(tmp_path / 'f.fits')
+    _write_frame(frame, None)
+    with pytest.raises(fm.FootprintMaskUnavailable, match='no DQ extension'):
+        fm.dqsat_footprint([frame], _i2d_wcs(), SHAPE)
+
+
+@pytest.mark.parametrize('radius', [0.0, 1.0, 1.5, 2.0, 3.2, 5.0, 7.7])
+def test_dilate_disk_is_the_euclidean_distance_threshold(radius):
+    rng = np.random.default_rng(3)
+    flagged = np.zeros(SHAPE, bool)
+    flagged[rng.integers(0, SHAPE[0], 12), rng.integers(0, SHAPE[1], 12)] = True
+    flagged[0, 0] = flagged[-1, -1] = flagged[0, -1] = True        # corners: the stamp is clipped
+    assert np.array_equal(fm.dilate_disk(flagged, radius),
+                          ndimage.distance_transform_edt(~flagged) <= radius)
+
+
+def test_dilate_disk_of_nothing_is_nothing():
+    assert not fm.dilate_disk(np.zeros(SHAPE, bool), 4.0).any()
+
+
+def test_mask_residual_dqsat_blanks_the_dilated_footprint_and_records_the_setting(tmp_path):
+    sat = fm.DQ_SATURATED
+    a, b = str(tmp_path / 'a.fits'), str(tmp_path / 'b.fits')
+    _write_frame(a, _frame_dq([(10, 20, 3, 3, sat)]), shift=(5.0, 3.0))
+    _write_frame(b, _frame_dq([(8, 25, 2, 2, sat)]), shift=(30.0, 10.0))
+    i2d = str(tmp_path / 'i2d.fits')
+    _write_i2d(i2d)
+    summary = fm.mask_residual_dqsat(i2d, [a, b], 2.0, 4)
+    flagged = _mosaic_flags([(15, 23, 3, 3), (38, 35, 2, 2)])
+    expected = ndimage.distance_transform_edt(~flagged) <= 2.0
+    with fits.open(i2d) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        assert np.all(h['SCI'].data[~expected] == 1.0)
+        header = h['SCI'].header
+        assert (header['FPDQSATD'], header['FPDQSATM'], header['FPDQSATN']) == (2.0, 4, 2)
+    assert summary == {'frames': 2, 'components': 2, 'saturated_pixels': 13, 'flagged': 13,
+                       'pixels': int(expected.sum()), 'finite': SHAPE[0] * SHAPE[1]}
+
+
+def test_mask_residual_dqsat_counts_only_the_pixels_it_blanks(tmp_path):
+    frame = str(tmp_path / 'f.fits')
+    _write_frame(frame, _frame_dq([(10, 20, 3, 3, fm.DQ_SATURATED)]))
+    data = np.ones(SHAPE, 'float32')
+    data[:, :12] = np.nan                       # already blank, inside the footprint
+    i2d = str(tmp_path / 'i2d.fits')
+    _write_i2d(i2d, data)
+    summary = fm.mask_residual_dqsat(i2d, [frame], 1.0, 4)
+    expected = ndimage.distance_transform_edt(~_mosaic_flags([(10, 20, 3, 3)])) <= 1.0
+    with fits.open(i2d) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected | np.isnan(data))
+    assert summary['finite'] == int(np.isfinite(data).sum())
+    assert summary['pixels'] == int((expected & np.isfinite(data)).sum())
+
+
+def test_mask_residual_dqsat_without_saturated_pixels_keeps_the_image_and_records_the_setting(
+        tmp_path):
+    frame = str(tmp_path / 'f.fits')
+    _write_frame(frame, _frame_dq([(10, 20, 3, 3, 1)]))      # DO_NOT_USE only
+    i2d = str(tmp_path / 'i2d.fits')
+    _write_i2d(i2d)
+    summary = fm.mask_residual_dqsat(i2d, [frame], 3.0)
+    with fits.open(i2d) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert h['SCI'].header['FPDQSATM'] == fm.DEFAULT_DQSAT_MIN_PX
+    assert (summary['components'], summary['flagged'], summary['pixels']) == (0, 0, 0)
+
+
+def test_mask_residual_dqsat_leaves_the_image_alone_when_a_frame_has_no_dq(tmp_path):
+    good, bad = str(tmp_path / 'g.fits'), str(tmp_path / 'b.fits')
+    _write_frame(good, _frame_dq([(10, 20, 3, 3, fm.DQ_SATURATED)]))
+    _write_frame(bad, None)
+    i2d = str(tmp_path / 'i2d.fits')
+    _write_i2d(i2d)
+    with pytest.raises(fm.FootprintMaskUnavailable):
+        fm.mask_residual_dqsat(i2d, [good, bad], 2.0, 4)
+    with fits.open(i2d) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert 'FPDQSATD' not in h['SCI'].header
+
+
+# --- the DQ_SATURATED footprint in the render (hand-over from build_mergedcat_residuals) ----
+
+def _render_frames():
+    """Two frames of the render fixture with saturated blocks: on the mosaic they cover
+    columns 15-17 of rows 23-25 and columns 38-39 of rows 35-36, away from the satstar disks
+    of ``_build``."""
+    sat = fm.DQ_SATURATED
+    return [(_frame_dq([(10, 20, 3, 3, sat)]), (5.0, 3.0)),
+            (_frame_dq([(8, 25, 2, 2, sat)]), (30.0, 10.0))]
+
+
+def _disks_of_build(kfac=1.5, margin=1.0):
+    r = [kfac * math.sqrt(a / math.pi) + margin for a in (20.0, 45.0)]
+    return _disk(30.0, 25.0, r[0]) | _disk(55.3, 40.6, r[1])
+
+
+def test_the_dqsat_extension_blanks_the_saturated_footprint_of_the_frames_in_the_render(
+        tmp_path, monkeypatch, capsys):
+    written = []
+    path, out = _build(tmp_path / 'q1', monkeypatch, capsys, written=written,
+                       frame_dq=_render_frames(),
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_DQSAT_PX: '2'})
+    flagged = _mosaic_flags([(15, 23, 3, 3), (38, 35, 2, 2)])
+    dq_part = ndimage.distance_transform_edt(~flagged) <= 2.0
+    assert not (dq_part & _disks_of_build()).any()
+    n_frames = len([w for w in written if w.endswith('_mergedcat_residual.fits')])
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), _disks_of_build() | dq_part)
+        header = h['SCI'].header
+        assert header['FPMASKN'] == 2
+        assert (header['FPDQSATD'], header['FPDQSATM'], header['FPDQSATN']) == (2.0, 4, n_frames)
+    assert ("is also NaN within 2 px of every mosaic pixel that a DQ_SATURATED component "
+            "of >= 4 detector px of a resampled frame falls on") in out
+    assert f"[resid i2d DQ_SAT mask] NaN'd {int(dq_part.sum())} px" in out
+    assert (f"within 2 px of 13 mosaic px under 2 saturated components of >= 4 px "
+            f"(13 detector px) in {n_frames} frames") in out
+
+
+def test_the_dqsat_component_size_is_read_from_the_environment(tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'q2', monkeypatch, capsys, frame_dq=_render_frames(),
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_DQSAT_PX: '2',
+                            fm.ENV_DQSAT_MIN_PX: '5'})
+    # the block of 4 px of the second frame drops out
+    flagged = _mosaic_flags([(15, 23, 3, 3)])
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data),
+                              _disks_of_build() | (ndimage.distance_transform_edt(~flagged) <= 2.0))
+        assert h['SCI'].header['FPDQSATM'] == 5
+    assert "1 saturated components of >= 5 px (9 detector px)" in out
+
+
+def test_the_dqsat_footprint_stays_in_the_image_while_the_extension_is_off(tmp_path, monkeypatch,
+                                                                         capsys):
+    path, out = _build(tmp_path / 'q3', monkeypatch, capsys, frame_dq=_render_frames(),
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1'})
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), _disks_of_build())
+        assert 'FPDQSATD' not in h['SCI'].header
+    assert 'DQ_SAT' not in out
+
+
+def test_the_dqsat_variables_do_nothing_while_the_mask_is_off(tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'q4', monkeypatch, capsys, frame_dq=_render_frames(),
+                       env={fm.ENV_DQSAT_PX: 'oops', fm.ENV_DQSAT_MIN_PX: '-1'})
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert 'FPDQSATD' not in h['SCI'].header
+    assert 'DQ_SAT' not in out
+
+
+def test_the_dqsat_extension_leaves_the_residual_i2d_of_an_earlier_pass_alone(
+        tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'q5', monkeypatch, capsys, frame_dq=_render_frames(),
+                       env={fm.ENV_KFAC: '1', fm.ENV_DQSAT_PX: '2'}, iteration_label='m3')
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert 'FPDQSATD' not in h['SCI'].header
+    assert f'pass m3 is not in {fm.ENV_PASSES} (m7)' in out
+    assert 'DQ_SAT' not in out
+
+
+@pytest.mark.parametrize('name, value', [
+    (fm.ENV_DQSAT_PX, 'two'), (fm.ENV_DQSAT_MIN_PX, '0'),
+])
+def test_a_dqsat_typo_fails_before_any_residual_is_rendered(tmp_path, monkeypatch, capsys,
+                                                            name, value):
+    written = []
+    env = {fm.ENV_KFAC: '1', fm.ENV_DQSAT_PX: '2', name: value}
+    with pytest.raises(ValueError, match=name):
+        _build(tmp_path / 'q6', monkeypatch, capsys, env=env, written=written,
+               frame_dq=_render_frames())
+    assert written == []
+
+
+def test_a_frame_without_dq_skips_the_dqsat_mask_and_keeps_the_satstar_disks(
+        tmp_path, monkeypatch, capsys):
+    frames = _render_frames()
+    frames[1] = (None, frames[1][1])
+    path, out = _build(tmp_path / 'q7', monkeypatch, capsys, frame_dq=frames,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_DQSAT_PX: '2'})
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), _disks_of_build())
+        assert 'FPDQSATD' not in h['SCI'].header
+    assert 'WARNING mergedcat: resid i2d DQ_SAT mask skipped' in out
+    assert 'no DQ extension' in out
+
+
+def test_the_dqsat_mask_does_not_need_the_satstar_cache(tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'q8', monkeypatch, capsys, frame_dq=_render_frames(),
+                       cache=False, env={fm.ENV_KFAC: '1.5', fm.ENV_DQSAT_PX: '2'})
+    flagged = _mosaic_flags([(15, 23, 3, 3), (38, 35, 2, 2)])
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data),
+                              ndimage.distance_transform_edt(~flagged) <= 2.0)
+        assert 'FPMASKK' not in h['SCI'].header and 'FPDQSATD' in h['SCI'].header
+    assert 'WARNING mergedcat: resid i2d footprint mask skipped' in out

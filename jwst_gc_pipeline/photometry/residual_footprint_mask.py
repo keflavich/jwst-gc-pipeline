@@ -35,6 +35,18 @@ same residual i2d.  The rows are read through ``load_rejected_satstar_catalog`` 
 merge's observation scope, phase and frame variant) with the sky position
 re-projected through the frame's current GWCS.
 
+A fourth, optional setting blanks the saturated pixels of the frames themselves.  The
+disks above hang on satstar rows, so a saturated star with no row (a fit that the gates
+rejected and that no mask can cover), or a second star inside the blob that one row
+fitted (it lies outside the disk of the host row), has no disk.
+``MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX`` is a dilation radius in mosaic pixels (off unless
+above 0): every residual i2d pixel within that distance of a mosaic pixel on which a
+DQ_SATURATED pixel of one of the resampled per-frame residuals falls becomes NaN.  The
+per-frame residuals keep the DQ of the crf they were rendered from, and the union over
+the frames is blanked, so a star that saturates in only some of the dithers is blanked
+wherever one of them saturates.  Only connected components (8-connectivity) of at least
+``MERGEDCAT_FOOTPRINT_MASK_DQSAT_MIN_PX`` (default 4) saturated detector pixels count.
+
 The switch is off unless ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is a number above 0.
 The next phase of a manual run reads the residual i2d for its i2d seeds and its
 smoothed background map, and the replays in ``SATURATED_PIXEL_HANDLING.md``
@@ -50,7 +62,9 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
+from scipy import ndimage
 
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.frame_pixel_area import (
     SR_PER_ARCSEC2, reference_pixel_area_sr)
 
@@ -73,6 +87,19 @@ ENV_RING_RADIUS_PX = 'MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX'
 #: stage flagged ``sidelobe_maskable``; an on/off switch, off by default, and read
 #: only when ``KFAC`` is on
 ENV_REJECTED = 'MERGEDCAT_FOOTPRINT_MASK_REJECTED'
+
+#: dilation radius in mosaic pixels of the DQ_SATURATED footprint mask; off unless
+#: above 0, and read only when ``KFAC`` is on
+ENV_DQSAT_PX = 'MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX'
+
+#: smallest connected component, in detector pixels, of DQ_SATURATED pixels that
+#: counts; read only when ``ENV_DQSAT_PX`` is on
+ENV_DQSAT_MIN_PX = 'MERGEDCAT_FOOTPRINT_MASK_DQSAT_MIN_PX'
+
+DEFAULT_DQSAT_MIN_PX = 4
+
+#: the SATURATED bit of a JWST pixel DQ array
+DQ_SATURATED = 2
 
 _SWITCH_ON = ('1', 'true', 'yes', 'on')
 _SWITCH_OFF = ('0', 'false', 'no', 'off')
@@ -169,6 +196,32 @@ def rejected_enabled():
         f"{ENV_REJECTED}={raw!r} is not a recognised on/off value; use one of "
         f"{'/'.join(_SWITCH_ON)} or {'/'.join(_SWITCH_OFF)} (case-insensitive), "
         f"or leave it unset (off)")
+
+
+def dqsat_params():
+    """``(dilate_px, min_component_px)`` of the DQ_SATURATED footprint mask.
+
+    On when ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is above 0 and
+    ``MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX`` is a number above 0; ``(0.0, 4)`` when off.
+    Neither variable is read otherwise (``DQSAT_MIN_PX`` only with ``DQSAT_PX`` on), so a
+    stray one cannot break a default run.  The dilation is in mosaic pixels.  The
+    minimum component size is a whole number of detector pixels >= 1 and defaults to
+    ``DEFAULT_DQSAT_MIN_PX``.
+
+    Raises ``ValueError`` naming the variable when ``DQSAT_PX`` is not a finite number
+    >= 0 or ``DQSAT_MIN_PX`` is not a whole number >= 1.
+    """
+    if mask_params()[0] <= 0.0:
+        return 0.0, DEFAULT_DQSAT_MIN_PX
+    dilate = _env_number(ENV_DQSAT_PX, 0.0)
+    if dilate == 0.0:
+        return 0.0, DEFAULT_DQSAT_MIN_PX
+    min_px = _env_number(ENV_DQSAT_MIN_PX, float(DEFAULT_DQSAT_MIN_PX))
+    if min_px < 1.0 or min_px != math.floor(min_px):
+        raise ValueError(
+            f"{ENV_DQSAT_MIN_PX}={os.environ.get(ENV_DQSAT_MIN_PX)!r}: expected a "
+            f"whole number of detector pixels >= 1")
+    return dilate, int(min_px)
 
 
 def mask_passes():
@@ -417,3 +470,110 @@ def mask_residual_i2d(i2d_path, satstars, filtername, instrument, kfac, margin_p
             'pixels': pixels, 'finite': finite, 'scale': scale,
             'radius_p50': float(np.median(radius)) if len(radius) else float('nan'),
             'radius_max': float(np.max(radius)) if len(radius) else float('nan')}
+
+
+def dqsat_footprint(frame_paths, wcs, shape, min_comp_px=DEFAULT_DQSAT_MIN_PX):
+    """The mosaic pixels on which a DQ_SATURATED pixel of ``frame_paths`` falls.
+
+    Each path is a per-frame product with a ``DQ`` extension and a WCS (read with
+    ``frame_wcs``: the GWCS when the file has one).  Of its DQ_SATURATED pixels only
+    the connected components (8-connectivity) of at least ``min_comp_px`` pixels
+    count.  A counted pixel goes through the frame WCS and the mosaic ``wcs`` (an
+    ``astropy.wcs.WCS`` of the i2d) to the mosaic grid of ``shape`` and is rounded to
+    the nearest mosaic pixel; a pixel that lands outside the grid, or has no finite
+    sky position, is dropped.
+
+    Returns ``(flagged, components, pixels)``: the boolean image of the flagged
+    mosaic pixels, and the number of components that counted and of detector pixels
+    in them, summed over the frames.  Raises ``FootprintMaskUnavailable`` when a file
+    has no ``DQ`` extension.
+    """
+    ny, nx = shape
+    flagged = np.zeros(shape, dtype=bool)
+    components = pixels = 0
+    for path in frame_paths:
+        with fits.open(path, memmap=False) as hdul:
+            dq = hdul['DQ'].data if 'DQ' in hdul else None
+        if dq is None:
+            raise FootprintMaskUnavailable(f"{path} has no DQ extension")
+        labels, n = ndimage.label((dq & DQ_SATURATED) > 0,
+                                  structure=np.ones((3, 3), dtype=int))
+        if n == 0:
+            continue
+        area = np.bincount(labels.ravel(), minlength=n + 1)
+        counts = area >= min_comp_px
+        counts[0] = False
+        if not counts.any():
+            continue
+        yy, xx = np.nonzero(counts[labels])
+        ra, dec = frame_wcs(path).pixel_to_world_values(xx, yy)
+        mx, my = wcs.world_to_pixel_values(ra, dec)
+        finite = np.isfinite(mx) & np.isfinite(my)
+        ix = np.rint(mx[finite]).astype(int)
+        iy = np.rint(my[finite]).astype(int)
+        inside = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+        flagged[iy[inside], ix[inside]] = True
+        components += int(counts.sum())
+        pixels += int(yy.size)
+    return flagged, components, pixels
+
+
+def dilate_disk(flagged, radius):
+    """The pixels within ``radius`` (Euclidean, in pixels) of a True pixel of ``flagged``.
+
+    The same set as ``distance_transform_edt(~flagged) <= radius``, stamped from the
+    flagged pixels, so the cost follows their number and not the size of the image.
+    """
+    ny, nx = flagged.shape
+    iy, ix = np.nonzero(flagged)
+    mask = np.zeros_like(flagged)
+    reach = int(math.floor(radius))
+    for dy in range(-reach, reach + 1):
+        for dx in range(-reach, reach + 1):
+            if dx * dx + dy * dy > radius * radius:
+                continue
+            y, x = iy + dy, ix + dx
+            inside = (y >= 0) & (y < ny) & (x >= 0) & (x < nx)
+            mask[y[inside], x[inside]] = True
+    return mask
+
+
+def mask_residual_dqsat(i2d_path, frame_paths, dilate_px,
+                        min_comp_px=DEFAULT_DQSAT_MIN_PX):
+    """Blank the DQ_SATURATED footprint of ``frame_paths`` in the SCI plane of ``i2d_path``.
+
+    The file is updated in place: every pixel within ``dilate_px`` mosaic pixels of a
+    mosaic pixel that ``dqsat_footprint`` flags becomes NaN.  The SCI header records
+    the setting (``FPDQSATD`` dilation in mosaic pixels, ``FPDQSATM`` smallest
+    component in detector pixels, ``FPDQSATN`` frames).  Returns a dict with
+    ``frames``, ``components`` and ``saturated_pixels`` (detector pixels in the
+    counted components, summed over the frames), ``flagged`` (mosaic pixels they fall
+    on), ``pixels`` (finite pixels that became NaN) and ``finite`` (finite pixels
+    before).
+
+    Raises ``FootprintMaskUnavailable``, with the file untouched, when a frame has no
+    ``DQ`` extension.  The frames are read before the i2d is opened for update, so any
+    error reading them leaves the file alone as well.
+    """
+    sci_header = fits.getheader(i2d_path, 'SCI')
+    wcs = WCS(sci_header)
+    flagged, components, saturated_pixels = dqsat_footprint(
+        frame_paths, wcs, (int(sci_header['NAXIS2']), int(sci_header['NAXIS1'])),
+        min_comp_px)
+    mask = dilate_disk(flagged, dilate_px)
+    with fits.open(i2d_path, mode='update', memmap=False) as hdul:
+        sci = hdul['SCI'].data
+        finite = int(np.count_nonzero(np.isfinite(sci)))
+        sci[mask] = np.nan
+        pixels = finite - int(np.count_nonzero(np.isfinite(sci)))
+        header = hdul['SCI'].header
+        header['FPDQSATD'] = (float(dilate_px),
+                              'DQ_SAT footprint mask: dilation [mosaic px]')
+        header['FPDQSATM'] = (int(min_comp_px),
+                              'DQ_SAT footprint mask: min component [det px]')
+        header['FPDQSATN'] = (len(frame_paths), 'DQ_SAT footprint mask: frames')
+        hdul['SCI'].data = sci
+        hdul.flush()
+    return {'frames': len(frame_paths), 'components': components,
+            'saturated_pixels': saturated_pixels, 'flagged': int(flagged.sum()),
+            'pixels': pixels, 'finite': finite}

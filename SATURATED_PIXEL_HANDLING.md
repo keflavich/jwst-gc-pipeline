@@ -1018,6 +1018,81 @@ these flag sets would remove the footgun of setting them individually.)*
     do not read the rejected files.  The default of the loader is unchanged.  The model
     i2d, the data i2d and the catalogs are as before: a rejected row has no model row
     and no catalog entry.
+  - DQ_SATURATED footprint (`MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX` with
+    `MERGEDCAT_FOOTPRINT_MASK_DQSAT_MIN_PX`; `residual_footprint_mask`).  The disks above hang
+    on satstar rows, so a saturated star that has no row (its fit failed the gates and the
+    sidelobe mask fraction did not keep it), and a second saturated star inside the blob that
+    one row fitted, have none.  This extension blanks the saturated pixels of the frames
+    themselves.  Off unless `KFAC` and `DQSAT_PX` are above 0 (a blank or 0 `DQSAT_PX` is
+    off; neither variable is read while `KFAC` is off).  `DQSAT_MIN_PX` (a whole number
+    of detector pixels >= 1, default 4) is read only with `DQSAT_PX` on.  A bad value of
+    either raises before any residual is rendered.  After the residual is resampled and
+    the disks are applied, every per-frame residual of the pass (`*_mergedcat_residual.fits`,
+    the files the resample reads; each keeps the DQ of its crf) contributes its pixels with
+    the SATURATED bit (2) set that belong to a connected component (8-connectivity) of at
+    least `DQSAT_MIN_PX` pixels.  The pixels go through the frame GWCS (`frame_wcs`) to the
+    pixel grid of the residual i2d and are rounded to the nearest mosaic pixel; the union over
+    the frames is dilated by a disk of radius `DQSAT_PX` mosaic pixels, and the residual i2d
+    is NaN inside it.  A star that saturates in only some of the dithers is blanked
+    wherever one of them saturates; a mask applied to each frame before the resample
+    would leave the flux of the exposures that did not saturate.  The SCI header adds
+    `FPDQSATD` (radius in mosaic pixels), `FPDQSATM` (smallest component) and `FPDQSATN`
+    (frames).  The step does not read the consolidated satstar catalog, so it runs when the
+    catalog is missing and the disks are skipped.  A frame without a `DQ` extension, or whose
+    GWCS cannot be read, skips this step with a warning and keeps the image with its disks.
+    The passes are those of the disks (`MERGEDCAT_FOOTPRINT_MASK_PASSES`).  The model i2d,
+    the data i2d and the catalogs are as before.  Emulation on scratch copies of the residual
+    i2d of replays that carry the disks and the ring zone (`KFAC` 1, `MARGIN_PX` 2,
+    `RING_FLUX_MIN` 1e6; `RING_RADIUS_PX` 25 for F212N in the replay `mkrswapdblfs3` and 20
+    for F480M in `mkrsdbl`), at `DQSAT_PX` 4 for F212N (mosaic pixel 0.031") and 3 for F480M
+    (0.063"), `DQSAT_MIN_PX` 4.  The emulation read the DQ of the production crf files; the
+    per-frame residual of o138
+    F212N nrca1 exposure 1 has the same 3989 DQ_SATURATED pixels at the same positions as its
+    crf.  Leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper than
+    50 / 200 / 500 / 1000 / 2000 MJy/sr, with the disks and then with the DQ_SAT mask added,
+    and the percentage of the finite pixels of the replay's residual i2d that it sets to NaN:
+    - o045 F212N 932 / 43 / 8 / 2 / 1 / 1 | 27 / 1 / 0 / 0 / 0 -> 925 / 42 / 7 / 1 / 0 / 0 |
+      18 / 0 / 0 / 0 / 0; 0.327 %.
+    - o118 F212N 124 / 12 / 7 / 4 / 2 / 1 | 45 / 9 / 1 / 0 / 0 -> 120 / 10 / 5 / 2 / 1 / 0 |
+      25 / 6 / 1 / 0 / 0; 0.313 %.
+    - o130 F212N 94 / 21 / 9 / 7 / 6 / 3 | 32 / 3 / 0 / 0 / 0 -> 91 / 19 / 6 / 4 / 3 / 0 |
+      8 / 0 / 0 / 0 / 0; 0.325 %.
+    - o138 F212N 373 / 11 / 2 / 2 / 2 / 2 | 37 / 8 / 2 / 2 / 0 -> 369 / 9 / 0 / 0 / 0 / 0 |
+      24 / 5 / 1 / 1 / 0; 0.312 %.
+    - o045 F480M 154 / 36 / 15 / 9 / 5 / 1 | 1 / 0 / 0 / 0 / 0 -> 129 / 17 / 1 / 0 / 0 / 0 |
+      1 / 0 / 0 / 0 / 0; 2.026 %.
+    - o118 F480M 143 / 29 / 9 / 7 / 3 / 0 | 0 / 0 / 0 / 0 / 0 -> 130 / 23 / 3 / 0 / 0 / 0 |
+      0 / 0 / 0 / 0 / 0; 1.266 %.
+    - o130 F480M 137 / 32 / 8 / 4 / 2 / 0 | 1 / 0 / 0 / 0 / 0 -> 126 / 24 / 4 / 0 / 0 / 0 |
+      0 / 0 / 0 / 0 / 0; 1.081 %.
+    - o138 F480M 116 / 19 / 4 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 115 / 18 / 3 / 0 / 0 / 0 |
+      0 / 0 / 0 / 0 / 0; 1.126 %.
+
+    The F212N masks depend on the component size and the radius.  At `DQSAT_MIN_PX` 15 the
+    F212N leftovers above 500 MJy/sr are 8 / 7 / 7 / 2 for o045 / o118 / o130 / o138, against
+    8 / 7 / 9 / 2 without the DQ_SAT mask and 7 / 5 / 6 / 0 at `DQSAT_MIN_PX` 4; the craters
+    deeper than 200 MJy/sr are 0 / 6 / 0 / 5 at both sizes.  At `DQSAT_MIN_PX` 15 a dilation
+    of 4 mosaic pixels (0.124") sets 0.175 / 0.162 / 0.165 / 0.157 % of the finite pixels to
+    NaN and one of 8 pixels 0.579 / 0.436 / 0.428 / 0.455 %; the leftovers above 500 MJy/sr are
+    8 / 7 / 7 / 2 at 4 pixels and 8 / 7 / 6 / 2 at 8.  A NaN-component dilation of the data
+    i2d (the compact NaN components of 6 to 3000 mosaic pixels, dilated by 4 pixels) was
+    also emulated on F480M: it sets 0.007 % of the finite pixels to NaN and leaves
+    11 / 5 / 5 / 4 leftovers above 500 MJy/sr for o045 / o118 / o130 / o138, against
+    1 / 3 / 4 / 3 for the DQ_SAT mask at 1.1-2.0 %.  It is not in the module.  The module,
+    run on a scratch copy of the o138 F212N replay (48 per-frame residual files, 3558
+    saturated components of at least 4 pixels with 115890 detector pixels, 57455 flagged
+    mosaic pixels), sets 159492 pixels to NaN (0.312 % of the 51081875 finite pixels) and
+    gives the NaN pixels of the emulation exactly: no pixel differs, and every finite pixel
+    is identical.  No full m7 + finalize run with the extension exists.
+    What the DQ_SAT mask leaves on F212N (`DQSAT_PX` 4, `DQSAT_MIN_PX` 4).  The craters deeper
+    than 200 MJy/sr (o118 6, o138 5) are unsaturated stars with model peaks of 470-3250 MJy/sr
+    that the model over-subtracts by 30-56 % at 0.8-1.5" from a satstar; the footprint does not
+    reach them.  The leftovers above 1000 MJy/sr (o045 1, o118 2, o130 4, o138 0) are two
+    stars of o130 with 9-11 NaN pixels in each frame, no DQ_SATURATED flag and no satstar
+    row within 2.3" ((349, 2907) at 3655 and (4934, 195) at 2515 MJy/sr), two stars that have
+    a vetted row and no subtraction (o118 (5457, 2808) at 3201, seen in one of the two
+    exposures that cover it; o130 (5065, 68) at 1244), and three stars within 1" of a satstar
+    row (o045 (1253, 131) at 1039, o118 (5014, 2112) at 1231, o130 (3091, 4576) at 2099).
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
