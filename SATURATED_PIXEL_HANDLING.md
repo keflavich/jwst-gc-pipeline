@@ -948,7 +948,12 @@ these flag sets would remove the footgun of setting them individually.)*
     been compared with the m7 catalog, so a real star with a hit in one integration is
     masked with the hit: that star keeps its pixels only where another exposure covers
     it.  An event mask leaves a hole in the mosaic where a single exposure covers the
-    position; listing the events instead keeps the pixels.
+    position; listing the events instead keeps the pixels.  `python -m
+    jwst_gc_pipeline.photometry.single_exposure_events OUT.fits crf.fits ...` lists them:
+    it runs this test on the crf files given (one filter of one tile) and writes one row
+    per event (frame, pixel, RA, Dec, crf peak, the prediction of the weakest integration,
+    the excess over it, set and footprint sizes, the rates of the strongest and weakest
+    integration), without masking or changing anything.
   - Caveat for every replay row above: each is the production m7 catalog with rows
     appended or changed; `replace_saturated`, the dedup and the vetting have not been
     rerun, so a restored row that vetting would remove is counted as kept.

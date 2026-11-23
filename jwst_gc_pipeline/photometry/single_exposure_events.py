@@ -59,6 +59,11 @@ The numerics take the frames as objects with ``name``, ``shape``, ``wcs`` and
 ``load()`` (the SCI and DQ arrays), so they run without the pipeline;
 ``CrfFrame`` is that object for a crf file.
 
+``event_table`` lists events (frame, pixel, sky position, excess, the integration
+rates) instead of masking them: ``python -m
+jwst_gc_pipeline.photometry.single_exposure_events OUT.fits crf.fits ...`` runs the
+ramp test on the given crf files and writes that table, and sets nothing to DO_NOT_USE.
+
 The same mosaic builders also drop the extreme negative pixels
 (``negative_pixel_mask``, env ``NEGATIVE_PIXEL_MASK_NSIGMA``): a pixel far below
 the frame's own noise is a detector defect, not sky, and it enters the data
@@ -70,6 +75,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from astropy.io import fits
+from astropy.table import Table
 from scipy import ndimage
 
 DO_NOT_USE = 1
@@ -611,6 +617,46 @@ def apply_mask_to_dq(dq, mask):
     return out
 
 
+#: columns of ``event_table`` and their units
+EVENT_TABLE_COLUMNS = (
+    ('frame', None), ('x', 'pix'), ('y', 'pix'), ('ra', 'deg'), ('dec', 'deg'),
+    ('area', 'pix'), ('footprint_px', 'pix'), ('peak', 'MJy/sr'), ('excess', 'MJy/sr'),
+    ('predicted', 'MJy/sr'), ('sigma', 'MJy/sr'), ('rate_strongest', 'DN/group'),
+    ('rate_weakest', 'DN/group'), ('n_other_frames', None))
+
+
+def event_table(events, frames):
+    """Astropy table of ``events``, one row per event, to list them instead of
+    masking them.  ``frames`` are the frame objects the events were found in (their
+    ``wcs`` gives ``ra`` and ``dec``).  ``x`` and ``y`` are the 0-based pixel of the
+    event's largest excess, ``area`` the pixels of the connected set before the
+    dilation of the footprint (``footprint_px``), ``peak`` the crf there, ``predicted``
+    what the weakest integration alone gives there (``Event.bkg``), ``excess`` the
+    difference, ``sigma`` the scatter of the local background annulus and
+    ``rate_strongest`` / ``rate_weakest`` the rates of the integrations (``Event.ramp``;
+    NaN for an event of the cross-frame test, which has no ramp).  ``n_other_frames``
+    counts the frames the cross-frame test compared with (0 for a ramp event)."""
+    by_name = {fr.name: fr for fr in frames}
+    cols = {name: [] for name, _unit in EVENT_TABLE_COLUMNS}
+    for ev in events:
+        ra, dec = _world(by_name[ev.frame], ev.x, ev.y)
+        strongest, weakest = ev.ramp if ev.ramp is not None else (np.nan, np.nan)
+        for name, value in (
+                ('frame', ev.frame), ('x', ev.x), ('y', ev.y), ('ra', float(ra[0])),
+                ('dec', float(dec[0])), ('area', ev.area), ('footprint_px', len(ev.ys)),
+                ('peak', ev.peak), ('excess', ev.excess), ('predicted', ev.bkg),
+                ('sigma', ev.sigma), ('rate_strongest', strongest),
+                ('rate_weakest', weakest), ('n_other_frames', len(ev.others))):
+            cols[name].append(value)
+    dtypes = {'frame': str, 'area': np.int64, 'footprint_px': np.int64, 'n_other_frames': np.int64}
+    table = Table()
+    for name, unit in EVENT_TABLE_COLUMNS:
+        table[name] = np.array(cols[name], dtype=dtypes.get(name, np.float64))
+        if unit:
+            table[name].unit = unit
+    return table
+
+
 def negative_pixel_nsigma():
     """``NEGATIVE_PIXEL_MASK_NSIGMA``: ``None`` (off) when unset, blank or 0;
     otherwise the number of ERR below zero at which a pixel is masked.  A value
@@ -645,3 +691,30 @@ def negative_pixel_mask(sci, err, dq, nsigma):
     unflagged = (dq & (DO_NOT_USE | SATURATED)) == 0
     with np.errstate(invalid='ignore'):
         return usable & unflagged & (sci < -float(nsigma) * err)
+
+
+def main(argv=None):
+    """List the single-integration events of crf files: ``python -m
+    jwst_gc_pipeline.photometry.single_exposure_events OUT.fits crf.fits [crf.fits ...]``.
+    Runs ``find_ramp_events`` with the default parameters on the crf files (one filter
+    of one tile; the sibling ``_ramp.fits`` of each is read), writes ``event_table`` to
+    OUT.fits (overwritten) and prints the counts.  Nothing is masked and no input is
+    changed."""
+    import argparse
+    ap = argparse.ArgumentParser(description=main.__doc__.split('\n\n')[0])
+    ap.add_argument('out', help='FITS table to write')
+    ap.add_argument('crf', nargs='+', help='crf files of one filter')
+    args = ap.parse_args(argv)
+    frames = [CrfFrame(f) for f in args.crf]
+    events, n_tested = find_ramp_events(frames, log=print)
+    table = event_table(events, frames)
+    table.meta['NFRAMES'] = len(frames)
+    table.meta['NTESTED'] = n_tested
+    table.write(args.out, overwrite=True)
+    print(f'{len(events)} events in {len(set(table["frame"]))} of {n_tested} frames tested '
+          f'({len(frames) - n_tested} of {len(frames)} without a usable ramp) -> {args.out}')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

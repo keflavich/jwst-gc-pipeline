@@ -3,6 +3,7 @@ not in the others are an event; a star, the same in every integration, is not.""
 import numpy as np
 import pytest
 from astropy.io import fits
+from astropy.table import Table
 from astropy.wcs import WCS
 
 from jwst_gc_pipeline.photometry import single_exposure_events as se
@@ -370,3 +371,85 @@ def test_load_ramp_refuses_a_cube_that_is_not_on_the_frames_grid(tmp_path, cube,
     fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(cube, name=hdu_name)]).writeto(
         tmp_path / 'jw_b_nrcb1_ramp.fits')
     assert frame.load_ramp() is None
+
+
+# --- the event table and the list-only command -------------------------------------
+
+def _wcs():
+    ww = WCS(naxis=2)
+    ww.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    ww.wcs.crval = [266.5, -28.8]
+    ww.wcs.cdelt = [-1e-5, 1e-5]
+    ww.wcs.crpix = [NX / 2 + 0.5, NY / 2 + 0.5]
+    return ww
+
+
+class WcsFrame(FakeFrame):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.wcs = _wcs()
+
+
+def test_event_table_lists_each_event_with_its_sky_position_and_rates():
+    fr = WcsFrame('f0', _cube(stars=[STAR], hits=[HIT]))
+    events, _ = se.find_ramp_events([fr])
+    tab = se.event_table(events, [fr])
+    assert [c for c in tab.colnames] == [name for name, _unit in se.EVENT_TABLE_COLUMNS]
+    assert len(tab) == 1 and tab['frame'][0] == 'f0'
+    ev = events[0]
+    ra, dec = fr.wcs.pixel_to_world_values(ev.x, ev.y)
+    assert (tab['x'][0], tab['y'][0]) == (ev.x, ev.y)
+    assert tab['ra'][0] == pytest.approx(float(ra)) and tab['dec'][0] == pytest.approx(float(dec))
+    assert tab['excess'][0] == pytest.approx(ev.excess) and tab['predicted'][0] == pytest.approx(ev.bkg)
+    assert tab['peak'][0] == pytest.approx(ev.peak)
+    assert tab['rate_strongest'][0] > 10 * max(tab['rate_weakest'][0], 1.0)
+    assert tab['footprint_px'][0] == len(ev.ys) and tab['area'][0] == ev.area
+    assert tab['n_other_frames'][0] == 0
+    assert tab['rate_strongest'].unit == 'DN/group' and tab['ra'].unit == 'deg'
+
+
+def test_event_table_of_a_cross_frame_event_has_no_rates():
+    fr = WcsFrame('f0', _cube(stars=[STAR]))
+    ev = se.Event(frame='f0', x=10.0, y=20.0, area=5, peak=900.0, excess=800.0, bkg=100.0,
+                  sigma=3.0, others=[('g', 1.0), ('h', 2.0)], ys=np.array([20, 21]), xs=np.array([10, 10]))
+    tab = se.event_table([ev], [fr])
+    assert np.isnan(tab['rate_strongest'][0]) and np.isnan(tab['rate_weakest'][0])
+    assert tab['n_other_frames'][0] == 2 and tab['footprint_px'][0] == 2
+
+
+def test_event_table_without_events_keeps_its_columns():
+    tab = se.event_table([], [WcsFrame('f0', _cube(stars=[STAR]))])
+    assert len(tab) == 0 and tab.colnames == [name for name, _unit in se.EVENT_TABLE_COLUMNS]
+
+
+def _frame_files(tmp_path, name, cube):
+    crf = tmp_path / f'jw_{name}_nrca1_destreak_o001_crf.fits'
+    _crf_file(crf)
+    with fits.open(crf, mode='update') as hdul:
+        hdul['SCI'].data = _crf(cube).astype('float32')
+    fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(cube, name='SCI')]).writeto(
+        tmp_path / f'jw_{name}_nrca1_ramp.fits')
+    return str(crf)
+
+
+def test_main_writes_the_table_and_changes_no_input(tmp_path, capsys):
+    hit = _frame_files(tmp_path, 'hit', _cube(stars=[STAR], hits=[HIT]))
+    quiet = _frame_files(tmp_path, 'quiet', _cube(stars=[STAR], seed=3))
+    before = [open(f, 'rb').read() for f in (hit, quiet)]
+    out = tmp_path / 'events.fits'
+    assert se.main([str(out), hit, quiet]) == 0
+    tab = Table.read(out)
+    assert len(tab) == 1 and tab['frame'][0].endswith('jw_hit_nrca1_destreak_o001_crf.fits')
+    assert (round(tab['x'][0]), round(tab['y'][0])) == (60, 50)
+    assert tab.meta['NFRAMES'] == 2 and tab.meta['NTESTED'] == 2
+    assert [open(f, 'rb').read() for f in (hit, quiet)] == before
+    assert '1 events in 1 of 2 frames tested (0 of 2 without a usable ramp)' in capsys.readouterr().out
+
+
+def test_main_counts_the_frames_without_a_ramp(tmp_path, capsys):
+    hit = _frame_files(tmp_path, 'hit', _cube(stars=[STAR], hits=[HIT]))
+    lone = _crf_file(tmp_path / 'jw_lone_nrca2_destreak_o001_crf.fits')
+    out = tmp_path / 'events.fits'
+    assert se.main([str(out), hit, lone]) == 0
+    assert Table.read(out).meta['NTESTED'] == 1
+    assert '(1 of 2 without a usable ramp)' in capsys.readouterr().out
