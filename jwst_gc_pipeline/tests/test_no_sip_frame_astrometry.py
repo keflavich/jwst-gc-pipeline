@@ -80,6 +80,8 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/cataloging.py",
     "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
     "scripts/release/make_preview_rgb.py",
+    # the SCI header of the m7 residual i2d mosaic (rectified, no SIP), read to place the masked pixels
+    "jwst_gc_pipeline/photometry/residual_footprint_mask.py",
     # PR #1019 evidence scripts: the merged data_i2d mosaic (rectified, no SIP),
     # read for a local-peak flag (compare) and the vetting replay (vet_variant).
     "docs/evidence/faint_local_skyclean/scripts/compare.py",
