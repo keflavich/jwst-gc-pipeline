@@ -1078,21 +1078,35 @@ these flag sets would remove the footgun of setting them individually.)*
     i2d (the compact NaN components of 6 to 3000 mosaic pixels, dilated by 4 pixels) was
     also emulated on F480M: it sets 0.007 % of the finite pixels to NaN and leaves
     11 / 5 / 5 / 4 leftovers above 500 MJy/sr for o045 / o118 / o130 / o138, against
-    1 / 3 / 4 / 3 for the DQ_SAT mask at 1.1-2.0 %.  It is not in the module.  The module,
+    1 / 3 / 4 / 3 for the DQ_SAT mask at 1.1-2.0 %.  On F212N, applied to the DQ_SAT-masked
+    residual, the same dilation of 4 pixels sets 1303 / 1386 / 1390 / 1245 more pixels to
+    NaN (0.002-0.003 % of the finite pixels) for o045 / o118 / o130 / o138 and leaves every
+    count above unchanged; the 41 x 41 pixel boxes of the data i2d around o130 (349, 2907)
+    and (4934, 195) hold no NaN pixel.  It is not in the module.  The module,
     run on a scratch copy of the o138 F212N replay (48 per-frame residual files, 3558
     saturated components of at least 4 pixels with 115890 detector pixels, 57455 flagged
     mosaic pixels), sets 159492 pixels to NaN (0.312 % of the 51081875 finite pixels) and
     gives the NaN pixels of the emulation exactly: no pixel differs, and every finite pixel
     is identical.  No full m7 + finalize run with the extension exists.
     What the DQ_SAT mask leaves on F212N (`DQSAT_PX` 4, `DQSAT_MIN_PX` 4).  The craters deeper
-    than 200 MJy/sr (o118 6, o138 5) are unsaturated stars with model peaks of 470-3250 MJy/sr
-    that the model over-subtracts by 30-56 % at 0.8-1.5" from a satstar; the footprint does not
-    reach them.  The leftovers above 1000 MJy/sr (o045 1, o118 2, o130 4, o138 0) are two
-    stars of o130 with 9-11 NaN pixels in each frame, no DQ_SATURATED flag and no satstar
-    row within 2.3" ((349, 2907) at 3655 and (4934, 195) at 2515 MJy/sr), two stars that have
-    a vetted row and no subtraction (o118 (5457, 2808) at 3201, seen in one of the two
-    exposures that cover it; o130 (5065, 68) at 1244), and three stars within 1" of a satstar
-    row (o045 (1253, 131) at 1039, o118 (5014, 2112) at 1231, o130 (3091, 4576) at 2099).
+    than 200 MJy/sr (o118 6, o138 5) belong to stars whose nearest vetted row is not a satstar
+    row: model peaks of 423-3247 MJy/sr, depths of 30-56 % of the model peak, 0.53-1.46" from the
+    nearest satstar row.  The footprint does not reach them.  The leftovers above 1000 MJy/sr
+    (o045 1, o118 2, o130 4, o138 0), by the class that the leftover list assigns:
+    - Not in the m7 catalog, 2.3-2.4" from the nearest satstar row: o130 (349, 2907) at 3655
+      and (4934, 195) at 2515 MJy/sr.  Two frames hold (349, 2907) (nrca2 exposures 4 and 5).
+      In the disk of radius 6 detector pixels (113 pixels) around it the peaks are 4655 and
+      4592 MJy/sr, there is no DQ_SATURATED pixel and there is 1 NaN pixel in each frame; the
+      per-frame m7 residuals keep both peaks.  Two frames hold (4934, 195) (nrca3 exposures 2
+      and 3).  The disk around it peaks at 6284 MJy/sr in exposure 3, with 53 JUMP_DET pixels
+      and no NaN or DQ_SATURATED pixel, and has a maximum of 9.1 MJy/sr in exposure 2.
+    - Vetted row without a subtraction, 2.8-3.0" from the nearest satstar row: o118 (5457, 2808)
+      at 3201 and o130 (5065, 68) at 1244 MJy/sr.  Two frames hold (5457, 2808) (nrca4
+      exposures 1 and 2).  The disk around it peaks at 1.078e4 MJy/sr in exposure 1, with 14
+      JUMP_DET pixels and no NaN or DQ_SATURATED pixel, and has a maximum of 9.5 MJy/sr in
+      exposure 2.
+    - Within 1" of a satstar row: o045 (1253, 131) at 1039, o118 (5014, 2112) at 1231 and o130
+      (3091, 4576) at 2099 MJy/sr, at 0.90", 0.93" and 0.24".
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no

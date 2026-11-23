@@ -18,6 +18,7 @@ from astropy.wcs import WCS
 from scipy import ndimage
 
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as L
+from jwst_gc_pipeline.frame_wcs import GwcsReadError
 from jwst_gc_pipeline.photometry import merge_catalogs
 from jwst_gc_pipeline.photometry import residual_footprint_mask as fm
 from jwst_gc_pipeline.photometry.tests.test_mergedcat_render_procs import _setup
@@ -1360,6 +1361,22 @@ def test_a_frame_without_dq_skips_the_dqsat_mask_and_keeps_the_satstar_disks(
         assert 'FPDQSATD' not in h['SCI'].header
     assert 'WARNING mergedcat: resid i2d DQ_SAT mask skipped' in out
     assert 'no DQ extension' in out
+
+
+def test_a_frame_whose_gwcs_cannot_be_read_skips_the_dqsat_mask_and_keeps_the_satstar_disks(
+        tmp_path, monkeypatch, capsys):
+    def unreadable(path):
+        raise GwcsReadError(f"{path}: the ASDF extension holds no readable GWCS")
+
+    monkeypatch.setattr(fm, 'frame_wcs', unreadable)
+    path, out = _build(tmp_path / 'q9', monkeypatch, capsys, frame_dq=_render_frames(),
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_DQSAT_PX: '2'})
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), _disks_of_build())
+        assert 'FPDQSATD' not in h['SCI'].header
+    assert 'WARNING mergedcat: resid i2d DQ_SAT mask skipped' in out
+    assert 'the ASDF extension holds no readable GWCS' in out
+    assert 'WARNING mergedcat: resid i2d footprint mask skipped' not in out
 
 
 def test_the_dqsat_mask_does_not_need_the_satstar_cache(tmp_path, monkeypatch, capsys):
