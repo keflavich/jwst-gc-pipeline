@@ -96,6 +96,7 @@ from jwst_gc_pipeline.astrometry_utils import pick_refcat as _au_pick_refcat
 from jwst_gc_pipeline.photometry.epsf_hybrid import hybrid_psf_token
 from jwst_gc_pipeline.photometry.m2_correction_floors import (
     m2_correction_floor)
+from jwst_gc_pipeline.photometry import satstar_dao_restore as _dao_restore
 import types
 import uuid
 import traceback
@@ -8017,7 +8018,11 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
        frame that fit only the other is kept as two stars, and a member
        whose every fit is within 10 px of the science area, i.e. 14 px of
        the array edge (:func:`_satstar_edge_only_rows`), is not chosen as a
-       set's survivor while another member is not.
+       set's survivor while another member is not.  With
+       ``SATSTAR_DAO_RESTORE_FRAC_MIN`` above 0 (:mod:`satstar_dao_restore`),
+       an in-field row this step would drop whose merge-time daophot row (the
+       ``satstar_dao_*`` columns) lies within the satstar's flux ratio and
+       separation window is kept as that daophot row instead.
     B) Drop NON-satstar rows projecting > ``fov_pad_psf`` PSF widths OUTSIDE this
        filter's data FOV.  These are m7 cross-band-seed artifacts: the shared
        seed unions positions from ALL filters, so positions covered only by other
@@ -8079,6 +8084,8 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
     # collapse to off-FOV rows; in-field replaced_saturated rows (already deduped
     # at 0.15" in satstar consolidation) are left untouched.
     n_infield = 0
+    dao_rows = np.zeros(0, dtype=int)
+    _dao_cfg = _dao_restore.settings()
     if rs.any() and fcol is not None:
         elig = rs.copy()
         if dedup_offfov_only and have_fov:
@@ -8114,6 +8121,10 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
                     cofit_positions, dedup_arcsec=dedup_arcsec,
                     match_arcsec=cofit_match_arcsec,
                     distinct_pairs=_distinct, demote=_demote)
+                if _dao_cfg is not None and _inf_drop.any():
+                    dao_rows = _dao_restore.select(
+                        merged, inf_idx, _inf_drop, fcol, _dao_cfg)
+                    _inf_drop[np.isin(inf_idx, dao_rows)] = False
                 drop[inf_idx[_inf_drop]] = True
                 n_infield = int(_inf_drop.sum())
                 if _rstats is not None:
@@ -8169,7 +8180,11 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
         offfield = outside & (~rs) & (~drop)
         drop |= offfield
         n_off = int(offfield.sum())
-    return merged[~drop], n_dedup, n_off
+    out = merged[~drop]
+    if _dao_cfg is not None and fcol is not None:
+        _dao_restore.restore(out, (np.cumsum(~drop) - 1)[dao_rows], fcol,
+                             _dao_restore.flux_columns(out)[1])
+    return out, n_dedup, n_off
 
 
 #: Values of ``SATSTAR_INFIELD_DEDUP`` and its per-instrument variants; see
@@ -11450,6 +11465,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # The same for the 'cofit_residual' thresholds (SATSTAR_INFIELD_RESID_*).
     _validate_infield_dedup_env()
     _resid_dedup_thresholds()
+    _dao_restore.settings()     # SATSTAR_DAO_RESTORE_*: the merge and the dedup read it
 
     cut_bp = _L._cutout_out_basepath(basepath, options)
     os.makedirs(os.path.join(cut_bp, 'catalogs'), exist_ok=True)
