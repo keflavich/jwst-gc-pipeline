@@ -936,7 +936,11 @@ these flag sets would remove the footgun of setting them individually.)*
     (8399,3256); o130 (11316,4440), (423,2053), (4934,195); o138 (1311,4560), (6391,2609).
     The rates of the strongest and weakest integration at the event's brightest pixel are
     7400 and 29 DN per group at o045 (6296,2636) (frame 02101_00004_nrcb3) and 7548 and 1
-    at o130 (11316,4440) (frame 02101_00001_nrcb1).  The leftovers above 2000 MJy/sr
+    at o130 (11316,4440) (frame 02101_00001_nrcb1).  Rendered with the ramp events masked
+    (tag `mkrrmfdblfs3`) the leftovers above 500 MJy/sr number 10, 4, 6 and 13 for o045,
+    o118, o130 and o138 (12, 7, 9 and 15 for `mkrdblfs3`), those above 2000 MJy/sr 1, 0, 3
+    and 3 (2, 2, 6 and 5), and the craters deeper than 50 MJy/sr 25, 43, 30 and 35 (27,
+    45, 32 and 37).  The leftovers above 2000 MJy/sr
     with no event within 4 pixels are o045 (14,2277); o130 (501,2193), (349,2907),
     (3091,4576); o138 (3204,4577), (9,880), (3207,4569); the test flags none of them.
     The first version flagged o138 (20,889) and (24,888) (leftovers of 908 and 585
