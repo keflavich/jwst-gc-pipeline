@@ -1359,6 +1359,8 @@ def satstar_fit_switches(env=None):
       recovered-core cap and the PSF fraction below which it is skipped
       (``recovered_cap_flux``).  The cap reads only the fitted seed's share of
       a blended component (``recovered_cap_region``).
+    * ``SATSTAR_FITTER_MAXITERS`` (default 100, photutils' own): iteration cap
+      of the per-star LevMar fit (``satstar_fitter_maxiters``).
     """
     env = os.environ if env is None else env
     qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
@@ -1387,6 +1389,7 @@ def satstar_fit_switches(env=None):
             float(env.get('SATSTAR_DEBLEND_PSF_MARGIN', '') or 0.0), 0.0),
         'cap_min_psf_frac': float(
             env.get('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '') or 0.005),
+        'fitter_maxiters': satstar_fitter_maxiters(env),
     }
 
 
@@ -1783,6 +1786,11 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
+    if sw['fitter_maxiters'] != SATSTAR_FITTER_MAXITERS_DEFAULT:
+        # A fit that the default cap stopped early converges further (or not)
+        # under another cap, on every frame, with or without a ramp.  Left out
+        # at the default, so the default key is the one before the switch.
+        parts.append(f"mi{sw['fitter_maxiters']}")
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
@@ -3099,6 +3107,42 @@ def _set_position_fixed(model, fixed):
     """
     model.x_0.fixed = bool(fixed)
     model.y_0.fixed = bool(fixed)
+
+
+#: Iteration cap of the per-star satstar LevMar fit when ``SATSTAR_FITTER_MAXITERS``
+#: is unset: photutils' own ``PSFPhotometry`` default.
+SATSTAR_FITTER_MAXITERS_DEFAULT = 100
+
+
+def satstar_fitter_maxiters(env=None):
+    """Iteration cap of the per-star saturated-star LevMar fit.
+
+    Env ``SATSTAR_FITTER_MAXITERS`` (positive integer); unset or blank is
+    ``SATSTAR_FITTER_MAXITERS_DEFAULT``, so the default changes nothing.  A fit
+    that reaches the cap returns the iterate it stopped at, with photutils flag
+    bits 8 (the fitter may not have converged) and 16 (no parameter
+    covariance).  Reads like the other fit switches (``satstar_fit_switches``)
+    so that the fit and the cache key see one value.
+
+    Raises
+    ------
+    ValueError
+        The value is not a positive integer.  It changes the fit and the
+        satstar cache key, so a typo must not be read as the default.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_FITTER_MAXITERS')
+    if raw is None or not str(raw).strip():
+        return SATSTAR_FITTER_MAXITERS_DEFAULT
+    try:
+        maxiters = int(str(raw).strip())
+    except ValueError as err:
+        raise ValueError(f"SATSTAR_FITTER_MAXITERS={raw!r} is not a positive "
+                         f"integer") from err
+    if maxiters < 1:
+        raise ValueError(f"SATSTAR_FITTER_MAXITERS={raw!r} is not a positive "
+                         f"integer")
+    return maxiters
 
 
 def _nircam_position_locked(*, is_miri, lock_pos, lock_min_px, sat_area):
@@ -5244,6 +5288,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             psfphot = PSFPhotometry(
                                     localbkg_estimator=localbkg_estimator,
                                     fitter=lmfitter,
+                                    fitter_maxiters=_fit_switches['fitter_maxiters'],
                                     psf_model=_psf_for_fit,
                                     fit_shape=_size_eff,
                                     aperture_radius=15*fwhm_pix)
