@@ -203,7 +203,8 @@ def forced_psf_photometry(image, psf_model, init_params, *,
                           fit_shape=(5, 5),
                           aperture_radius=4,
                           nonnegative=False,
-                          bkg_sigma=None):
+                          bkg_sigma=None,
+                          return_fit_quality=False):
     """Closed-form linear flux solve at the (fixed) positions in
     ``init_params``.  Bypasses photutils LM entirely.
 
@@ -263,11 +264,17 @@ def forced_psf_photometry(image, psf_model, init_params, *,
         error stamp becomes ``sqrt(error**2 + bkg_sigma[i]**2)``.  Entries that
         are NaN or not positive leave that source on ``error`` alone.  Requires
         ``error``.  ``None`` (the default) leaves the fit unchanged.
+    return_fit_quality : bool, optional
+        Also return ``qfit`` and ``cfit`` as photutils defines them for the
+        solved flux: the summed absolute residual over the used pixels of the
+        stamp, and the residual in its central pixel, each divided by the
+        flux.  NaN where the flux is not positive.  Default False.
 
     Returns
     -------
     Table with columns ``x_init``, ``y_init``, ``x_fit``, ``y_fit``
-    (== x_init/y_init), ``flux_fit``, ``flux_err``, ``n_pixels_fit``.
+    (== x_init/y_init), ``flux_fit``, ``flux_err``, ``n_pixels_fit``, and
+    ``qfit``, ``cfit`` with ``return_fit_quality``.
     """
     ny_fit, nx_fit = int(fit_shape[0]), int(fit_shape[1])
     half_y, half_x = ny_fit // 2, nx_fit // 2
@@ -279,6 +286,8 @@ def forced_psf_photometry(image, psf_model, init_params, *,
     flux_fit = np.full(n, np.nan, dtype=np.float64)
     flux_err = np.full(n, np.nan, dtype=np.float64)
     npix_fit = np.zeros(n, dtype=np.int32)
+    qfit_out = np.full(n, np.nan, dtype=np.float64)
+    cfit_out = np.full(n, np.nan, dtype=np.float64)
 
     # Build the (ny_fit x nx_fit) pixel grid offsets once.
     dy, dx = np.mgrid[-half_y:half_y + 1, -half_x:half_x + 1].astype(float)
@@ -338,6 +347,10 @@ def forced_psf_photometry(image, psf_model, init_params, *,
         flux_fit[i] = max(_f, 0.0) if nonnegative else _f
         flux_err[i] = 1.0 / np.sqrt(sxx)
         npix_fit[i] = int((w > 0).sum())
+        if return_fit_quality and flux_fit[i] > 0:
+            resid = data - flux_fit[i] * psf_stamp
+            qfit_out[i] = float(np.abs(resid[w > 0]).sum() / flux_fit[i])
+            cfit_out[i] = float(resid[half_y, half_x] / flux_fit[i])
 
     out = Table()
     out['x_init'] = x_init
@@ -350,6 +363,9 @@ def forced_psf_photometry(image, psf_model, init_params, *,
     out['flux_fit'] = flux_fit
     out['flux_err'] = flux_err
     out['n_pixels_fit'] = npix_fit
+    if return_fit_quality:
+        out['qfit'] = qfit_out
+        out['cfit'] = cfit_out
     return out
 
 
@@ -363,7 +379,7 @@ def _make_model_image(phot_obj, shape, *, psf_shape=None, include_local_bkg=Fals
 
 def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
                          flux_agreement_frac=0.10, is_saturated=None,
-                         return_owner=False):
+                         return_owner=False, nonpositive_loses=False):
     """
     Greedy spatial deduplication of sources closer than ``min_sep_pix``.
 
@@ -402,6 +418,18 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
     return_owner : bool, optional
         Also return ``owner`` (below).  Default False keeps the two-value
         return.
+    nonpositive_loses : bool, optional
+        When fluxes disagree and ``quality`` decides, rank an entry whose flux
+        is not positive last.  Default False keeps the plain ``argmin``.  A
+        fit with ``flux <= 0`` has a negative qfit (qfit is the summed
+        absolute residual divided by the flux), which sorts below every real
+        star's qfit, so a degenerate pair -- a bright star and a neighbour seed
+        that converged onto it with a negative flux -- kept the negative row
+        and dropped the star.  The negative row is then removed by the
+        non-positive-flux ban and the star has no row in the frame.  With the
+        switch on, a cluster with at least one positive-flux member is decided
+        among those members; a cluster without one keeps its first-processed
+        (brightest) member, as when no ``quality`` is given.
 
     Returns
     -------
@@ -526,6 +554,8 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
                         cluster_q = np.asarray([quality[k] for k in cluster], dtype=float)
                         # Smaller quality is better; non-finite treated as worst.
                         cluster_q = np.where(np.isfinite(cluster_q), cluster_q, np.inf)
+                        if nonpositive_loses:
+                            cluster_q = np.where(cluster_flux > 0, cluster_q, np.inf)
                         winner = cluster[int(np.argmin(cluster_q))]
                     else:
                         winner = i  # brightest
