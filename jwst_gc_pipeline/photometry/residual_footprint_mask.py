@@ -25,6 +25,16 @@ with ``flux_fit`` of 1e6 and more the residual keeps ring craters 12-20 pixels o
 ``flux_fit`` of at least ``MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN`` get a disk of at
 least ``MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX`` mosaic pixels.
 
+A third, optional setting adds the footprints of gate-REJECTED satstar fits.  A
+bright star whose fit only the sidelobe cut rejects has no row in the consolidated
+catalog and no model, so its residual is the whole star.  When the satstar stage ran
+with ``SATSTAR_SIDELOBE_MASK_FRAC_MIN`` its rejected table marks the fits that a
+mask can cover (``sidelobe_maskable``), and ``MERGEDCAT_FOOTPRINT_MASK_REJECTED``
+blanks their disks, of the same radius and with the same ring-zone extension, in the
+same residual i2d.  The rows are read through ``load_rejected_satstar_catalog`` (the
+merge's observation scope, phase and frame variant) with the sky position
+re-projected through the frame's current GWCS.
+
 The switch is off unless ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is a number above 0.
 The next phase of a manual run reads the residual i2d for its i2d seeds and its
 smoothed background map, and the replays in ``SATURATED_PIXEL_HANDLING.md``
@@ -58,6 +68,17 @@ ENV_RING_FLUX_MIN = 'MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN'
 
 #: smallest radius in mosaic pixels of a row that ``ENV_RING_FLUX_MIN`` selects
 ENV_RING_RADIUS_PX = 'MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX'
+
+#: also blank the footprints of the gate-rejected satstar fits that the satstar
+#: stage flagged ``sidelobe_maskable``; an on/off switch, off by default, and read
+#: only when ``KFAC`` is on
+ENV_REJECTED = 'MERGEDCAT_FOOTPRINT_MASK_REJECTED'
+
+_SWITCH_ON = ('1', 'true', 'yes', 'on')
+_SWITCH_OFF = ('0', 'false', 'no', 'off')
+
+#: column of ``*_satstar_rejected.fits`` that ``SATSTAR_SIDELOBE_MASK_FRAC_MIN`` writes
+MASKABLE_COLUMN = 'sidelobe_maskable'
 
 #: manual passes whose residual i2d gets the mask, comma- or space-separated;
 #: unset or blank gives ``DEFAULT_PASSES``
@@ -128,6 +149,28 @@ def ring_params():
     return flux_min, radius
 
 
+def rejected_enabled():
+    """Whether ``MERGEDCAT_FOOTPRINT_MASK_REJECTED`` adds the maskable rejected fits.
+
+    Off unless ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is above 0 and the variable is
+    ``1/true/yes/on``; it is not read otherwise, so a stray one cannot break a
+    default run.  ``0/false/no/off`` (any case) and unset or blank are off.  Any
+    other value raises ``ValueError`` naming the variable.
+    """
+    if mask_params()[0] <= 0.0:
+        return False
+    raw = os.environ.get(ENV_REJECTED, '')
+    value = raw.strip().lower()
+    if not value or value in _SWITCH_OFF:
+        return False
+    if value in _SWITCH_ON:
+        return True
+    raise ValueError(
+        f"{ENV_REJECTED}={raw!r} is not a recognised on/off value; use one of "
+        f"{'/'.join(_SWITCH_ON)} or {'/'.join(_SWITCH_OFF)} (case-insensitive), "
+        f"or leave it unset (off)")
+
+
 def mask_passes():
     """Passes whose residual i2d gets the mask (``MERGEDCAT_FOOTPRINT_MASK_PASSES``).
 
@@ -174,16 +217,10 @@ def native_pixel_scale_arcsec(filtername, instrument=None):
                      / SR_PER_ARCSEC2)
 
 
-def read_satstars(basepath, filtername, proposal_id, field, target=None,
-                  need_flux=False):
-    """The consolidated satstar catalog the merge of this observation read.
-
-    Raises ``FootprintMaskUnavailable`` when the merge read the NIRCam
-    ``merged_i2d`` primary catalog instead (the consolidated cache is then not
-    the catalog it used), when the cache does not exist, or when it lacks
-    ``skycoord_fit`` or ``sat_area`` (and ``flux_fit`` with ``need_flux``, the
-    ring-zone extension).  Nothing is written.
-    """
+def _refuse_primary_catalog(filtername, target, basepath, proposal_id, field):
+    """Raise ``FootprintMaskUnavailable`` when the merge reads the NIRCam
+    ``merged_i2d`` primary satstar catalog for ``target`` (not checked without a
+    target)."""
     from jwst_gc_pipeline.photometry import merge_catalogs
     if target and merge_catalogs._obs_filters_for(target) is not None:
         try:
@@ -195,6 +232,20 @@ def read_satstars(basepath, filtername, proposal_id, field, target=None,
             raise FootprintMaskUnavailable(
                 f"the merge reads the primary satstar catalog {primary}, "
                 f"not a consolidated cache")
+
+
+def read_satstars(basepath, filtername, proposal_id, field, target=None,
+                  need_flux=False):
+    """The consolidated satstar catalog the merge of this observation read.
+
+    Raises ``FootprintMaskUnavailable`` when the merge read the NIRCam
+    ``merged_i2d`` primary catalog instead (the consolidated cache is then not
+    the catalog it used), when the cache does not exist, or when it lacks
+    ``skycoord_fit`` or ``sat_area`` (and ``flux_fit`` with ``need_flux``, the
+    ring-zone extension).  Nothing is written.
+    """
+    from jwst_gc_pipeline.photometry import merge_catalogs
+    _refuse_primary_catalog(filtername, target, basepath, proposal_id, field)
     path = merge_catalogs.consolidated_satstar_cache_path(
         basepath, filtername,
         merge_catalogs.satstar_obs_scope(proposal_id, field))
@@ -207,6 +258,47 @@ def read_satstars(basepath, filtername, proposal_id, field, target=None,
         raise FootprintMaskUnavailable(
             f"{path} has no {' or '.join(missing)} column")
     return tbl
+
+
+def read_maskable_rejected(basepath, filtername, proposal_id, field, target=None,
+                           phase=None, frames=None, need_flux=False):
+    """The gate-rejected satstar fits of this observation flagged maskable.
+
+    Rows of the ``*_satstar_rejected.fits`` that ``load_rejected_satstar_catalog``
+    reads for the merge (``proposal_id`` / ``field`` observation scope, one
+    ``phase`` per exposure, the frame variants of ``frames``) with
+    ``sidelobe_maskable`` true, their ``skycoord_fit`` re-projected through the
+    frame's current GWCS.  A file without the column contributes no row.  Nothing
+    is written.
+
+    Raises ``FootprintMaskUnavailable`` when the merge reads the primary satstar
+    catalog, when there are no rejected files, or when the rejected rows lack
+    ``skycoord_fit``, ``sat_area`` or ``sidelobe_maskable`` (and ``flux_fit``
+    with ``need_flux``, the ring-zone extension).  The last one means the satstar
+    stage ran without ``SATSTAR_SIDELOBE_MASK_FRAC_MIN``, so no row was judged.
+    """
+    from jwst_gc_pipeline.photometry import merge_catalogs
+    from jwst_gc_pipeline.photometry.satstar_phase_selection import (
+        normalise_frame_variants, satstar_frame_variant)
+    _refuse_primary_catalog(filtername, target, basepath, proposal_id, field)
+    variants = normalise_frame_variants(
+        {satstar_frame_variant(f) for f in (frames or ())} - {''})
+    kwargs = {'target': target} if target else {}
+    tbl = merge_catalogs.load_rejected_satstar_catalog(
+        filtername, basepath=basepath, proposal_id=proposal_id, field=field,
+        phase=phase, frame_variants=variants, refresh_sky=True, **kwargs)
+    if tbl is None:
+        raise FootprintMaskUnavailable(
+            f"no gate-rejected satstar files for {filtername}")
+    required = (('skycoord_fit', 'sat_area', MASKABLE_COLUMN)
+                + (('flux_fit',) if need_flux else ()))
+    missing = [c for c in required if c not in tbl.colnames]
+    if missing:
+        raise FootprintMaskUnavailable(
+            f"the rejected satstar table of {filtername} has no "
+            f"{' or '.join(missing)} column")
+    flag = np.ma.filled(np.ma.asarray(tbl[MASKABLE_COLUMN]), False).astype(bool)
+    return tbl[flag]
 
 
 def mask_disks(sci, x, y, radius):
@@ -230,55 +322,89 @@ def mask_disks(sci, x, y, radius):
     return n_before - int(np.count_nonzero(np.isfinite(sci)))
 
 
+def _footprint_disks(satstars, wcs, native, scale, kfac, margin_px,
+                     ring_flux_min, ring_radius_px):
+    """``(x, y, radius, ring_rows)`` of the footprint disks of ``satstars``.
+
+    Pixel coordinates and radii in mosaic pixels of the rows that have a positive
+    finite ``sat_area``, and the number of those whose ``flux_fit`` reaches
+    ``ring_flux_min`` (0 when it is None), whose radius is at least
+    ``ring_radius_px``.
+    """
+    area = np.asarray(satstars['sat_area'], dtype=float)
+    rows = np.isfinite(area) & (area > 0)
+    if rows.any():
+        x, y = wcs.world_to_pixel(satstars['skycoord_fit'][rows])
+    else:
+        x = y = np.empty(0)
+    radius = kfac * np.sqrt(area[rows] / np.pi) * native / scale + margin_px
+    ring_rows = 0
+    if ring_flux_min is not None:
+        with np.errstate(invalid='ignore'):
+            ring = np.asarray(satstars['flux_fit'], dtype=float)[rows] >= ring_flux_min
+        radius = np.where(ring, np.maximum(radius, ring_radius_px), radius)
+        ring_rows = int(ring.sum())
+    return np.asarray(x, dtype=float), np.asarray(y, dtype=float), radius, ring_rows
+
+
 def mask_residual_i2d(i2d_path, satstars, filtername, instrument, kfac, margin_px,
-                      ring_flux_min=None, ring_radius_px=0.0):
+                      ring_flux_min=None, ring_radius_px=0.0, rejected=None):
     """Blank the footprints of ``satstars`` in the SCI plane of ``i2d_path``.
 
     The file is updated in place.  A row without a positive finite ``sat_area``
     has no footprint and is not masked.  With ``ring_flux_min`` set, a row whose
     ``flux_fit`` is at least that has a disk of at least ``ring_radius_px`` mosaic
-    pixels (a row with no ``flux_fit`` or a NaN one is not widened).  The SCI
-    header records the setting (``FPMASKK`` radius factor, ``FPMASKM`` margin in
-    mosaic pixels, ``FPMASKN`` rows masked, and with the ring extension
-    ``FPRINGF`` flux, ``FPRINGR`` radius in mosaic pixels, ``FPRINGN`` rows at
-    or above that flux).  Returns a dict with ``rows``, ``ring_rows`` (rows at
-    or above ``ring_flux_min``, 0 without the ring extension), ``pixels`` (finite
-    pixels that became NaN), ``finite`` (finite pixels before), ``scale`` (arcsec
-    per mosaic pixel) and ``radius_p50`` / ``radius_max`` (mosaic pixels).
+    pixels (a row with no ``flux_fit`` or a NaN one is not widened).  ``rejected``
+    (``read_maskable_rejected``) adds the disks of those rows, of the same radius
+    and with the same ring-zone extension.  The SCI header records the setting
+    (``FPMASKK`` radius factor, ``FPMASKM`` margin in mosaic pixels, ``FPMASKN``
+    rows of ``satstars`` masked, ``FPREJN`` rows of ``rejected`` masked when it is
+    given, and with the ring extension ``FPRINGF`` flux, ``FPRINGR`` radius in
+    mosaic pixels, ``FPRINGN`` rows of both tables at or above that flux).  Returns
+    a dict with ``rows`` (of ``satstars``), ``rejected_rows`` (0 without
+    ``rejected``), ``ring_rows`` (rows at or above ``ring_flux_min``, 0 without
+    the ring extension), ``pixels`` (finite pixels that became NaN), ``finite``
+    (finite pixels before), ``scale`` (arcsec per mosaic pixel) and
+    ``radius_p50`` / ``radius_max`` (mosaic pixels, over every disk).
 
     Raises ``FootprintMaskUnavailable``, with the file untouched, when
-    ``ring_flux_min`` is set and ``satstars`` has no ``flux_fit`` column.
+    ``ring_flux_min`` is set and ``satstars`` or ``rejected`` has no ``flux_fit``
+    column.
     """
-    if ring_flux_min is not None and 'flux_fit' not in satstars.colnames:
-        raise FootprintMaskUnavailable(
-            f"the satstar catalog has no flux_fit column, which the ring-zone "
-            f"extension ({ENV_RING_FLUX_MIN}) reads")
+    if ring_flux_min is not None:
+        for name, tbl in (('satstar', satstars), ('rejected satstar', rejected)):
+            if tbl is not None and 'flux_fit' not in tbl.colnames:
+                raise FootprintMaskUnavailable(
+                    f"the {name} catalog has no flux_fit column, which the "
+                    f"ring-zone extension ({ENV_RING_FLUX_MIN}) reads")
     native = native_pixel_scale_arcsec(filtername, instrument)
     with fits.open(i2d_path, mode='update', memmap=False) as hdul:
         sci = hdul['SCI'].data
         wcs = WCS(hdul['SCI'].header)
         scale = float(np.sqrt(np.prod(proj_plane_pixel_scales(wcs)[:2]))) * 3600.0
-        area = np.asarray(satstars['sat_area'], dtype=float)
-        rows = np.isfinite(area) & (area > 0)
-        if rows.any():
-            x, y = wcs.world_to_pixel(satstars['skycoord_fit'][rows])
-        else:
-            x = y = np.empty(0)
-        radius = (kfac * np.sqrt(area[rows] / np.pi) * native / scale
-                  + margin_px)
-        ring_rows = 0
-        if ring_flux_min is not None:
-            with np.errstate(invalid='ignore'):
-                ring = np.asarray(satstars['flux_fit'], dtype=float)[rows] >= ring_flux_min
-            radius = np.where(ring, np.maximum(radius, ring_radius_px), radius)
-            ring_rows = int(ring.sum())
+        x, y, radius, ring_rows = _footprint_disks(
+            satstars, wcs, native, scale, kfac, margin_px,
+            ring_flux_min, ring_radius_px)
+        n_rows = len(x)
+        n_rejected = 0
+        if rejected is not None:
+            rx, ry, rradius, rring_rows = _footprint_disks(
+                rejected, wcs, native, scale, kfac, margin_px,
+                ring_flux_min, ring_radius_px)
+            n_rejected = len(rx)
+            x, y = np.concatenate([x, rx]), np.concatenate([y, ry])
+            radius = np.concatenate([radius, rradius])
+            ring_rows += rring_rows
         pixels = mask_disks(sci, x, y, radius)
         finite = int(np.count_nonzero(np.isfinite(sci))) + pixels
         header = hdul['SCI'].header
         header['FPMASKK'] = (float(kfac), 'satstar footprint mask: radius factor')
         header['FPMASKM'] = (float(margin_px),
                              'satstar footprint mask: margin [mosaic px]')
-        header['FPMASKN'] = (int(rows.sum()), 'satstar footprint mask: rows')
+        header['FPMASKN'] = (n_rows, 'satstar footprint mask: rows')
+        if rejected is not None:
+            header['FPREJN'] = (n_rejected,
+                                'satstar footprint mask: rejected rows')
         if ring_flux_min is not None:
             header['FPRINGF'] = (float(ring_flux_min),
                                  'satstar footprint mask: ring flux_fit min')
@@ -287,7 +413,7 @@ def mask_residual_i2d(i2d_path, satstars, filtername, instrument, kfac, margin_p
             header['FPRINGN'] = (ring_rows, 'satstar footprint mask: ring rows')
         hdul['SCI'].data = sci
         hdul.flush()
-    return {'rows': int(rows.sum()), 'ring_rows': ring_rows, 'pixels': pixels,
-            'finite': finite, 'scale': scale,
+    return {'rows': n_rows, 'rejected_rows': n_rejected, 'ring_rows': ring_rows,
+            'pixels': pixels, 'finite': finite, 'scale': scale,
             'radius_p50': float(np.median(radius)) if len(radius) else float('nan'),
             'radius_max': float(np.max(radius)) if len(radius) else float('nan')}
