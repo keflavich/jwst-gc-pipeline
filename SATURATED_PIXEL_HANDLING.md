@@ -752,7 +752,7 @@ these flag sets would remove the footgun of setting them individually.)*
     remove is counted as kept here.
   - What the guards leave (o105 F212N, stack + neighbour guard + shrink 0.8: 28
     leftovers above 500 MJy/sr, 23 craters deeper than 500 MJy/sr).  The craters
-    classify (`classify_tag.py`, a row within 40 mas counts as at the crater) as 16
+    classify (a row within 40 mas counts as at the crater) as 16
     with no catalog row there (5 lie 117-136 mas from a satstar row, 11 lie
     0.46-1.07" from one; the satstars are 1.3e7-3.8e7 in flux), 5 in the satstar
     model of a single frame (the satstar fit of one exposure, which the shrink does
