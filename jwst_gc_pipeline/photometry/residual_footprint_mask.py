@@ -47,6 +47,16 @@ the frames is blanked, so a star that saturates in only some of the dithers is b
 wherever one of them saturates.  Only connected components (8-connectivity) of at least
 ``MERGEDCAT_FOOTPRINT_MASK_DQSAT_MIN_PX`` (default 4) saturated detector pixels count.
 
+A fifth, optional setting blanks a guard band along the edge of the data footprint.  A star
+whose core lies beyond the edge of the mosaic, or that the edge cuts, has a wing inside the
+footprint that no model row accounts for (the satstar fits need the core, and a star with no
+row is not modelled), so its residual keeps a bright halo.  ``MERGEDCAT_FOOTPRINT_MASK_EDGE_PX``
+is the width of the band in mosaic pixels (off unless above 0): every residual i2d pixel
+within that distance of a pixel outside the data footprint becomes NaN.  The outside is the
+set of NaN pixels of the residual i2d, read before any of the other masks is applied, that
+are 8-connected to the border of the image; the NaN blobs of saturated cores inside the
+footprint do not count, and the image border itself is the edge of the data.
+
 The switch is off unless ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is a number above 0.
 The next phase of a manual run reads the residual i2d for its i2d seeds and its
 smoothed background map, and the replays in ``SATURATED_PIXEL_HANDLING.md``
@@ -97,6 +107,10 @@ ENV_DQSAT_PX = 'MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX'
 ENV_DQSAT_MIN_PX = 'MERGEDCAT_FOOTPRINT_MASK_DQSAT_MIN_PX'
 
 DEFAULT_DQSAT_MIN_PX = 4
+
+#: width in mosaic pixels of the guard band along the edge of the data footprint; off
+#: unless above 0, and read only when ``KFAC`` is on
+ENV_EDGE_PX = 'MERGEDCAT_FOOTPRINT_MASK_EDGE_PX'
 
 #: the SATURATED bit of a JWST pixel DQ array
 DQ_SATURATED = 2
@@ -222,6 +236,19 @@ def dqsat_params():
             f"{ENV_DQSAT_MIN_PX}={os.environ.get(ENV_DQSAT_MIN_PX)!r}: expected a "
             f"whole number of detector pixels >= 1")
     return dilate, int(min_px)
+
+
+def edge_params():
+    """Width in mosaic pixels of the footprint-edge guard band, ``0.0`` when off.
+
+    On when ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is above 0 and
+    ``MERGEDCAT_FOOTPRINT_MASK_EDGE_PX`` is a number above 0.  The variable is not read
+    otherwise, so a stray one cannot break a default run.  Raises ``ValueError`` naming
+    the variable when it is not a finite number >= 0.
+    """
+    if mask_params()[0] <= 0.0:
+        return 0.0
+    return _env_number(ENV_EDGE_PX, 0.0)
 
 
 def mask_passes():
@@ -577,3 +604,66 @@ def mask_residual_dqsat(i2d_path, frame_paths, dilate_px,
     return {'frames': len(frame_paths), 'components': components,
             'saturated_pixels': saturated_pixels, 'flagged': int(flagged.sum()),
             'pixels': pixels, 'finite': finite}
+
+
+def footprint_outside(sci):
+    """The pixels of ``sci`` outside the data footprint: the NaN ones 8-connected to the border.
+
+    The mosaic footprint is a rotated rectangle in a bounding image, so the pixels outside
+    it form one NaN region that touches the border of the image.  A NaN blob inside the
+    footprint (a saturated core that no frame covered) does not touch the border and is
+    not outside; one that touches the outside region is part of it.
+    """
+    labels, n = ndimage.label(~np.isfinite(sci), structure=np.ones((3, 3), dtype=int))
+    if n == 0:
+        return np.zeros(sci.shape, dtype=bool)
+    on_border = np.unique(np.concatenate(
+        [labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    on_border = on_border[on_border > 0]
+    return np.isin(labels, on_border)
+
+
+def edge_band(outside, width):
+    """The pixels within ``width`` (Euclidean, in pixels) of a True pixel of ``outside``.
+
+    The border of the image is the edge of the data too: the band is measured from
+    ``outside`` padded by one outside pixel all around.  It is stamped from the boundary of
+    that region only (a pixel of ``outside`` with an 8-neighbour that is not) and joined
+    with ``outside`` itself, which gives the set ``distance_transform_edt(~padded) <= width``
+    cropped to the image: the nearest outside pixel of a pixel that is not outside always
+    has a neighbour that is not.  The cost follows the length of the boundary, not the size
+    of the image.
+    """
+    ny, nx = outside.shape
+    padded = np.pad(outside, 1, constant_values=True)
+    boundary = padded & ~ndimage.binary_erosion(
+        padded, structure=np.ones((3, 3), dtype=bool), border_value=1)
+    return outside | dilate_disk(boundary, width)[1:ny + 1, 1:nx + 1]
+
+
+def mask_residual_edge(i2d_path, edge_px):
+    """Blank a guard band of ``edge_px`` mosaic pixels along the data footprint edge of ``i2d_path``.
+
+    The file is updated in place: every pixel within ``edge_px`` of ``footprint_outside``
+    of the SCI plane as it is on entry becomes NaN, so call this before the other masks
+    (a disk or a saturated blob that touches the outside region would otherwise count as
+    part of it).  The SCI header records the setting (``FPEDGEPX`` width in mosaic pixels,
+    ``FPEDGEN`` pixels counted as outside the footprint).  Returns a dict with ``outside``
+    (those pixels), ``pixels`` (finite pixels that became NaN) and ``finite`` (finite
+    pixels before).
+    """
+    with fits.open(i2d_path, mode='update', memmap=False) as hdul:
+        sci = hdul['SCI'].data
+        outside = footprint_outside(sci)
+        mask = edge_band(outside, edge_px)
+        finite = int(np.count_nonzero(np.isfinite(sci)))
+        sci[mask] = np.nan
+        pixels = finite - int(np.count_nonzero(np.isfinite(sci)))
+        header = hdul['SCI'].header
+        header['FPEDGEPX'] = (float(edge_px),
+                              'footprint edge guard band: width [mosaic px]')
+        header['FPEDGEN'] = (int(outside.sum()),
+                             'footprint edge guard band: outside pixels')
+        hdul['SCI'].data = sci
+        hdul.flush()
+    return {'outside': int(outside.sum()), 'pixels': pixels, 'finite': finite}

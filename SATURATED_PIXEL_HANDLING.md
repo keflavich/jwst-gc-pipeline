@@ -1146,6 +1146,71 @@ these flag sets would remove the footgun of setting them individually.)*
       exposure 2.
     - Within 1" of a satstar row: o045 (1253, 131) at 1039, o118 (5014, 2112) at 1231 and o130
       (3091, 4576) at 2099 MJy/sr, at 0.90", 0.93" and 0.24".
+  - Footprint-edge guard band (`MERGEDCAT_FOOTPRINT_MASK_EDGE_PX`; `residual_footprint_mask`).
+    Some leftovers lie along the edge of the data footprint, in several classes of the
+    leftover list (a satstar row within 1", a vetted row without a subtraction, no row in the
+    m7 catalog).  This extension sets the residual i2d to NaN within a distance of the outside
+    of the footprint, whichever class the leftover has.  Off unless `KFAC`
+    and `EDGE_PX` are above 0 (a blank or 0 `EDGE_PX` is off; neither variable is read while
+    `KFAC` is off).  A bad value raises before any residual is rendered.  The outside is the
+    set of NaN pixels of the residual i2d, as it comes out of the resample and before any of the
+    masks, that are 8-connected to the border of the image; a NaN blob inside the footprint is
+    not outside, and the border of the image is the edge of the data.  The band is the set of
+    mosaic pixels within `EDGE_PX` (Euclidean distance) of an outside pixel; the step runs
+    before the disks, so a disk or a saturated blob that touches the outside cannot enlarge it.
+    The SCI header adds `FPEDGEPX` (width in mosaic pixels) and `FPEDGEN` (pixels outside the
+    footprint).  The step reads neither the satstar catalog nor the per-frame files.  The
+    passes are those of the disks (`MERGEDCAT_FOOTPRINT_MASK_PASSES`), and the residual i2d of
+    an earlier pass is left alone.  The model i2d, the data i2d and the catalogs are as before.
+    Where the leftovers are (F212N replays of the DQ_SAT table above; the outside is the large
+    NaN region of the data i2d, 20000 pixels or more).  Leftovers above 300 MJy/sr within 5 /
+    10 mosaic pixels of it, out of all of them: o045 3 / 3 of 23, o118 1 / 1 of 6, o130 4 / 4 of
+    10, o138 1 / 1 of 1, o105 8 / 10 of 20.  Above 500 MJy/sr: o045 3 / 3 of 7, o118 1 / 1 of
+    5, o130 2 / 2 of 6, o138 0 of 0, o105 4 / 5 of 6.
+    Emulation on scratch copies of the residual i2d of the replays of the DQ_SAT table, with
+    the band set to NaN by a Euclidean distance transform of the same outside region (the
+    border of the image included): `EDGE_PX` 4 and 8 for F212N (mosaic pixel 0.031"), 3 and 6
+    for F480M (0.063").  Leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters
+    deeper than 50 / 200 / 500 / 1000 / 2000 MJy/sr without the band, with the narrower band
+    and with the wider band; the craters do not change in any of the ten tile-bands except
+    o118 F212N (25 -> 24 above 50 MJy/sr at both widths).  The percentages are the finite
+    pixels of the replay's residual i2d that the narrower and the wider band set to NaN:
+    - o045 F212N 925 / 42 / 7 / 1 / 0 / 0 | 18 / 0 / 0 / 0 / 0 -> 909 / 39 / 4 / 1 / 0 / 0
+      -> 906 / 39 / 4 / 1 / 0 / 0; 0.251 and 0.501 %.
+    - o118 F212N 120 / 10 / 5 / 2 / 1 / 0 | 25 / 6 / 1 / 0 / 0 -> 113 / 7 / 4 / 2 / 1 / 0 ->
+      111 / 7 / 4 / 2 / 1 / 0; 0.247 and 0.494 %.
+    - o130 F212N 91 / 19 / 6 / 4 / 3 / 0 | 8 / 0 / 0 / 0 / 0 -> 89 / 18 / 5 / 3 / 2 / 0 ->
+      87 / 15 / 4 / 3 / 2 / 0; 0.247 and 0.494 %.
+    - o138 F212N 369 / 9 / 0 / 0 / 0 / 0 | 24 / 5 / 1 / 1 / 0 -> 356 / 6 / 0 / 0 / 0 / 0 ->
+      352 / 6 / 0 / 0 / 0 / 0; 0.248 and 0.495 %.
+    - o105 F212N 726 / 45 / 6 / 3 / 1 / 0 | 28 / 9 / 1 / 0 / 0 -> 717 / 39 / 4 / 1 / 1 / 0 ->
+      709 / 35 / 1 / 1 / 1 / 0; 0.250 and 0.499 %.
+    - o045 F480M 129 / 17 / 1 / 0 / 0 / 0 | 1 / 0 / 0 / 0 / 0 -> 122 / 16 / 1 / 0 / 0 / 0 ->
+      120 / 16 / 1 / 0 / 0 / 0; 0.388 and 0.771 %.
+    - o118 F480M 130 / 23 / 3 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 120 / 20 / 2 / 0 / 0 / 0 ->
+      119 / 20 / 2 / 0 / 0 / 0; 0.381 and 0.757 %.
+    - o130 F480M 126 / 24 / 4 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 121 / 23 / 3 / 0 / 0 / 0 ->
+      119 / 23 / 3 / 0 / 0 / 0; 0.380 and 0.755 %.
+    - o138 F480M 115 / 18 / 3 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 111 / 20 / 3 / 0 / 0 / 0 ->
+      108 / 18 / 3 / 0 / 0 / 0; 0.384 and 0.765 %.
+    - o105 F480M 120 / 24 / 3 / 0 / 0 / 0 | 1 / 0 / 0 / 0 / 0 -> 115 / 21 / 3 / 0 / 0 / 0 ->
+      113 / 20 / 2 / 0 / 0 / 0; 0.387 and 0.769 %.
+    On F212N the leftovers above 500 MJy/sr fall at 8 pixels by 3 / 1 / 2 / 0 / 5 for o045 /
+    o118 / o130 / o138 / o105, the numbers that lie within 10 pixels of the outside region
+    above.  The count above 200 MJy/sr of o138 F480M rises from 18 to 20 at 3 pixels (two rows
+    5 pixels apart, (3636, 2271) and (3641, 2271) at 379 and 318 MJy/sr, that the replay
+    without the band does not list) and is 18 again at 6 pixels, where neither is listed.
+    End to end.  The residual i2d of o138 F212N (48 frames) and o045 F480M (12 frames) was
+    rendered with `build_mergedcat_residuals` (`KFAC` 1, `MARGIN_PX` 2), without and with
+    `EDGE_PX` 8 (F212N) and 6 (F480M).  The scratch render root has no consolidated satstar
+    catalog, so the disks are skipped and the render without the setting carries no mask.  In
+    each tile the render with the setting has the NaN pixels of the emulation applied to the
+    render without it (0 pixels in only one of them; 2619687 and 487636 NaN pixels), keeps
+    every NaN pixel of the render without it, and has the same value in every pixel that is
+    finite in both (0 of 51571593 and 0 of 12371564 differ).  The header has `FPEDGEPX` 8 and
+    6 and `FPEDGEN` 2361934 and 382474, the outside pixels of the emulation, and the render
+    without the setting has neither card.  The band sets 0.494 and 0.755 % of the finite pixels
+    of the unmasked render to NaN.  No full m7 + finalize run with the band exists.
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no

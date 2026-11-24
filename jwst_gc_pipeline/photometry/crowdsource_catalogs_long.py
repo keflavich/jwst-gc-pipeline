@@ -4510,6 +4510,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     _fp_ring_flux, _fp_ring_px = _residual_footprint_mask.ring_params()
     _fp_rej_on = _residual_footprint_mask.rejected_enabled()
     _fp_dq_px, _fp_dq_min = _residual_footprint_mask.dqsat_params()
+    _fp_edge_px = _residual_footprint_mask.edge_params()
     _fp_on = _residual_footprint_mask.applies_to(iteration_label)
     if _fp_on:
         print(f"mergedcat: the {iteration_label} residual i2d is NaN inside "
@@ -4537,6 +4538,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
               f"component of >= {_fp_dq_min} detector px of a resampled frame "
               f"falls on ({_residual_footprint_mask.ENV_DQSAT_PX}, "
               f"{_residual_footprint_mask.ENV_DQSAT_MIN_PX})", flush=True)
+    if _fp_on and _fp_edge_px > 0:
+        print(f"mergedcat: the {iteration_label} residual i2d is also NaN within "
+              f"{_fp_edge_px:g} px of the edge of the data footprint "
+              f"({_residual_footprint_mask.ENV_EDGE_PX})", flush=True)
     # The rejected fits are read once, before the renders: a missing column (the
     # satstar stage ran without SATSTAR_SIDELOBE_MASK_FRAC_MIN) is then in the
     # log before the long part, and the mask keeps the consolidated rows only.
@@ -4996,6 +5001,22 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               f"pit px (med={_med:.0f} nmad={_nmad:.0f})", flush=True)
             except (OSError, ValueError) as _e:
                 print(f"mergedcat: resid i2d pit cleanup skipped: {_e}", flush=True)
+        # Opt-in guard band along the edge of the data footprint: a star that the
+        # edge cuts keeps a halo that no model row accounts for.  First of the
+        # masks, because it reads the NaN region outside the footprint as the
+        # resample left it, before a disk or a saturated blob adds to it.
+        if (_fp_on and _fp_edge_px > 0 and outpaths[kind]
+                and os.path.exists(outpaths[kind])):
+            try:
+                _fe = _residual_footprint_mask.mask_residual_edge(
+                    outpaths[kind], _fp_edge_px)
+                print(f"  [resid i2d edge band] NaN'd {_fe['pixels']} px "
+                      f"({100.0 * _fe['pixels'] / max(_fe['finite'], 1):.2f}% of "
+                      f"the finite ones) within {_fp_edge_px:g} px of the "
+                      f"{_fe['outside']} px outside the data footprint", flush=True)
+            except (OSError, ValueError, KeyError) as _e:
+                print(f"WARNING mergedcat: resid i2d edge band skipped: {_e}",
+                      flush=True)
         # Opt-in satstar footprint mask: the residual of a saturated star keeps
         # a core pit and ring craters the model cannot remove, so blank the disk.
         if _fp_on and outpaths[kind] and os.path.exists(outpaths[kind]):
