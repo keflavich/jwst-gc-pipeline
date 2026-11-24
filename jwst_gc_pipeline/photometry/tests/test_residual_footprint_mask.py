@@ -2,7 +2,8 @@
 ``MERGEDCAT_FOOTPRINT_MASK_KFAC``, off by default, applied to the m7 pass unless
 ``MERGEDCAT_FOOTPRINT_MASK_PASSES`` says otherwise): the switch, the pass scope,
 the disk geometry, the ring-zone extension of the disks of the brightest rows
-(``MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN`` and ``..._RING_RADIUS_PX``), the catalog
+(``MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN`` and ``..._RING_RADIUS_PX``) and its second
+tier for the fainter rows (``..._RING2_FLUX_MIN`` and ``..._RING2_RADIUS_PX``), the catalog
 reader, the gate-rejected fits that ``MERGEDCAT_FOOTPRINT_MASK_REJECTED`` adds to the
 disks, the dilated DQ_SATURATED footprint of the resampled frames
 (``MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX`` and ``..._DQSAT_MIN_PX``), the guard band along the
@@ -47,6 +48,8 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv(fm.ENV_PASSES, raising=False)
     monkeypatch.delenv(fm.ENV_RING_FLUX_MIN, raising=False)
     monkeypatch.delenv(fm.ENV_RING_RADIUS_PX, raising=False)
+    monkeypatch.delenv(fm.ENV_RING2_FLUX_MIN, raising=False)
+    monkeypatch.delenv(fm.ENV_RING2_RADIUS_PX, raising=False)
     monkeypatch.delenv(fm.ENV_REJECTED, raising=False)
     monkeypatch.delenv(fm.ENV_DQSAT_PX, raising=False)
     monkeypatch.delenv(fm.ENV_DQSAT_MIN_PX, raising=False)
@@ -202,6 +205,76 @@ def test_a_ring_flux_without_a_radius_raises_naming_both_variables(monkeypatch, 
     with pytest.raises(ValueError, match=fm.ENV_RING_RADIUS_PX) as err:
         fm.ring_params()
     assert fm.ENV_RING_FLUX_MIN in str(err.value)
+
+
+def test_the_second_ring_tier_is_off_by_default_and_unread_while_it_is_off(monkeypatch):
+    assert fm.ring2_params() == (None, 0.0)
+    # the mask itself is off: neither variable of the second tier is read
+    monkeypatch.setenv(fm.ENV_RING2_FLUX_MIN, 'abc')
+    monkeypatch.setenv(fm.ENV_RING2_RADIUS_PX, '-3')
+    assert fm.ring2_params() == (None, 0.0)
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    with pytest.raises(ValueError, match=fm.ENV_RING2_FLUX_MIN):
+        fm.ring2_params()
+    # a flux of 0 or a blank one is off, and the radius is then not read
+    monkeypatch.setenv(fm.ENV_RING2_FLUX_MIN, '0')
+    assert fm.ring2_params() == (None, 0.0)
+    monkeypatch.setenv(fm.ENV_RING2_FLUX_MIN, '  ')
+    assert fm.ring2_params() == (None, 0.0)
+
+
+@pytest.mark.parametrize('flux, radius, expected', [
+    ('3e4', '8', (3e4, 8.0)), ('10000', '10.5', (1e4, 10.5)),
+])
+def test_ring2_values(monkeypatch, flux, radius, expected):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_RING2_FLUX_MIN, flux)
+    monkeypatch.setenv(fm.ENV_RING2_RADIUS_PX, radius)
+    assert fm.ring2_params() == expected
+
+
+@pytest.mark.parametrize('name, value', [
+    (fm.ENV_RING2_FLUX_MIN, 'abc'), (fm.ENV_RING2_FLUX_MIN, '-1'),
+    (fm.ENV_RING2_FLUX_MIN, 'nan'), (fm.ENV_RING2_FLUX_MIN, 'inf'),
+    (fm.ENV_RING2_RADIUS_PX, 'abc'), (fm.ENV_RING2_RADIUS_PX, '-3'),
+    (fm.ENV_RING2_RADIUS_PX, 'inf'),
+])
+def test_ring2_typo_raises_naming_the_variable(monkeypatch, name, value):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_RING2_FLUX_MIN, '3e4')
+    monkeypatch.setenv(fm.ENV_RING2_RADIUS_PX, '8')
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=name):
+        fm.ring2_params()
+
+
+@pytest.mark.parametrize('radius', [None, '', '0'])
+def test_a_ring2_flux_without_a_radius_raises_naming_both_variables(monkeypatch, radius):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_RING2_FLUX_MIN, '3e4')
+    if radius is not None:
+        monkeypatch.setenv(fm.ENV_RING2_RADIUS_PX, radius)
+    with pytest.raises(ValueError, match=fm.ENV_RING2_RADIUS_PX) as err:
+        fm.ring2_params()
+    assert fm.ENV_RING2_FLUX_MIN in str(err.value)
+
+
+def test_the_two_ring_tiers_are_read_from_their_own_variables(monkeypatch):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_RING2_FLUX_MIN, '3e4')
+    monkeypatch.setenv(fm.ENV_RING2_RADIUS_PX, '8')
+    # the second tier alone: the first one stays off
+    assert fm.ring_params() == (None, 0.0)
+    assert fm.ring2_params() == (3e4, 8.0)
+    monkeypatch.setenv(fm.ENV_RING_FLUX_MIN, '1e6')
+    monkeypatch.setenv(fm.ENV_RING_RADIUS_PX, '25')
+    assert fm.ring_params() == (1e6, 25.0)
+    assert fm.ring2_params() == (3e4, 8.0)
+    # a typo in one tier does not stop the other from being read
+    monkeypatch.setenv(fm.ENV_RING_FLUX_MIN, 'abc')
+    assert fm.ring2_params() == (3e4, 8.0)
+    with pytest.raises(ValueError, match=fm.ENV_RING_FLUX_MIN):
+        fm.ring_params()
 
 
 def test_the_mask_is_scoped_to_m7_by_default():
@@ -412,6 +485,139 @@ def test_residual_i2d_ring_extension_needs_the_flux_column_and_leaves_the_file_a
     with pytest.raises(fm.FootprintMaskUnavailable, match='flux_fit'):
         fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
                              ring_flux_min=1e6, ring_radius_px=9.0)
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert 'FPMASKK' not in h['SCI'].header
+
+
+# --- the second ring-zone tier of the i2d mask -------------------------------------------
+
+def test_residual_i2d_second_ring_tier_widens_the_disks_of_the_fainter_rows(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    stars = _satstars(_i2d_wcs(), [(20.0, 20.0), (55.0, 40.0), (40.0, 10.0), (65.0, 15.0)],
+                      [20.0] * 4, flux=[2e6, 5e4, 3e4, 2.9e4])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               ring_flux_min=1e6, ring_radius_px=9.3,
+                               ring2_flux_min=3e4, ring2_radius_px=6.3)
+    small = math.sqrt(20.0 / math.pi) + 2.0
+    # the flux of the third row is exactly the minimum of the second tier: included; the
+    # fourth is below it
+    expected = (_disk(20.0, 20.0, 9.3) | _disk(55.0, 40.0, 6.3) | _disk(40.0, 10.0, 6.3)
+                | _disk(65.0, 15.0, small))
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert [hdr[k] for k in ('FPMASKN', 'FPRINGN', 'FPRNG2F', 'FPRNG2R', 'FPRNG2N')] \
+            == [4, 1, 3e4, 6.3, 3]
+    # the second tier counts every row at or above its flux, the brightest one included
+    assert out['rows'] == 4 and out['ring_rows'] == 1 and out['ring2_rows'] == 3
+    assert out['pixels'] == int(expected.sum())
+    assert out['radius_max'] == pytest.approx(9.3)
+
+
+def test_residual_i2d_a_row_takes_the_largest_radius_of_the_tiers_it_reaches(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    stars = _satstars(_i2d_wcs(), [(40.0, 30.0)], [20.0], flux=[2e6])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               ring_flux_min=1e6, ring_radius_px=9.3,
+                               ring2_flux_min=3e4, ring2_radius_px=11.3)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), _disk(40.0, 30.0, 11.3))
+    assert out['ring_rows'] == 1 and out['ring2_rows'] == 1
+
+
+def test_residual_i2d_second_ring_tier_never_shrinks_a_larger_footprint_disk(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    stars = _satstars(_i2d_wcs(), [(40.0, 30.0)], [400.0], flux=[3e5])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               ring2_flux_min=3e4, ring2_radius_px=6.0)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data),
+                              _disk(40.0, 30.0, math.sqrt(400.0 / math.pi) + 2.0))
+    assert out['ring2_rows'] == 1       # counted: at or above the flux, widened or not
+
+
+def test_residual_i2d_second_ring_tier_alone_skips_rows_without_a_footprint_or_a_finite_flux(
+        tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    stars = _satstars(_i2d_wcs(), [(15.0, 15.0), (40.0, 30.0), (65.0, 45.0)],
+                      [0.0, 12.0, 12.0], flux=[5e6, np.nan, 5e4])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               ring2_flux_min=3e4, ring2_radius_px=8.3)
+    expected = (_disk(40.0, 30.0, math.sqrt(12.0 / math.pi) + 2.0)
+                | _disk(65.0, 45.0, 8.3))
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert not [k for k in hdr if k.startswith('FPRING')]
+        assert [hdr[k] for k in ('FPRNG2F', 'FPRNG2R', 'FPRNG2N')] == [3e4, 8.3, 1]
+    assert out['rows'] == 2 and out['ring_rows'] == 0 and out['ring2_rows'] == 1
+
+
+def test_residual_i2d_without_the_second_ring_tier_records_no_tier_2_setting(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    stars = _satstars(_i2d_wcs(), [(40.0, 30.0)], [20.0], flux=[5e7])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               ring_flux_min=1e6, ring_radius_px=9.3)
+    assert out['ring_rows'] == 1 and out['ring2_rows'] == 0
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), _disk(40.0, 30.0, 9.3))
+        assert 'FPRINGN' in h['SCI'].header
+        assert not [k for k in h['SCI'].header if k.startswith('FPRNG2')]
+
+
+def test_residual_i2d_second_ring_tier_needs_the_flux_column_and_leaves_the_file_alone(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    stars = _satstars(_i2d_wcs(), [(40.0, 30.0)], [20.0])
+    with pytest.raises(fm.FootprintMaskUnavailable, match='flux_fit') as err:
+        fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                             ring2_flux_min=3e4, ring2_radius_px=9.0)
+    assert fm.ENV_RING2_FLUX_MIN in str(err.value)
+    assert fm.ENV_RING_FLUX_MIN not in str(err.value)
+    with pytest.raises(fm.FootprintMaskUnavailable, match='flux_fit') as both:
+        fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                             ring_flux_min=1e6, ring_radius_px=9.0,
+                             ring2_flux_min=3e4, ring2_radius_px=9.0)
+    assert fm.ENV_RING_FLUX_MIN in str(both.value) and fm.ENV_RING2_FLUX_MIN in str(both.value)
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+        assert 'FPMASKK' not in h['SCI'].header
+
+
+def test_residual_i2d_second_ring_tier_widens_the_rejected_rows_too(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    wcs = _i2d_wcs()
+    stars = _satstars(wcs, [(20.0, 20.0)], [20.0], flux=[2e5])
+    rejected = _satstars(wcs, [(55.0, 40.0), (40.0, 10.0)], [20.0, 20.0], flux=[5e4, 2e4])
+    out = fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                               ring2_flux_min=3e4, ring2_radius_px=8.3, rejected=rejected)
+    small = math.sqrt(20.0 / math.pi) + 2.0
+    expected = _disk(20.0, 20.0, 8.3) | _disk(55.0, 40.0, 8.3) | _disk(40.0, 10.0, small)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert [hdr[k] for k in ('FPMASKN', 'FPREJN', 'FPRNG2N')] == [1, 2, 2]
+    assert out['rows'] == 1 and out['rejected_rows'] == 2
+    assert out['ring_rows'] == 0 and out['ring2_rows'] == 2
+
+
+def test_residual_i2d_second_ring_tier_needs_the_flux_column_of_the_rejected_rows_too(tmp_path):
+    path = str(tmp_path / 'resid_i2d.fits')
+    _write_i2d(path)
+    wcs = _i2d_wcs()
+    stars = _satstars(wcs, [(40.0, 30.0)], [20.0], flux=[1e6])
+    rejected = _satstars(wcs, [(20.0, 20.0)], [20.0])
+    with pytest.raises(fm.FootprintMaskUnavailable,
+                       match='rejected satstar catalog has no flux_fit'):
+        fm.mask_residual_i2d(path, stars, 'F480M', 'NIRCAM', kfac=1.0, margin_px=2.0,
+                             ring2_flux_min=3e4, ring2_radius_px=9.0, rejected=rejected)
     with fits.open(path) as h:
         assert np.all(h['SCI'].data == 1.0)
         assert 'FPMASKK' not in h['SCI'].header
@@ -663,6 +869,69 @@ def test_a_ring_typo_fails_before_any_residual_is_rendered(tmp_path, monkeypatch
 def test_ring_variables_do_nothing_while_the_mask_is_off(tmp_path, monkeypatch, capsys):
     path, out = _build(tmp_path / 'k', monkeypatch, capsys,
                        env={fm.ENV_RING_FLUX_MIN: 'oops', fm.ENV_RING_RADIUS_PX: '-1'})
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+    assert 'footprint mask' not in out
+
+
+def test_the_second_ring_tier_widens_the_fainter_row_in_the_render(tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'q1', monkeypatch, capsys,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1',
+                            fm.ENV_RING_FLUX_MIN: '1e6', fm.ENV_RING_RADIUS_PX: '12.3',
+                            fm.ENV_RING2_FLUX_MIN: '5e4', fm.ENV_RING2_RADIUS_PX: '8.3'},
+                       flux=[2e6, 1e5])
+    # the footprint disk of the second row is 6.7 px: the second tier widens it to 8.3 px
+    expected = _disk(30.0, 25.0, 12.3) | _disk(55.3, 40.6, 8.3)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert hdr['FPRINGN'] == 1 and hdr['FPRNG2N'] == 2
+        assert hdr['FPRNG2F'] == 5e4 and hdr['FPRNG2R'] == 8.3
+    assert 'and inside at least 12.3 px of every row with flux_fit >= 1e+06' in out
+    assert 'and inside at least 8.3 px of every row with flux_fit >= 50000' in out
+    assert '(1 of them out to at least 12.3 px)' in out
+    assert '(2 of them out to at least 8.3 px)' in out
+
+
+def test_the_second_ring_tier_works_without_the_first_one(tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'q2', monkeypatch, capsys,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1',
+                            fm.ENV_RING2_FLUX_MIN: '5e4', fm.ENV_RING2_RADIUS_PX: '8.3'},
+                       flux=[2e6, 1e3])
+    r = 1.5 * math.sqrt(45.0 / math.pi) + 1.0
+    expected = _disk(30.0, 25.0, 8.3) | _disk(55.3, 40.6, r)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert 'FPRINGN' not in hdr and hdr['FPRNG2N'] == 1
+    assert 'and inside at least 8.3 px of every row with flux_fit >= 50000' in out
+    assert 'every row with flux_fit >= 1e+06' not in out
+
+
+def test_the_second_ring_tier_without_a_flux_column_warns_and_keeps_the_image(
+        tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'q3', monkeypatch, capsys,
+                       env={fm.ENV_KFAC: '1', fm.ENV_RING2_FLUX_MIN: '3e4',
+                            fm.ENV_RING2_RADIUS_PX: '12'})
+    with fits.open(path) as h:
+        assert np.all(h['SCI'].data == 1.0)
+    assert 'WARNING mergedcat: resid i2d footprint mask skipped' in out
+    assert 'flux_fit' in out
+
+
+def test_a_second_ring_tier_typo_fails_before_any_residual_is_rendered(tmp_path, monkeypatch,
+                                                                       capsys):
+    written = []
+    with pytest.raises(ValueError, match=fm.ENV_RING2_RADIUS_PX):
+        _build(tmp_path / 'q4', monkeypatch, capsys, written=written,
+               env={fm.ENV_KFAC: '1', fm.ENV_RING2_FLUX_MIN: '3e4'})
+    assert written == []
+
+
+def test_second_ring_tier_variables_do_nothing_while_the_mask_is_off(tmp_path, monkeypatch,
+                                                                     capsys):
+    path, out = _build(tmp_path / 'q5', monkeypatch, capsys,
+                       env={fm.ENV_RING2_FLUX_MIN: 'oops', fm.ENV_RING2_RADIUS_PX: '-1'})
     with fits.open(path) as h:
         assert np.all(h['SCI'].data == 1.0)
     assert 'footprint mask' not in out
@@ -1042,6 +1311,35 @@ def test_the_rejected_ring_extension_widens_the_bright_rejected_fit(tmp_path, mo
     with fits.open(path) as h:
         assert np.array_equal(np.isnan(h['SCI'].data), expected)
         assert h['SCI'].header['FPRINGN'] == 2
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_second_ring_tier_needs_the_flux_of_the_rejected_fits(tmp_path, monkeypatch,
+                                                                  capsys):
+    path, out = _build(tmp_path / 'r7', monkeypatch, capsys, rejected=_rejected_of_build(),
+                       env={fm.ENV_KFAC: '1', fm.ENV_REJECTED: '1',
+                            fm.ENV_RING2_FLUX_MIN: '3e4', fm.ENV_RING2_RADIUS_PX: '12'},
+                       flux=[2e6, 1e5])
+    with fits.open(path) as h:
+        assert 'FPREJN' not in h['SCI'].header
+        assert h['SCI'].header['FPRNG2N'] == 2
+    assert 'the gate-rejected satstar fits are skipped' in out and 'flux_fit' in out
+
+
+@pytest.mark.usefixtures('_registered_target')
+def test_the_second_ring_tier_widens_the_flagged_rejected_fit_without_the_first_one(
+        tmp_path, monkeypatch, capsys):
+    path, out = _build(tmp_path / 'r8', monkeypatch, capsys,
+                       rejected=_rejected_of_build(flux=[5e4, 5e4]),
+                       env={fm.ENV_KFAC: '1', fm.ENV_MARGIN: '1', fm.ENV_REJECTED: '1',
+                            fm.ENV_RING2_FLUX_MIN: '3e4', fm.ENV_RING2_RADIUS_PX: '9.3'},
+                       flux=[2e6, 1e5])
+    # the unflagged rejected fit at (70, 10) is not masked however bright it is
+    expected = _disk(30.0, 25.0, 9.3) | _disk(55.3, 40.6, 9.3) | _disk(12.0, 45.0, 9.3)
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        hdr = h['SCI'].header
+        assert 'FPRINGN' not in hdr and hdr['FPRNG2N'] == 3 and hdr['FPREJN'] == 1
 
 
 @pytest.mark.usefixtures('_registered_target')

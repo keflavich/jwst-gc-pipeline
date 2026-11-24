@@ -1211,6 +1211,101 @@ these flag sets would remove the footgun of setting them individually.)*
     6 and `FPEDGEN` 2361934 and 382474, the outside pixels of the emulation, and the render
     without the setting has neither card.  The band sets 0.494 and 0.755 % of the finite pixels
     of the unmasked render to NaN.  No full m7 + finalize run with the band exists.
+  - Second ring tier (`MERGEDCAT_FOOTPRINT_MASK_RING2_FLUX_MIN` with
+    `MERGEDCAT_FOOTPRINT_MASK_RING2_RADIUS_PX`; `residual_footprint_mask`).  A second flux and
+    radius pair of the ring-zone extension above, for rows of lower `flux_fit`.  Off unless
+    `KFAC` and `RING2_FLUX_MIN` are above 0 (a blank or 0 flux is off; neither variable is read
+    while `KFAC` is off).  The two pairs are independent: a row takes the largest of its
+    footprint radius, `RING_RADIUS_PX` when its `flux_fit` reaches `RING_FLUX_MIN`, and
+    `RING2_RADIUS_PX` when it reaches `RING2_FLUX_MIN`, so either pair works alone.
+    `RING2_FLUX_MIN` without a `RING2_RADIUS_PX` above 0, and a bad value of either, raise
+    before any residual is rendered; the message names both variables.  The gate-rejected rows
+    above go through both pairs.  A cache without a `flux_fit` column skips the mask with a
+    warning that names the flux variable of every pair that is on.  The SCI header adds
+    `FPRNG2F` (flux), `FPRNG2R` (radius in mosaic pixels) and `FPRNG2N` (rows at or above the
+    flux, including rows whose disk is already larger).
+    The reason: the first pair is set for rows of `flux_fit` 1e6 and more, and leftovers also
+    sit 5.2-7.1 mosaic pixels (0.16-0.22") from rows of lower flux, outside their footprint
+    disks.  In the F212N replays of the edge-band bullet above, 13 of the 39 leftovers above 200
+    MJy/sr of o045 and 5 of the 35 of o105 lie 0.161-0.221" from a row of the satstar catalog
+    that the emulation below reads (the production consolidated catalog; for o045, o118, o130
+    and o138 with the deblend rows of the replay added).  Those rows have
+    `flux_fit` 3.41e4-2.93e5 (o045) and 5.28e4-9.67e4 (o105), `sat_area` 21-60 and 18-45
+    detector pixels, and footprint disks of radius 4.6-6.3 and 4.4-5.8 mosaic pixels (`KFAC` 1,
+    `MARGIN_PX` 2).
+    Emulation on scratch copies of the residual i2d of those replays (DQ_SAT dilation 4 and
+    `EDGE_PX` 8 on): the pixels within a disk of radius max(footprint radius, tier radius) of
+    every row of that catalog with `flux_fit` at or above the flux are set to NaN.
+    Leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper than 50 / 200 /
+    500 / 1000 / 2000 MJy/sr; the percentage is the NaN pixels added, as a share of the finite
+    pixels of the replay without the tier.  The pairs tried on o045 and o105 F212N, and, for
+    comparison, DQ_SAT dilations of 6 and 8 detector pixels instead of the tier:
+    - o045 F212N without the tier 906 / 39 / 4 / 1 / 0 / 0 | 18 / 0 / 0 / 0 / 0.
+    - o045 F212N flux 1e5, 8 pixels 893 / 36 / 4 / 1 / 0 / 0 | 17 / 0 / 0 / 0 / 0; 0.269 %.
+    - o045 F212N flux 5e4, 8 pixels 871 / 30 / 4 / 1 / 0 / 0 | 17 / 0 / 0 / 0 / 0; 0.720 %.
+    - o045 F212N flux 3e4, 8 pixels 813 / 26 / 4 / 1 / 0 / 0 | 15 / 0 / 0 / 0 / 0; 1.651 %.
+    - o045 F212N flux 1e4, 8 pixels 784 / 25 / 3 / 1 / 0 / 0 | 15 / 0 / 0 / 0 / 0; 2.634 %.
+    - o045 F212N flux 1e4, 10 pixels 764 / 25 / 3 / 1 / 0 / 0 | 15 / 0 / 0 / 0 / 0; 5.018 %.
+    - o045 F212N DQ_SAT dilation 6 and 8 instead of the tier 902 / 39 / 4 / 1 / 0 / 0 |
+      18 / 0 / 0 / 0 / 0 and 897 / 37 / 4 / 1 / 0 / 0 | 18 / 0 / 0 / 0 / 0; 0.320 and 0.701 %.
+    - o105 F212N without the tier 709 / 35 / 1 / 1 / 1 / 0 | 28 / 9 / 1 / 0 / 0.
+    - o105 F212N flux 1e5, 8 pixels 699 / 35 / 1 / 1 / 1 / 0 | 28 / 9 / 1 / 0 / 0; 0.241 %.
+    - o105 F212N flux 5e4, 8 pixels 681 / 30 / 1 / 1 / 1 / 0 | 29 / 9 / 1 / 0 / 0; 0.623 %.
+    - o105 F212N flux 3e4, 8 pixels 654 / 30 / 1 / 1 / 1 / 0 | 29 / 9 / 1 / 0 / 0; 1.231 %.
+    - o105 F212N flux 1e4, 8 pixels 621 / 30 / 1 / 1 / 1 / 0 | 29 / 9 / 1 / 0 / 0; 2.376 %.
+    - o105 F212N flux 1e4, 10 pixels 610 / 30 / 1 / 1 / 1 / 0 | 29 / 9 / 1 / 0 / 0; 4.516 %.
+    - o105 F212N DQ_SAT dilation 6 and 8 instead of the tier 706 / 35 / 1 / 1 / 1 / 0 |
+      28 / 9 / 1 / 0 / 0 and 703 / 35 / 1 / 1 / 1 / 0 | 28 / 9 / 1 / 0 / 0; 0.305 and 0.665 %.
+    The five tiles at flux 3e4 and 1e4 with 8 pixels (each line: without the tier -> flux 3e4
+    -> flux 1e4; the two percentages are those of 3e4 and 1e4; o130 is the replay with
+    `DAOPHOT_DEDUP_NONPOSITIVE` on, and its counts without the tier differ from the o130
+    line of the edge-band bullet).  The rows at or above flux 3e4 are 7791 of 11756 (o045),
+    2025 of 3445 (o118), 1699 of 2900 (o130), 3650 of 5068 (o138) and 5816 of 10356 (o105):
+    - o045 F212N 906 / 39 / 4 / 1 / 0 / 0 | 18 / 0 / 0 / 0 / 0 -> 813 / 26 / 4 / 1 / 0 / 0 |
+      15 / 0 / 0 / 0 / 0 -> 784 / 25 / 3 / 1 / 0 / 0 | 15 / 0 / 0 / 0 / 0; 1.651 and 2.634 %.
+    - o118 F212N 111 / 7 / 4 / 2 / 1 / 0 | 24 / 6 / 1 / 0 / 0 -> 105 / 7 / 4 / 2 / 1 / 0 |
+      24 / 6 / 1 / 0 / 0 -> 101 / 7 / 4 / 2 / 1 / 0 | 24 / 6 / 1 / 0 / 0; 0.414 and 0.762 %.
+    - o130 F212N 88 / 15 / 3 / 2 / 1 / 0 | 8 / 0 / 0 / 0 / 0 -> 84 / 15 / 3 / 2 / 1 / 0 |
+      8 / 0 / 0 / 0 / 0 -> 82 / 15 / 3 / 2 / 1 / 0 | 8 / 0 / 0 / 0 / 0; 0.357 and 0.649 %.
+    - o138 F212N 352 / 6 / 0 / 0 / 0 / 0 | 24 / 5 / 1 / 1 / 0 -> 323 / 6 / 0 / 0 / 0 / 0 |
+      23 / 5 / 1 / 1 / 0 -> 313 / 5 / 0 / 0 / 0 / 0 | 23 / 5 / 1 / 1 / 0; 0.772 and 1.116 %.
+    - o105 F212N 709 / 35 / 1 / 1 / 1 / 0 | 28 / 9 / 1 / 0 / 0 -> 654 / 30 / 1 / 1 / 1 / 0 |
+      29 / 9 / 1 / 0 / 0 -> 621 / 30 / 1 / 1 / 1 / 0 | 29 / 9 / 1 / 0 / 0; 1.231 and 2.376 %.
+    At flux 3e4 and 8 pixels the leftovers above 200 MJy/sr fall by 13 (o045) and 5 (o105) and
+    do not change in o118, o130 and o138; those above 50 MJy/sr fall by 93, 55, 6, 4 and 29
+    (o045, o105, o118, o130, o138).  Flux 1e4 clears one more leftover above 200 MJy/sr in
+    o045 and none in o105 for 1.0 and 1.1 percentage points more masked area, and a radius of
+    10 pixels at flux 1e4 changes no count above 200 MJy/sr for 2.4 and 2.1 percentage points
+    more.  The larger DQ_SAT dilations clear 0 and 2 (o045) and 0 and 0 (o105) of the
+    leftovers above 200 MJy/sr, at 0.320 / 0.701 and 0.305 / 0.665 % of the pixels.
+    The craters deeper than 50 MJy/sr change from 18 to 15 (o045), 24 to 23 (o138) and 28 to
+    29 (o105), and are unchanged in o118 and o130; none deeper than 200 MJy/sr changes.  Of
+    the four that leave the list, two lie inside a disk of the tier (o045 (9848, 819) and o138
+    (444, 1939), 0.24" and 0.21" from the nearest consolidated satstar row).  The other two
+    (o045 (7420, 714) and (1528, 1849), 97 and 106 MJy/sr deep) and the one that enters
+    (o105 (8833, 3897), 101 MJy/sr deep, 0.66 of its model peak of 153 MJy/sr) have the same
+    value in the two renders at their own pixel.  The scorer sets its candidate threshold,
+    max(25 sigma, 20 MJy/sr), from the MAD-sigma of the finite pixels of the 64 x 64 pixel
+    block that holds the candidate, and the masked pixels of these three blocks move that
+    sigma by 0.8-1.2 % (threshold 92.3 -> 92.9, 105.2 -> 106.1 and 101.8 -> 100.4 MJy/sr), so
+    a crater within about 1 % of the threshold changes sides.  The tier hides the model
+    mismatch inside its disks and leaves the model as it is: a real source within 8 pixels
+    (0.25") of a row at or above the flux is blanked with it.  F480M is untested, and the
+    benefit above 200 MJy/sr is confined to o045 and o105 among the five tiles.  No full m7 +
+    finalize run with the tier exists.
+    End to end.  The F212N residual i2d of o138 was rendered twice with
+    `build_mergedcat_residuals` (48 frames; `KFAC` 1, `MARGIN_PX` 2, first pair 1e6 flux and
+    25 pixels, `DQSAT_PX` 4, `EDGE_PX` 8), without and with the second tier at flux 3e4 and 8
+    pixels.  The render with the tier has the NaN pixels of the emulation applied to the render
+    without it (0 pixels in only one of them; 3912374 NaN pixels, against 3521198 without the
+    tier), keeps every NaN pixel of the render without it, and has the same value in every
+    pixel that is finite in both (0 of 50278906 differ, largest difference 0).  The 391176
+    pixels that the tier adds are 0.772 % of the 50670082 finite pixels of the render without
+    it, the percentage of the emulation above.  The header of the render with the tier has
+    `FPRNG2F` 30000, `FPRNG2R` 8 and `FPRNG2N` 3650 (of 5068 satstar rows); the render
+    without it has none of the three cards.  The ten other footprint-mask cards that the
+    comparison prints are equal in the two renders (`FPRINGN` 190, `FPDQSATN` 48, `FPEDGEN`
+    2361934 among them).
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
@@ -1365,6 +1460,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
 | `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section) |
 | `MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN` / `MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX` | off / none | with the footprint mask on: a row of the consolidated satstar catalog with `flux_fit` of at least `RING_FLUX_MIN` gets a disk of at least `RING_RADIUS_PX` mosaic pixels (the ring craters lie 12-20 pixels out); off unless `KFAC` and `RING_FLUX_MIN` are above 0, and `RING_RADIUS_PX` has no default and must then be above 0; a bad value raises before any residual is rendered; the SCI header records `FPRINGF`, `FPRINGR`, `FPRINGN` (guards section) |
+| `MERGEDCAT_FOOTPRINT_MASK_RING2_FLUX_MIN` / `MERGEDCAT_FOOTPRINT_MASK_RING2_RADIUS_PX` | off / none | with the footprint mask on: a second flux and radius pair of the ring-zone extension, independent of the first; a row with `flux_fit` of at least `RING2_FLUX_MIN` gets a disk of at least `RING2_RADIUS_PX` mosaic pixels (a row takes the largest of its footprint radius and the radius of every pair it reaches); off unless `KFAC` and `RING2_FLUX_MIN` are above 0, and `RING2_RADIUS_PX` has no default and must then be above 0; a bad value raises before any residual is rendered, naming both variables; the SCI header records `FPRNG2F`, `FPRNG2R`, `FPRNG2N` (guards section) |
 | `MERGEDCAT_FOOTPRINT_MASK_REJECTED` | off | with the footprint mask on: also NaN the disks (same radius, same ring-zone extension) of the gate-rejected satstar fits whose `sidelobe_maskable` is true in the `*_satstar_rejected.fits` the merge reads (observation scope, phase of the pass, frame variants of its frames; `skycoord_fit` re-projected through each frame's current GWCS); `1/true/yes/on` or `0/false/no/off`, anything else raises before any residual is rendered; not read while `KFAC` is off; rows are marked by `SATSTAR_SIDELOBE_MASK_FRAC_MIN` in the satstar stage, and a missing column warns and keeps the consolidated rows' mask; the SCI header records `FPREJN` (guards section) |
 | `SATSTAR_DAO_RESTORE_FRAC_MIN` / `SATSTAR_DAO_RESTORE_FRAC_MAX` / `SATSTAR_DAO_RESTORE_SEP_MAX_ARCSEC` / `SATSTAR_DAO_RESTORE_NEIGHBOUR_MIN_ARCSEC` | off / 1.25 / 0.03 / 0.1 | keep the daophot row a satstar overwrote when the in-field dedup would drop the satstar row: recorded flux in [`FRAC_MIN`, `FRAC_MAX`) of the satstar's, recorded position within `SEP_MAX_ARCSEC` of the satstar, no surviving satstar row within `NEIGHBOUR_MIN_ARCSEC` of it (0 turns that check off); off unless `FRAC_MIN` is above 0 (the other three are then not read); needs a merge that ran with the switch on (`satstar_dao_*` columns, section 6); a bad value raises at the start of `run_manual_pipeline` and `merge_individual_frames` |
 | `SATSTAR_SEED_REQUIRE_DO_NOT_USE` | 0 (**off**) | restrict SEEDING to truly-lost cores (debug only — see §2b) |
