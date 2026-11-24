@@ -1,0 +1,66 @@
+task 0 orig 0 o045 jw10678045001_02101_00004_nrcb3 targets 674.6,336.8;487.2,1478.0;753.6,866.2
+target (674.6,336.8) within 3 px: residual peak 399.3 -> 41.7 MJy/sr, residual / data 0.75 -> 0.08, residual minimum 8.8 -> -24.4
+target (487.2,1478.0) within 3 px: residual peak 309.3 -> 309.3 MJy/sr, residual / data 0.72 -> 0.72, residual minimum -8.6 -> -8.6
+target (753.6,866.2) within 3 px: residual peak 278.9 -> 26.7 MJy/sr, residual / data 0.78 -> 0.07, residual minimum 5.6 -> -49.4
+frame: 5961 pixels differ by more than 1e-3 MJy/sr; difference (treatment - control) below -50: 94, above +50: 0; pixels with residual below -50: 8967 -> 8968; new craters: 0
+  most negative difference at (675,336): -361.3; residual 399.3 -> 38.1, treatment model 375.4
+  most negative difference at (675,337): -353.9; residual 329.5 -> -24.4, treatment model 382.4
+  most negative difference at (753,866): -276.0; residual 260.8 -> -15.2, treatment model 291.6
+  most negative difference at (754,866): -269.5; residual 278.9 -> 9.4, treatment model 288.0
+  most negative difference at (288,1381): -232.2; residual 232.9 -> 0.7, treatment model 245.6
+task 1 orig 1 o045 jw10678045001_02101_00003_nrca4 targets 2039.5,1171.6;6.9,1313.4
+target (2039.5,1171.6) within 3 px: residual peak 328.8 -> 34.2 MJy/sr, residual / data 0.29 -> 0.03, residual minimum -1.9 -> -9.6
+target (6.9,1313.4) within 3 px: residual peak 41.2 -> 41.2 MJy/sr, residual / data 0.01 -> 0.01, residual minimum -111.3 -> -111.3
+frame: 2089 pixels differ by more than 1e-3 MJy/sr; difference (treatment - control) below -50: 40, above +50: 0; pixels with residual below -50: 8801 -> 8801; new craters: 0
+  most negative difference at (2039,1171): -302.5; residual 328.8 -> 26.4, treatment model 356.5
+  most negative difference at (2039,1172): -281.2; residual 298.6 -> 17.5, treatment model 294.1
+  most negative difference at (2040,1171): -196.1; residual 230.3 -> 34.2, treatment model 220.2
+  most negative difference at (2040,1172): -182.5; residual 193.9 -> 11.4, treatment model 193.6
+  most negative difference at (2038,1171): -181.1; residual 198.4 -> 17.3, treatment model 271.5
+task 3 orig 5 o105 jw10678105001_02101_00004_nrcb4 targets 1139.2,350.3;1478.4,832.1;970.9,1144.9
+target (1139.2,350.3) within 3 px: residual peak 19.7 -> 19.7 MJy/sr, residual / data 0.05 -> 0.05, residual minimum -2.4 -> -2.4
+target (1478.4,832.1) within 3 px: residual peak 299.5 -> 53.9 MJy/sr, residual / data 0.10 -> 0.02, residual minimum -174.2 -> -178.9
+target (970.9,1144.9) within 3 px: residual peak 242.1 -> 27.7 MJy/sr, residual / data 0.18 -> 0.02, residual minimum 4.9 -> 2.5
+frame: 3576 pixels differ by more than 1e-3 MJy/sr; difference (treatment - control) below -50: 55, above +50: 0; pixels with residual below -50: 7037 -> 7037; new craters: 0
+  most negative difference at (1478,832): -275.6; residual 299.5 -> 23.9, treatment model 370.5
+  most negative difference at (971,1145): -214.3; residual 242.1 -> 27.7, treatment model 253.8
+  most negative difference at (602,1027): -213.0; residual 223.3 -> 10.3, treatment model 222.8
+  most negative difference at (1478,833): -200.9; residual 212.6 -> 11.8, treatment model 240.8
+  most negative difference at (1477,832): -179.3; residual 189.4 -> 10.1, treatment model 237.1
+task 4 orig 6 o105 jw10678105001_02101_00004_nrcb3 targets 1889.2,360.1;1431.6,971.8;527.0,1572.8
+target (1889.2,360.1) within 3 px: residual peak 25.7 -> 25.7 MJy/sr, residual / data 0.06 -> 0.06, residual minimum 3.7 -> 3.7
+target (1431.6,971.8) within 3 px: residual peak 297.2 -> 297.2 MJy/sr, residual / data 1.00 -> 1.00, residual minimum 4.5 -> 4.5
+target (527.0,1572.8) within 3 px: residual peak 246.3 -> 44.1 MJy/sr, residual / data 0.98 -> 0.18, residual minimum 8.2 -> -33.5
+frame: 4133 pixels differ by more than 1e-3 MJy/sr; difference (treatment - control) below -50: 61, above +50: 0; pixels with residual below -50: 10342 -> 10342; new craters: 0
+  most negative difference at (527,1573): -276.1; residual 246.3 -> -29.8, treatment model 280.0
+  most negative difference at (1972,245): -225.0; residual 235.1 -> 10.1, treatment model 271.9
+  most negative difference at (527,1574): -215.5; residual 198.7 -> -16.8, treatment model 230.8
+  most negative difference at (1972,244): -202.5; residual 209.2 -> 6.7, treatment model 266.7
+  most negative difference at (1971,245): -201.5; residual 204.9 -> 3.4, treatment model 290.0
+task 5 orig 8 o105 jw10678105001_02101_00001_nrcb2 targets 425.3,331.5;2002.8,1782.5
+target (425.3,331.5) within 3 px: residual peak 303.3 -> 303.3 MJy/sr, residual / data 0.33 -> 0.33, residual minimum -57.1 -> -57.1
+target (2002.8,1782.5) within 3 px: residual peak 289.3 -> 52.4 MJy/sr, residual / data 0.90 -> 0.16, residual minimum 5.6 -> -1.9
+frame: 1692 pixels differ by more than 1e-3 MJy/sr; difference (treatment - control) below -50: 21, above +50: 0; pixels with residual below -50: 7257 -> 7257; new craters: 0
+  most negative difference at (2003,1783): -280.6; residual 289.3 -> 8.6, treatment model 299.1
+  most negative difference at (2003,1782): -247.9; residual 252.2 -> 4.3, treatment model 267.8
+  most negative difference at (2002,1783): -240.1; residual 241.4 -> 1.3, treatment model 318.4
+  most negative difference at (2002,1782): -212.2; residual 223.7 -> 11.5, treatment model 273.8
+  most negative difference at (1051,1074): -157.0; residual 202.1 -> 45.1, treatment model 196.3
+task 6 orig 9 o105 jw10678105001_02101_00002_nrca4 targets 1450.9,555.4;1226.4,1623.0
+target (1450.9,555.4) within 3 px: residual peak 293.1 -> 35.7 MJy/sr, residual / data 0.96 -> 0.12, residual minimum 8.5 -> 0.5
+target (1226.4,1623.0) within 3 px: residual peak 24.8 -> 24.8 MJy/sr, residual / data 0.08 -> 0.08, residual minimum 3.0 -> 3.0
+frame: 3543 pixels differ by more than 1e-3 MJy/sr; difference (treatment - control) below -50: 50, above +50: 0; pixels with residual below -50: 6442 -> 6442; new craters: 0
+  most negative difference at (1451,556): -288.5; residual 293.1 -> 4.6, treatment model 301.6
+  most negative difference at (1451,555): -236.8; residual 241.8 -> 5.0, treatment model 247.6
+  most negative difference at (1452,556): -197.7; residual 209.2 -> 11.5, treatment model 222.0
+  most negative difference at (1450,556): -165.5; residual 172.5 -> 7.0, treatment model 198.3
+  most negative difference at (1452,555): -158.2; residual 168.0 -> 9.8, treatment model 173.0
+task 2 orig 2 o045 jw10678045001_02101_00006_nrcb4 targets 932.3,1671.5;90.8,1768.7
+target (932.3,1671.5) within 3 px: residual peak 367.9 -> 93.7 MJy/sr, residual / data 0.17 -> 0.04, residual minimum 0.6 -> -67.0
+target (90.8,1768.7) within 3 px: residual peak 306.9 -> 306.9 MJy/sr, residual / data 0.72 -> 0.72, residual minimum -15.7 -> -15.7
+frame: 2810 pixels differ by more than 1e-3 MJy/sr; difference (treatment - control) below -50: 53, above +50: 0; pixels with residual below -50: 10624 -> 10625; new craters: 0
+  most negative difference at (1105,797): -384.1; residual 373.8 -> -10.2, treatment model 441.7
+  most negative difference at (932,1672): -349.5; residual 324.4 -> -25.1, treatment model 374.7
+  most negative difference at (933,1672): -329.8; residual 367.9 -> 38.1, treatment model 340.1
+  most negative difference at (1105,798): -329.1; residual 346.4 -> 17.3, treatment model 381.8
+  most negative difference at (1106,797): -292.0; residual 293.6 -> 1.6, treatment model 540.0

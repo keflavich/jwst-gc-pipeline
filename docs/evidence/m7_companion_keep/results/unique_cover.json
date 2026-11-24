@@ -1,0 +1,36 @@
+{
+ "045": {
+  "rows_by_module": [
+   25,
+   28
+  ],
+  "rows_total": 53,
+  "distinct_positions": 53,
+  "leftovers_total": 887,
+  "leftovers_ge50": 887,
+  "covered_ge50": 33,
+  "leftovers_ge100": 185,
+  "covered_ge100": 29,
+  "leftovers_ge200": 32,
+  "covered_ge200": 6,
+  "leftovers_ge500": 3,
+  "covered_ge500": 0
+ },
+ "105": {
+  "rows_by_module": [
+   15,
+   27
+  ],
+  "rows_total": 42,
+  "distinct_positions": 41,
+  "leftovers_total": 709,
+  "leftovers_ge50": 709,
+  "covered_ge50": 28,
+  "leftovers_ge100": 168,
+  "covered_ge100": 20,
+  "leftovers_ge200": 35,
+  "covered_ge200": 6,
+  "leftovers_ge500": 1,
+  "covered_ge500": 0
+ }
+}

@@ -6436,10 +6436,42 @@ def _dedup_m7_band_seed(xsc, osc, oflux, *, match_mas, dedup_mas):
     return xflux, ~donor & ~dropped, int(dropped.sum())
 
 
+def _flag_array(col):
+    """Boolean array of a flag column stored as bool, integer or 'True' /
+    'False' text; masked values are False."""
+    arr = np.asarray(np.ma.filled(np.ma.asarray(col), False))
+    if arr.dtype.kind in 'US':
+        return np.char.lower(arr.astype(str)) == 'true'
+    return arr.astype(bool)
+
+
+def _own_band_snr_and_saturation(own, flux):
+    """Per-row ``flux / flux_err`` (0 where ``flux_err`` is not a positive
+    finite number) and saturation flag (``is_saturated`` or
+    ``replaced_saturated``) of an own-band m6 vetted catalog, for the
+    far-companion exemption of :func:`_build_m7_band_seed`."""
+    flags = [c for c in ('is_saturated', 'replaced_saturated') if c in own.colnames]
+    if 'flux_err' not in own.colnames or not flags:
+        raise ValueError(
+            "the far-companion exemption needs the own-band catalog's flux_err "
+            "and is_saturated / replaced_saturated columns; it has "
+            f"{sorted(own.colnames)}")
+    ferr = np.asarray(own['flux_err'], dtype=float)
+    ok = np.isfinite(ferr) & (ferr > 0)
+    snr = np.zeros(len(own))
+    snr[ok] = flux[ok] / ferr[ok]
+    sat = np.zeros(len(own), dtype=bool)
+    for c in flags:
+        sat |= _flag_array(own[c])
+    return snr, sat
+
+
 def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module, *,
                         max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                         companion_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'],
                         companion_max_ratio=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'],
+                        companion_keep_snr=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_snr'],
+                        companion_keep_fwhm=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_fwhm'],
                         dedup_fwhm=MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'],
                         fwhm_arcsec=None, label=''):
     """m7 seed of ONE filter: the cross-band seed UNION this filter's own m6
@@ -6476,6 +6508,21 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     residual (the image m7 detects on) no longer shows it and m7 does not
     find it again; it stays whole in the final m7 residual.
 
+    Far-companion exemption (``companion_keep_snr``,
+    ``manual_m7_seed_own_band_companion_keep_snr``): with
+    ``companion_keep_snr`` > 0 an own-band source the cut would leave out is
+    added when its own m6 ``flux / flux_err`` is at least
+    ``companion_keep_snr`` and every seed source that triggers the cut for it
+    lies at least ``companion_keep_fwhm`` FWHM away and is not saturated
+    (``is_saturated`` or ``replaced_saturated`` in its m6 row; a cross-band
+    position without an own-band m6 row within the match radius counts as
+    saturated).  Gc-treasury 10678 F212N, tiles o045 and o105 (both modules):
+    the cut leaves out 24,669 and 23,651 own-band rows, and the exemption at
+    S/N 50 and 1.75 FWHM returns 53 and 42 of them
+    (docs/evidence/m7_companion_keep).  The default 0 leaves the cut as
+    described above; the exemption needs the own-band catalog's ``flux_err``
+    and saturation columns.
+
     Seed dedup (``dedup_fwhm``, ``manual_m7_seed_dedup_fwhm``): a cross-band
     position and the own-band m6 position of the same star can differ by more
     than ``max_sep_mas`` in the red bands (31 / 41 / 61 mas at p10 / 50 / 90
@@ -6508,6 +6555,9 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     # above 1 every candidate would cut itself (the pool holds the candidates)
     if not 0 <= companion_max_ratio <= 1:
         raise ValueError(f"companion_max_ratio must be in [0, 1], got {companion_max_ratio}")
+    if companion_keep_snr < 0 or companion_keep_fwhm < 0:
+        raise ValueError("companion_keep_snr and companion_keep_fwhm must be >= 0, got "
+                         f"{companion_keep_snr} and {companion_keep_fwhm}")
     xb = Table.read(crossband_seed_path)
     xsc = xb['skycoord'] if isinstance(xb['skycoord'], SkyCoord) else SkyCoord(xb['skycoord'])
     own = _L._resolve_seed_skycoords(Table.read(own_vetted_path))
@@ -6528,6 +6578,10 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
         if oflux is None:
             oflux = np.ones(len(own))
     good = np.isfinite(oflux) & (oflux > 0)
+    osnr = osat = None
+    if companion_keep_snr > 0 and companion_fwhm > 0 and len(own):
+        osnr, osat = _own_band_snr_and_saturation(own, oflux)
+        osnr, osat = osnr[good], osat[good]
     osc, oflux = osc[good], oflux[good]
 
     if dedup_fwhm < 0:
@@ -6560,21 +6614,41 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
         xflux[hit] = oflux[idx[hit]]
         _, sep_o, _ = osc.match_to_catalog_sky(xsc)
         own_new = sep_o.to_value(u.mas) >= max_sep_mas
-    n_companion = 0
+    n_companion = n_keep = 0
     if companion_fwhm > 0 and own_new.any():
         fwhm_arcsec = _fwhm()
         cand = np.flatnonzero(own_new)
         pool_sc = SkyCoord([xsc, osc[cand]]) if len(xsc) else osc[cand]
         pool_flux = np.concatenate([xflux, oflux[cand]])
-        ic, ip, _, _ = search_around_sky(osc[cand], pool_sc,
-                                         companion_fwhm * fwhm_arcsec * u.arcsec)
+        ic, ip, sep2d, _ = search_around_sky(osc[cand], pool_sc,
+                                             companion_fwhm * fwhm_arcsec * u.arcsec)
         # a flux-less cross-band position (flux 1.0) counts with that flux,
         # as SeededFinder gives it
         dominant = oflux[cand][ic] < companion_max_ratio * pool_flux[ip]
+        cut = dominant
+        if osnr is not None:
+            # far-companion exemption: a pair does not cut a candidate whose
+            # own S/N reaches the floor when the brighter source is far
+            # enough away and unsaturated.  A cross-band position takes the
+            # flag of the own-band row it took its flux from; one without a
+            # row counts as saturated.
+            pool_sat = np.ones(len(pool_flux), dtype=bool)
+            if len(xsc):
+                idx, sep, _ = xsc.match_to_catalog_sky(osc)
+                hit = sep.to_value(u.mas) < match_mas
+                pool_sat[:len(xsc)][hit] = osat[idx[hit]]
+            pool_sat[len(xsc):] = osat[cand]
+            keep = ((osnr[cand][ic] >= companion_keep_snr)
+                    & (sep2d.to_value(u.arcsec) >= companion_keep_fwhm * fwhm_arcsec)
+                    & ~pool_sat[ip])
+            cut = dominant & ~keep
         companion = np.zeros(len(cand), dtype=bool)
-        companion[ic[dominant]] = True
+        companion[ic[cut]] = True
+        dominated = np.zeros(len(cand), dtype=bool)
+        dominated[ic[dominant]] = True
         own_new[cand[companion]] = False
         n_companion = int(companion.sum())
+        n_keep = int((dominated & ~companion).sum())
     n_own = int(own_new.sum())
     out = Table()
     out['skycoord'] = (SkyCoord([xsc, osc[own_new]]) if n_own and len(xsc)
@@ -6584,6 +6658,9 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     out.meta['COMPFWHM'] = float(companion_fwhm)
     out.meta['COMPRAT'] = float(companion_max_ratio)
     out.meta['NCOMPAN'] = n_companion
+    out.meta['COMPKSNR'] = float(companion_keep_snr)
+    out.meta['COMPKFWH'] = float(companion_keep_fwhm)
+    out.meta['NCOMPKEP'] = n_keep
     out.meta['DEDUPFWH'] = float(dedup_fwhm)
     out.meta['NDEDUP'] = n_dedup
     outpath = m7_band_seed_path(crossband_seed_path, module, filtername)
@@ -6591,11 +6668,15 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     dedup_msg = (f"{n_dedup} within {dedup_fwhm:g} FWHM ({dedup_mas:g} mas) of a seed "
                  f"position or a brighter own-band source left out, "
                  if dedup_fwhm > 0 else "")
+    keep_msg = (f", {n_keep} of the {n_keep + n_companion} sources there kept "
+                f"(S/N >= {companion_keep_snr:g}, >= {companion_keep_fwhm:g} FWHM from "
+                f"every brighter unsaturated neighbour)"
+                if osnr is not None else "")
     print(f"[{label}] m7 band seed: {len(xsc)} cross-band + {n_own} own-band m6 "
           f"vetted (not within {match_mas:g} mas of a cross-band position; "
           f"{dedup_msg}"
           f"{n_companion} more within {companion_fwhm:g} FWHM of a seed source "
-          f">{1 / companion_max_ratio:g}x brighter left out) -> {len(out)} "
+          f">{1 / companion_max_ratio:g}x brighter left out{keep_msg}) -> {len(out)} "
           f"({os.path.basename(outpath)})", flush=True)
     return outpath
 
@@ -12056,6 +12137,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                 max_sep_mas=float(mopt(opts_phase, 'manual_crossband_seed_max_sep_mas')),
                                 companion_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_fwhm')),
                                 companion_max_ratio=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_max_ratio')),
+                                companion_keep_snr=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_keep_snr')),
+                                companion_keep_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_keep_fwhm')),
                                 dedup_fwhm=float(mopt(opts_phase, 'manual_m7_seed_dedup_fwhm')),
                                 label=f'{phase}:{filt}')
                             det_i2d = resid_i2d_for_next.get((module, filt))  # m6 residual

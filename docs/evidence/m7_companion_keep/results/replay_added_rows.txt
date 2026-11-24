@@ -1,0 +1,62 @@
+task 0 orig 0 o045 jw10678045001_02101_00004_nrcb3
+control 52093 rows, treatment 52104 rows: 12 added, 1 lost; 3 of 52092 matched rows changed flux by more than 10%
+  added (675.0,336.5) flux 3746 S/N 99 qfit 0.34 flags 0: residual peak within 2 px 399.3 -> 38.1, treatment minimum -24.4 MJy/sr
+  added (753.4,865.7) flux 2986 S/N 92 qfit 0.22 flags 0: residual peak within 2 px 278.9 -> 24.4, treatment minimum -49.4 MJy/sr
+  added (530.7,1148.1) flux 2226 S/N 77 qfit 0.15 flags 0: residual peak within 2 px 214.6 -> 39.6, treatment minimum -56.1 MJy/sr
+  added (287.8,1381.0) flux 2202 S/N 69 qfit 0.38 flags 0: residual peak within 2 px 232.9 -> 35.3, treatment minimum -15.5 MJy/sr
+  added (927.3,737.0) flux 1854 S/N 53 qfit 0.25 flags 0: residual peak within 2 px 193.1 -> 51.3, treatment minimum -15.6 MJy/sr
+  added (1908.3,864.3) flux 1614 S/N 60 qfit 0.16 flags 0: residual peak within 2 px 169.6 -> 24.3, treatment minimum -2.5 MJy/sr
+  added (464.6,2011.2) flux 1595 S/N 59 qfit 0.33 flags 0: residual peak within 2 px 164.9 -> 31.6, treatment minimum -8.0 MJy/sr
+  added (1828.0,316.8) flux 1543 S/N 54 qfit 0.14 flags 0: residual peak within 2 px 161.1 -> 40.3, treatment minimum -3.3 MJy/sr
+  added (1941.7,856.6) flux 1452 S/N 55 qfit 0.40 flags 0: residual peak within 2 px 139.3 -> 27.9, treatment minimum -0.9 MJy/sr
+  added (2028.9,646.8) flux 1279 S/N 51 qfit 0.23 flags 0: residual peak within 2 px 132.8 -> 25.5, treatment minimum -13.9 MJy/sr
+  added (1231.4,1234.0) flux 1228 S/N 52 qfit 0.16 flags 0: residual peak within 2 px 133.6 -> 29.3, treatment minimum -9.2 MJy/sr
+  added (2033.8,643.7) flux 75 S/N 5 qfit 0.47 flags 0: residual peak within 2 px 12.2 -> 15.1, treatment minimum 3.2 MJy/sr
+  lost (2032.8,644.2) flux 127
+task 1 orig 1 o045 jw10678045001_02101_00003_nrca4
+control 52611 rows, treatment 52616 rows: 5 added, 0 lost; 0 of 52611 matched rows changed flux by more than 10%
+  added (2039.0,1171.4) flux 3046 S/N 80 qfit 0.54 flags 0: residual peak within 2 px 328.8 -> 34.2, treatment minimum -9.6 MJy/sr
+  added (1138.2,1113.2) flux 1275 S/N 60 qfit 0.23 flags 0: residual peak within 2 px 132.8 -> 29.4, treatment minimum -31.5 MJy/sr
+  added (1884.9,1103.4) flux 1222 S/N 56 qfit 0.22 flags 1: residual peak within 2 px 124.1 -> 20.3, treatment minimum -16.7 MJy/sr
+  added (1167.1,1208.0) flux 1192 S/N 58 qfit 0.17 flags 0: residual peak within 2 px 117.7 -> 17.8, treatment minimum -9.7 MJy/sr
+  added (678.6,502.0) flux 1140 S/N 49 qfit 0.21 flags 1: residual peak within 2 px 122.4 -> 21.5, treatment minimum -4.5 MJy/sr
+task 2 orig 2 o045 jw10678045001_02101_00006_nrcb4
+control 56716 rows, treatment 56722 rows: 6 added, 0 lost; 1 of 56716 matched rows changed flux by more than 10%
+  added (1105.2,797.3) flux 3771 S/N 93 qfit 0.17 flags 0: residual peak within 2 px 373.8 -> 28.0, treatment minimum -10.2 MJy/sr
+  added (932.4,1672.1) flux 3476 S/N 100 qfit 0.32 flags 0: residual peak within 2 px 367.9 -> 93.7, treatment minimum -67.0 MJy/sr
+  added (1743.7,1746.9) flux 2065 S/N 77 qfit 0.32 flags 0: residual peak within 2 px 214.0 -> 36.6, treatment minimum -3.8 MJy/sr
+  added (1378.7,606.8) flux 1320 S/N 56 qfit 0.34 flags 0: residual peak within 2 px 134.7 -> 33.2, treatment minimum -2.4 MJy/sr
+  added (1384.8,1111.9) flux 1175 S/N 51 qfit 0.43 flags 0: residual peak within 2 px 107.6 -> 44.0, treatment minimum -22.3 MJy/sr
+  added (543.5,1630.8) flux 870 S/N 39 qfit 0.35 flags 1: residual peak within 2 px 88.3 -> 40.8, treatment minimum -20.0 MJy/sr
+task 3 orig 5 o105 jw10678105001_02101_00004_nrcb4
+control 46269 rows, treatment 46276 rows: 7 added, 0 lost; 0 of 46269 matched rows changed flux by more than 10%
+  added (1477.9,832.2) flux 2553 S/N 84 qfit 0.06 flags 0: residual peak within 2 px 299.5 -> 23.9, treatment minimum -37.5 MJy/sr
+  added (970.7,1145.1) flux 2005 S/N 72 qfit 0.05 flags 1: residual peak within 2 px 242.1 -> 27.7, treatment minimum 3.1 MJy/sr
+  added (602.1,1027.2) flux 2002 S/N 70 qfit 0.21 flags 0: residual peak within 2 px 223.3 -> 24.6, treatment minimum -15.2 MJy/sr
+  added (676.0,879.5) flux 1406 S/N 52 qfit 0.24 flags 0: residual peak within 2 px 145.0 -> 18.1, treatment minimum -1.2 MJy/sr
+  added (693.0,272.6) flux 1380 S/N 59 qfit 0.24 flags 0: residual peak within 2 px 132.2 -> 21.6, treatment minimum -5.8 MJy/sr
+  added (1202.4,1699.2) flux 1202 S/N 57 qfit 0.19 flags 0: residual peak within 2 px 116.7 -> 24.5, treatment minimum -22.5 MJy/sr
+  added (762.9,1818.7) flux 1136 S/N 54 qfit 0.19 flags 1: residual peak within 2 px 133.9 -> 19.4, treatment minimum -13.6 MJy/sr
+task 4 orig 6 o105 jw10678105001_02101_00004_nrcb3
+control 45231 rows, treatment 45239 rows: 8 added, 0 lost; 2 of 45231 matched rows changed flux by more than 10%
+  added (526.8,1573.2) flux 2667 S/N 80 qfit 0.27 flags 0: residual peak within 2 px 246.3 -> 44.1, treatment minimum -33.5 MJy/sr
+  added (1971.6,244.6) flux 2418 S/N 70 qfit 0.08 flags 0: residual peak within 2 px 235.1 -> 55.0, treatment minimum -1.9 MJy/sr
+  added (465.1,1597.0) flux 1800 S/N 58 qfit 0.12 flags 0: residual peak within 2 px 229.6 -> 40.7, treatment minimum -4.1 MJy/sr
+  added (129.7,1679.3) flux 1478 S/N 55 qfit 0.10 flags 0: residual peak within 2 px 157.3 -> 13.6, treatment minimum -2.0 MJy/sr
+  added (1160.4,1434.0) flux 1387 S/N 49 qfit 0.36 flags 0: residual peak within 2 px 131.6 -> 55.7, treatment minimum -12.1 MJy/sr
+  added (1626.4,134.9) flux 1303 S/N 52 qfit 0.15 flags 1: residual peak within 2 px 142.1 -> 17.3, treatment minimum -3.7 MJy/sr
+  added (321.1,1202.6) flux 1146 S/N 53 qfit 0.24 flags 0: residual peak within 2 px 107.8 -> 18.8, treatment minimum -8.5 MJy/sr
+  added (934.4,258.1) flux 267 S/N 14 qfit 0.29 flags 0: residual peak within 2 px 36.7 -> 21.3, treatment minimum -11.1 MJy/sr
+task 5 orig 8 o105 jw10678105001_02101_00001_nrcb2
+control 45105 rows, treatment 45107 rows: 2 added, 0 lost; 0 of 45105 matched rows changed flux by more than 10%
+  added (2002.6,1782.6) flux 2859 S/N 86 qfit 0.26 flags 0: residual peak within 2 px 289.3 -> 25.5, treatment minimum -1.9 MJy/sr
+  added (1050.9,1074.3) flux 1507 S/N 47 qfit 0.17 flags 0: residual peak within 2 px 202.1 -> 45.1, treatment minimum 1.4 MJy/sr
+task 6 orig 9 o105 jw10678105001_02101_00002_nrca4
+control 47798 rows, treatment 47805 rows: 7 added, 0 lost; 0 of 47798 matched rows changed flux by more than 10%
+  added (1451.1,555.7) flux 2791 S/N 91 qfit 0.33 flags 0: residual peak within 2 px 293.1 -> 34.5, treatment minimum 1.5 MJy/sr
+  added (1823.6,1510.4) flux 1589 S/N 54 qfit 0.06 flags 0: residual peak within 2 px 177.7 -> 27.6, treatment minimum 3.2 MJy/sr
+  added (2030.8,1750.2) flux 1337 S/N 54 qfit 0.13 flags 0: residual peak within 2 px 156.4 -> 28.0, treatment minimum -5.6 MJy/sr
+  added (1030.2,276.8) flux 1304 S/N 63 qfit 0.32 flags 0: residual peak within 2 px 121.6 -> 23.7, treatment minimum -24.0 MJy/sr
+  added (1688.0,937.3) flux 1162 S/N 52 qfit 0.14 flags 0: residual peak within 2 px 128.4 -> 24.7, treatment minimum 0.3 MJy/sr
+  added (472.3,49.6) flux 1123 S/N 53 qfit 0.15 flags 0: residual peak within 2 px 120.6 -> 22.8, treatment minimum -8.6 MJy/sr
+  added (1880.4,1669.4) flux 1111 S/N 50 qfit 0.20 flags 0: residual peak within 2 px 115.5 -> 35.1, treatment minimum -12.6 MJy/sr

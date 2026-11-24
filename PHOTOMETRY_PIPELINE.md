@@ -253,7 +253,11 @@ rejection**.
   fields, off on an extended-emission target and for MIRI filters;
   `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` force it) adds this filter's own m6 vetted catalog, except sources within `--manual-m7-seed-own-band-companion-fwhm`
   (2.5) PSF FWHM of a seed source more than 10× brighter
-  (`--manual-m7-seed-own-band-companion-max-ratio`, 0.1), and, when
+  (`--manual-m7-seed-own-band-companion-max-ratio`, 0.1; the opt-in
+  `--manual-m7-seed-own-band-companion-keep-snr`, default 0 = off, keeps such a
+  source when its own-band flux / flux_err reaches that value and every source that
+  dominates it is unsaturated and at least `--manual-m7-seed-own-band-companion-keep-fwhm`
+  (1.75) FWHM away), and, when
   `--manual-m7-seed-dedup-fwhm` is set (default 0 = off; 0.5 is the intended value),
   except sources within that many FWHM of a cross-band position or of
   a brighter own-band source (one star, two seeds; the cross-band to own-band flux
@@ -459,6 +463,8 @@ still run after m6.
 | `--manual-m7-seed-own-band` / `--no-manual-m7-seed-own-band` (`manual_m7_seed_own_band`) | `None` (AUTO) | on | off | off (all-MIRI runs drop m7) |
 | `--manual-m7-seed-own-band-companion-fwhm` | 2.5 | 2.5 | | |
 | `--manual-m7-seed-own-band-companion-max-ratio` (in [0, 1]; 1.0 = cut every fainter source in the radius, 0 = no cut) | 0.1 | 0.1 | | |
+| `--manual-m7-seed-own-band-companion-keep-snr` (far-companion exemption: own-band flux / flux_err at or above which a source the companion cut would remove is kept; 0 = off; the S/N scale depends on the band) | 0 | 0 | | |
+| `--manual-m7-seed-own-band-companion-keep-fwhm` (the exemption needs every dominating source at least this many PSF FWHM away, and unsaturated) | 1.75 | 1.75 | | |
 | `--manual-m7-seed-dedup-fwhm` (0 = legacy `--manual-crossband-seed-max-sep-mas` matching alone; 0.5 = intended value, opt-in until the production seeds are rerun) | 0 | 0 | | |
 | `--manual-crossband-ecsv-all-modules` | off | off | off | off | write the cross-band table's `.ecsv` twin for nrca/nrcb too; off writes it for the merged module only, or for every module when the run has no merged module (a disjoint field, MIRI). The FITS table is written for every module either way |
 | `--no-forced-fill-m8` (`forced_fill_m8`) | `True` | on | on | on |
@@ -770,6 +776,17 @@ Note on the three `--manual-ext-prop-floor-*` guard switches (issue #1025):
   and 86 at 0.1.  The restored sources with no brighter seed source within
   the radius match the independent visit 0.4–0.8× as often as the m6 vetted
   sources m7 already has (`docs/evidence/faint_m7_seed_union`).
+  The opt-in far-companion exemption
+  (`--manual-m7-seed-own-band-companion-keep-snr`, default 0 = off) adds back a
+  source the cut removes when its m6 flux / flux_err reaches that value and every
+  source more than 10× brighter within the radius is unsaturated and at least
+  `--manual-m7-seed-own-band-companion-keep-fwhm` (1.75) FWHM away; the cut stays in
+  force next to a saturated star and inside 1.75 FWHM.  Gc-treasury 10678 F212N,
+  tiles o045 and o105 (both modules): the cut leaves out 24,669 and 23,651 own-band
+  sources, and the exemption at S/N 50 returns 53 and 42 of them, which sit on 6 of the
+  32 and 6 of the 35 whole-star leftovers of at least 200 MJy/sr in the control m7
+  residual (`docs/evidence/m7_companion_keep`).  A source's S/N depends on the band,
+  so the value is tuned per band.
   `docs/evidence/faint_defaults_on` has the faint-star reference-field
   results with and without it.  It is off on extended-emission targets
   because every m7 seed position is masked out of the smoothed background:

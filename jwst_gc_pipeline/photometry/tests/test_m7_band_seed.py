@@ -497,12 +497,136 @@ def test_companion_cut_spares_bright_companions(tmp_path):
         _build_m7_band_seed(xpath, opath, 'F182M', 'merged', companion_max_ratio=1.5, **run)
 
 
+def _keep_fixture(tmp_path, *, donor_saturated=False, drop_column=None):
+    """Cross-band star at the origin and own-band m6 rows around it (F182M,
+    FWHM 62 mas: the cut radius is 155 mas, 1.75 FWHM = 108.5 mas).  Rows are
+    (name, x mas, y mas, flux, flux_err, is_saturated, replaced_saturated)."""
+    rows = [
+        ('donor', 5, 0, 100.0, 1.0, donor_saturated, False),
+        ('A1_far_unsat_snr60', 130, 0, 6.0, 0.1, False, False),
+        ('A2_far_unsat_snr20', -130, 0, 6.0, 0.3, False, False),
+        ('A3_near_snr60', 0, 90, 6.0, 0.1, False, False),
+        ('B_sat', 3000, 0, 100.0, 1.0, True, False),
+        ('B1_far_satnbr', 3130, 0, 6.0, 0.1, False, False),
+        ('C_replaced', 4000, 0, 100.0, 1.0, False, True),
+        ('C1_far_replnbr', 4130, 0, 6.0, 0.1, False, False),
+        ('D_star1', 6000, 0, 100.0, 1.0, False, False),
+        ('D_star2', 6180, 0, 100.0, 1.0, False, False),
+        ('D1_one_near_nbr', 6130, 0, 6.0, 0.1, False, False),
+        ('E_star1', 8000, 0, 100.0, 1.0, False, False),
+        ('E_star2', 8240, 0, 100.0, 1.0, False, False),
+        ('E1_two_far_nbrs', 8120, 0, 6.0, 0.1, False, False),
+        ('G_isolated', 10000, 0, 2.0, 0.1, False, False),
+    ]
+    own = Table({'skycoord': _sc([r[1] for r in rows], [r[2] for r in rows]),
+                 'flux': [r[3] for r in rows], 'flux_err': [r[4] for r in rows],
+                 'is_saturated': [r[5] for r in rows],
+                 'replaced_saturated': [r[6] for r in rows]})
+    if drop_column:
+        own.remove_column(drop_column)
+    xpath = os.path.join(str(tmp_path), 'crossband_seed_manual.fits')
+    Table({'skycoord': _sc([0], [0]), 'n_filt_confirmed': [2]}).write(xpath, overwrite=True)
+    opath = os.path.join(str(tmp_path), 'own_m6.fits')
+    own.write(opath, overwrite=True)
+    return xpath, opath
+
+
+def test_far_companion_exemption(tmp_path):
+    """With companion_keep_snr > 0 a candidate the cut would leave out is
+    added when its S/N reaches the floor and every brighter seed source that
+    triggers the cut is at least companion_keep_fwhm away and unsaturated."""
+    xpath, opath = _keep_fixture(tmp_path)
+    run = dict(companion_fwhm=2.5, fwhm_arcsec=0.062)
+    off = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged', **run))
+    assert off.meta['NCOMPAN'] == 7 and off.meta['NCOMPKEP'] == 0
+    assert off.meta['COMPKSNR'] == 0.0
+    base_fluxes = sorted(off['flux'])
+    assert base_fluxes == sorted([100.0] * 7 + [2.0])    # 1 cross-band + 7 own-band
+    on = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                        companion_keep_snr=50.0, **run))
+    # A1 (one far unsaturated neighbour) and E1 (two) are added; A2 is below the
+    # floor, A3 and D1 have a neighbour inside 1.75 FWHM, B1 and C1 have a
+    # saturated or replaced-saturated neighbour
+    assert on.meta['NCOMPAN'] == 5 and on.meta['NCOMPKEP'] == 2
+    assert on.meta['COMPKSNR'] == 50.0 and on.meta['COMPKFWH'] == 1.75
+    assert sorted(on['flux']) == sorted(base_fluxes + [6.0, 6.0])
+    sc = on['skycoord']
+    new = [i for i in range(len(on)) if on['flux'][i] == 6.0]
+    xs = sorted(round(float(sc[i].separation(_sc([0], [0])[0]).to_value(u.mas)), 0) for i in new)
+    assert xs == [130.0, 8120.0]
+    # a wider separation floor drops E1 (120 mas), then A1 (130 mas)
+    on2 = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                         companion_keep_snr=50.0, companion_keep_fwhm=2.0, **run))
+    assert on2.meta['NCOMPKEP'] == 1 and on2.meta['NCOMPAN'] == 6
+    on3 = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                         companion_keep_snr=50.0, companion_keep_fwhm=2.2, **run))
+    assert on3.meta['NCOMPKEP'] == 0 and sorted(on3['flux']) == base_fluxes
+    # a higher S/N floor drops both exempt rows (S/N 60)
+    on4 = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                         companion_keep_snr=61.0, **run))
+    assert on4.meta['NCOMPKEP'] == 0 and sorted(on4['flux']) == base_fluxes
+
+
+def test_far_companion_exemption_saturated_donor(tmp_path):
+    """A cross-band position takes the saturation flag of the own-band row it
+    took its flux from: a saturated donor blocks the exemption of A1."""
+    xpath, opath = _keep_fixture(tmp_path, donor_saturated=True)
+    out = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                         companion_fwhm=2.5, fwhm_arcsec=0.062,
+                                         companion_keep_snr=50.0))
+    assert out.meta['NCOMPKEP'] == 1      # E1 only
+    assert out.meta['NCOMPAN'] == 6
+
+
+def test_far_companion_exemption_needs_its_columns(tmp_path):
+    """Asking for the exemption without flux_err or without any saturation
+    column raises; with the cut off the columns are not read."""
+    for col in ('flux_err',):
+        xpath, opath = _keep_fixture(tmp_path, drop_column=col)
+        with pytest.raises(ValueError, match='flux_err'):
+            _build_m7_band_seed(xpath, opath, 'F182M', 'merged', companion_fwhm=2.5,
+                                fwhm_arcsec=0.062, companion_keep_snr=50.0)
+        # the cut off: nothing to exempt, columns not needed
+        out = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged',
+                                             companion_fwhm=0, fwhm_arcsec=0.062,
+                                             companion_keep_snr=50.0))
+        assert out.meta['NCOMPKEP'] == 0
+    xpath, opath = _keep_fixture(tmp_path)
+    own = Table.read(opath)
+    own.remove_columns(['is_saturated', 'replaced_saturated'])
+    own.write(opath, overwrite=True)
+    with pytest.raises(ValueError, match='saturated'):
+        _build_m7_band_seed(xpath, opath, 'F182M', 'merged', companion_fwhm=2.5,
+                            fwhm_arcsec=0.062, companion_keep_snr=50.0)
+    # an unsaturated catalog with only one of the two columns is accepted
+    own['is_saturated'] = np.zeros(len(own), dtype=bool)
+    own.write(opath, overwrite=True)
+    out = Table.read(_build_m7_band_seed(xpath, opath, 'F182M', 'merged', companion_fwhm=2.5,
+                                         fwhm_arcsec=0.062, companion_keep_snr=50.0))
+    assert out.meta['NCOMPKEP'] == 4          # A1, E1, and B1, C1 no longer have a saturated neighbour
+    for kw in ({'companion_keep_snr': -1.0}, {'companion_keep_fwhm': -0.5}):
+        with pytest.raises(ValueError):
+            _build_m7_band_seed(xpath, opath, 'F182M', 'merged', fwhm_arcsec=0.062, **kw)
+
+
+def test_flag_array_reads_the_stored_forms():
+    flag = cataloging._flag_array
+    assert list(flag(np.array([True, False]))) == [True, False]
+    assert list(flag(np.array([1, 0, 2]))) == [True, False, True]
+    assert list(flag(np.array(['True', 'false', 'TRUE', 'False']))) == [True, False, True, False]
+    masked = Table({'f': np.ma.MaskedArray([True, True, False], mask=[False, True, False])})
+    assert list(flag(masked['f'])) == [True, False, False]
+
+
 def test_pipeline_defaults():
     # AUTO by default (docs/evidence/faint_defaults_on); see
     # docs/evidence/faint_m7_seed_union for the full-field realness
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band'] is None
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_fwhm'] == 2.5
     assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_max_ratio'] == 0.1
+    # the far-companion exemption is opt-in (docs/evidence/m7_companion_keep)
+    assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_snr'] == 0.0
+    assert MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_fwhm'] == 1.75
     # opt-in until the production seeds are rerun (decision 2026-11-14)
     assert MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'] == 0.0
 
@@ -528,11 +652,13 @@ def test_auto_own_band_off_on_extended_emission_and_miri():
 
 
 def test_pipeline_passes_the_companion_options():
-    """run_manual_pipeline hands both companion-cut options to the builder."""
+    """run_manual_pipeline hands the companion-cut options, including the
+    far-companion exemption, to the builder."""
     tree = ast.parse(textwrap.dedent(inspect.getsource(cataloging.run_manual_pipeline)))
     (call,) = [c for c in ast.walk(tree) if isinstance(c, ast.Call)
                and getattr(c.func, 'id', None) == '_build_m7_band_seed']
     kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
-    for arg in ('companion_fwhm', 'companion_max_ratio'):
+    for arg in ('companion_fwhm', 'companion_max_ratio',
+                'companion_keep_snr', 'companion_keep_fwhm'):
         assert kw[arg] == f"float(mopt(opts_phase, 'manual_m7_seed_own_band_{arg}'))"
     assert kw['dedup_fwhm'] == "float(mopt(opts_phase, 'manual_m7_seed_dedup_fwhm'))"

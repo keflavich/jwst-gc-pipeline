@@ -238,6 +238,14 @@ MANUAL_DEFAULTS = {
     # gate (1.0) left them unsubtracted in the m7 residual
     # (docs/evidence/m7_companion_ratio).
     'manual_m7_seed_own_band_companion_max_ratio': 0.1,
+    # Far-companion exemption (opt-in): an own-band source that the cut above
+    # would leave out is added when its m6 flux / flux_err is at least this,
+    # and every brighter seed source that triggers the cut lies at least
+    # ``..._companion_keep_fwhm`` FWHM from it and is unsaturated.  0 = off
+    # (the cut is unchanged).  50 is the documented F212N value
+    # (docs/evidence/m7_companion_keep); the S/N scale differs between bands.
+    'manual_m7_seed_own_band_companion_keep_snr': 0.0,
+    'manual_m7_seed_own_band_companion_keep_fwhm': 1.75,
     # Seed dedup (#1206): a cross-band position and an own-band m6 position of
     # one star differ by more than the 30 mas match radius in the red bands
     # (Brick F405N pairs: 31 / 41 / 61 mas at p10 / 50 / 90, FWHM 136 mas),

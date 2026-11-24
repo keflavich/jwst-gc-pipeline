@@ -5547,6 +5547,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help='The companion cut leaves out an own-band source only when '
                            'its flux is below this fraction of the neighbour\'s.  1.0 '
                            'cuts every fainter source within the radius.  Default 0.1.')
+    parser.add_option('--manual-m7-seed-own-band-companion-keep-snr',
+                      dest='manual_m7_seed_own_band_companion_keep_snr', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_snr'],
+                      help='Far-companion exemption of the companion cut: an own-band '
+                           'source the cut would leave out is added when its m6 '
+                           'flux / flux_err is at least this and every brighter seed '
+                           'source that triggers the cut is at least '
+                           '--manual-m7-seed-own-band-companion-keep-fwhm away and '
+                           'unsaturated.  0 = off (the default); 50 is the F212N value '
+                           'of docs/evidence/m7_companion_keep.')
+    parser.add_option('--manual-m7-seed-own-band-companion-keep-fwhm',
+                      dest='manual_m7_seed_own_band_companion_keep_fwhm', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_fwhm'],
+                      help='Minimum separation, in PSF FWHM, of the exemption above.  '
+                           'Default 1.75.')
     parser.add_option('--manual-m7-seed-dedup-fwhm',
                       dest='manual_m7_seed_dedup_fwhm', type='float',
                       default=MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'],

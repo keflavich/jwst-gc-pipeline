@@ -1,0 +1,58 @@
+== task 0 (control task 0) o045 nrcb 0004_nrcb3: seed rows 54559 -> 54570, final rows 52093 -> 52104
+  target (6277, 2642) frame (674.6,336.8):
+    control   seed: -                                        final: -
+    treatment seed: 3747@0.5                                 final: 3746@0.5
+  target (6092, 3774) frame (487.2,1478.0):
+    control   seed: 4086@4.5 0@5.8                           final: 4194@4.5
+    treatment seed: 4086@4.5 0@5.8                           final: 4194@4.5
+  target (6355, 3168) frame (753.6,866.2):
+    control   seed: -                                        final: -
+    treatment seed: 2977@0.5                                 final: 2986@0.5
+== task 1 (control task 1) o045 nrca 0003_nrca4: seed rows 55804 -> 55809, final rows 52611 -> 52616
+  target (4979, 3391) frame (2039.5,1171.6):
+    control   seed: 45330@5.2                                final: 44720@5.3 3088@6.0/f1
+    treatment seed: 3189@0.5 45330@5.2                       final: 3046@0.5 44720@5.3 3088@6.0/f1
+  target (2970, 3509) frame (6.9,1313.4):
+    control   seed: 22550@3.8 12400@5.6                      final: 45000@3.9 12300@5.6
+    treatment seed: 22550@3.8 12400@5.6                      final: 45000@3.9 12300@5.6
+== task 2 (control task 2) o045 nrcb 0006_nrcb4: seed rows 59908 -> 59914, final rows 56716 -> 56722
+  target (7311, 2154) frame (932.3,1671.5):
+    control   seed: 40310@5.5                                final: 40300@5.4
+    treatment seed: 3506@0.6 40310@5.5                       final: 3476@0.6 40300@5.4
+  target (6471, 2248) frame (90.8,1768.7):
+    control   seed: 4179@2.9                                 final: 4507@2.9
+    treatment seed: 4179@2.9                                 final: 4507@2.9
+== task 3 (control task 5) o105 nrcb 0004_nrcb4: seed rows 48687 -> 48694, final rows 46269 -> 46276
+  target (6760, 471) frame (1139.2,350.3):
+    control   seed: 3298@0.8 52@0.8 434@3.3                  final: 3335@0.6 415@3.3
+    treatment seed: 3298@0.8 52@0.8 434@3.3                  final: 3335@0.6 415@3.3
+  target (7097, 961) frame (1478.4,832.1):
+    control   seed: 28750@4.5                                final: 2601@4.2/f1 29000@4.5
+    treatment seed: 2567@0.5 28750@4.5                       final: 2553@0.5 2601@4.2/f1 28630@4.5
+  target (6588, 1271) frame (970.9,1144.9):
+    control   seed: 22160@4.5                                final: 22290@4.6/f1
+    treatment seed: 1996@0.3 22160@4.5                       final: 2005@0.3/f1 22080@4.6/f1
+== task 4 (control task 6) o105 nrcb 0004_nrcb3: seed rows 47581 -> 47589, final rows 45231 -> 45239
+  target (7485, 2672) frame (1889.2,360.1):
+    control   seed: 2458@0.1 142@2.9 1677@5.9                final: 3744@0.1 211@2.0
+    treatment seed: 2458@0.1 142@2.9 1677@5.9                final: 3744@0.1 211@2.0
+  target (7030, 3275) frame (1431.6,971.8):
+    control   seed: -                                        final: -
+    treatment seed: -                                        final: -
+  target (6137, 3868) frame (527.0,1572.8):
+    control   seed: -                                        final: -
+    treatment seed: 2672@0.5                                 final: 2667@0.5
+== task 5 (control task 8) o105 nrcb 0001_nrcb2: seed rows 47362 -> 47366, final rows 45105 -> 45107
+  target (9794, 833) frame (425.3,331.5):
+    control   seed: 9818@3.0 0@5.8                           final: 10450@3.1/f1
+    treatment seed: 9818@3.0 0@5.8                           final: 10450@3.1/f1
+  target (11328, 2324) frame (2002.8,1782.5):
+    control   seed: 44580@5.6                                final: 44570@5.5
+    treatment seed: 2859@0.2 44580@5.6                       final: 2859@0.2 44570@5.5
+== task 6 (control task 9) o105 nrca 0002_nrca4: seed rows 50058 -> 50065, final rows 47798 -> 47805
+  target (5188, 2780) frame (1450.9,555.4):
+    control   seed: 42530@5.8                                final: 42560@5.9/f1
+    treatment seed: 2784@0.4 42530@5.8                       final: 2791@0.4 42560@5.9/f1
+  target (4952, 3836) frame (1226.4,1623.0):
+    control   seed: 1671@0.5 165@2.4 496@5.8                 final: 2550@0.4 139@2.1 568@5.7/f1
+    treatment seed: 1671@0.5 165@2.4 496@5.8                 final: 2550@0.4 139@2.1 568@5.7/f1

@@ -1,0 +1,14 @@
+rows 434317 saturated 4761
+dominated 19873 in footprint 18283 blocked 12051
+control                n=372882 matched 0.955 chance 0.139 purity 0.947 | control same flux n=298304 purity 0.950 | snr med 17 | PA m2 nan m6 nan (isotropic 0.001)
+cut_all                n= 18283 matched 0.578 chance 0.138 purity 0.511 | control same flux n=245938 purity 0.940 | snr med 5 | PA m2 0.081 m6 0.053 (isotropic 0.007)
+cut_blocked            n= 11092 matched 0.504 chance 0.139 purity 0.425 | control same flux n=257453 purity 0.941 | snr med 5 | PA m2 0.065 m6 0.046 (isotropic 0.008)
+cut_far_unsat_anysnr   n=  7191 matched 0.692 chance 0.137 purity 0.643 | control same flux n=234035 purity 0.940 | snr med 6 | PA m2 0.107 m6 0.074 (isotropic 0.010)
+exempt_snr20           n=   747 matched 0.846 chance 0.146 purity 0.820 | control same flux n=90178 purity 0.962 | snr med 27 | PA m2 0.047 m6 0.050 (isotropic 0.032)
+exempt_snr30           n=   278 matched 0.860 chance 0.149 purity 0.835 | control same flux n=47487 purity 0.967 | snr med 37 | PA m2 0.092 m6 0.067 (isotropic 0.053)
+exempt_snr40           n=   104 matched 0.933 chance 0.142 purity 0.922 | control same flux n=30772 purity 0.969 | snr med 46 | PA m2 0.049 m6 0.079 (isotropic 0.087)
+exempt_snr50           n=    31 matched 0.903 chance 0.097 purity 0.893 | control same flux n=15643 purity 0.969 | snr med 59 | PA m2 0.165 m6 0.129 (isotropic 0.159)
+exempt_snr60           n=    14 matched 0.857 chance 0.089 purity 0.843 | control same flux n=9457 purity 0.971 | snr med 66 | PA m2 0.252 m6 0.166 (isotropic 0.237)
+exempt_snr80           n=0
+exempt_snr100          n=0
+far_unsat_below_snr50  n=  7160 matched 0.691 chance 0.138 purity 0.642 | control same flux n=230512 purity 0.940 | snr med 6 | PA m2 0.108 m6 0.074 (isotropic 0.010)
