@@ -1910,12 +1910,13 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                     xfit, yfit, flux, res['x_init'], res['y_init'], keep_fit,
                     owner, min_sep_pix=1.0)
                 if np.any(refit_np):
-                    # A survivor is pinned at the flux-weighted position of
-                    # its cluster, not at its seed: the net position is what
-                    # the data constrain (_dedup_net_positions).  Taken
-                    # before the rescued rows are reset below: xfit, yfit and
-                    # flux are views of the table columns, and the partner's
-                    # free fit is what places the net position.
+                    # A survivor is refit pinned at the flux-weighted position
+                    # of its cluster (_dedup_net_positions), the position the
+                    # data constrain; its seed would leave a dipole in the
+                    # residual.  Taken before the rescued rows are reset
+                    # below: xfit, yfit and flux are views of the table
+                    # columns, and the partner's free fit is what places the
+                    # net position.
                     xnet, ynet = _dedup_net_positions(
                         xfit, yfit, flux, keep_fit, owner,
                         refit_np & ~rescue_np)

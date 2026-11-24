@@ -219,7 +219,7 @@ def test_net_position_sums_every_absorbed_non_positive_row():
 
 
 def test_net_position_ignores_positive_absorbed_rows():
-    # a positive duplicate is another star the dedup discarded, not part of
+    # a positive duplicate is another star the dedup discarded; it is outside
     # the survivor's degenerate pair
     xnet, ynet = _net(xfit=[10.0, 10.3, 10.5], yfit=[5.0, 5.0, 5.0],
                       flux=[1.0e4, 8.0e3, -1.0e3], keep=[True, False, False],
