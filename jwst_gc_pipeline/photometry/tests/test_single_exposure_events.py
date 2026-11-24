@@ -237,3 +237,120 @@ def test_negative_pixel_nsigma_typo_raises_naming_the_variable(monkeypatch, valu
     monkeypatch.setenv(se.ENV_NEGATIVE, value)
     with pytest.raises(ValueError, match=se.ENV_NEGATIVE):
         se.negative_pixel_nsigma()
+
+
+# --- isolated one-pixel positive spikes ------------------------------------------------
+
+def _flat(bkg=10.0, shape=(40, 40)):
+    return np.full(shape, bkg), np.zeros(shape, np.int64)
+
+
+def _gauss(x0, y0, peak, sigma=0.95, shape=(40, 40)):
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    return peak * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2.0 * sigma ** 2))
+
+
+def test_find_positive_spikes_marks_an_isolated_pixel_and_not_a_star():
+    sci, dq = _flat()
+    sci[20, 20] = 2010.0                         # 2000 MJy/sr over the background
+    sci += _gauss(8, 30, 30000.0)                # a star on a pixel: its neighbours are at 0.58
+    sci += _gauss(30.5, 30.5, 30000.0)           # a star on a pixel corner: four equal pixels
+    before = sci.copy()
+    spikes = se.find_positive_spikes(sci, dq, 300.0)
+    assert [(s['x'], s['y']) for s in spikes] == [(20.0, 20.0)]
+    s = spikes[0]
+    assert s['peak'] == 2010.0 and s['bkg'] == pytest.approx(10.0, abs=1e-3)
+    assert s['excess'] == pytest.approx(2000.0, abs=1e-3) and s['neighbour'] == pytest.approx(0.0, abs=1e-3)
+    assert np.array_equal(sci, before)           # the input is not changed
+
+
+def test_find_positive_spikes_does_not_judge_a_pixel_beside_a_flagged_missing_or_edge_pixel():
+    sci, dq = _flat()
+    sci[20, 20] = 2010.0                         # the control
+    for x, y in [(5, 5), (5, 15), (5, 25), (30, 10), (33, 10), (30, 0), (39, 25), (30, 39)]:
+        sci[y, x] = 2010.0
+    dq[5, 6] = se.SATURATED                      # beside a saturated core
+    sci[15, 6] = np.nan                          # beside a missing pixel
+    dq[24, 5] = se.DO_NOT_USE                    # beside a pixel the pipeline drops
+    dq[10, 30] = se.SATURATED                    # the spike pixel itself is saturated
+    dq[10, 33] = se.DO_NOT_USE                   # ... or dropped
+    spikes = se.find_positive_spikes(sci, dq, 300.0)
+    assert [(s['x'], s['y']) for s in spikes] == [(20.0, 20.0)]   # (30, 0), (39, 25), (30, 39): array edge
+
+
+def test_find_positive_spikes_keeps_other_dq_bits_and_follows_the_background():
+    sci, dq = _flat(bkg=1000.0)
+    sci[20, 20] = 2900.0                         # on a bright background: 1900 MJy/sr over it
+    dq[20, 20] = 4                               # JUMP_DET only
+    (s,) = se.find_positive_spikes(sci, dq, 300.0)
+    assert (s['x'], s['y']) == (20.0, 20.0)
+    assert s['excess'] == pytest.approx(1900.0, abs=1e-3) and s['bkg'] == pytest.approx(1000.0, abs=1e-3)
+
+
+def test_find_positive_spikes_limits_are_the_arguments():
+    sci, dq = _flat()
+    sci[10, 10] = 160.0                          # excess 150
+    sci[20, 20] = 2010.0
+    sci[20, 21] = 10.0 + 0.10 * 2000.0           # a neighbour at 10 % of the excess: isolated
+    sci[30, 30] = 2010.0
+    sci[30, 31] = 10.0 + 0.20 * 2000.0           # a neighbour at 20 %: not isolated at 0.15
+    found = lambda **kw: sorted((s['x'], s['y']) for s in se.find_positive_spikes(sci, dq, **kw))
+    assert found(min_excess=300.0) == [(20.0, 20.0)]
+    assert found(min_excess=100.0) == [(10.0, 10.0), (20.0, 20.0)]
+    assert found(min_excess=300.0, isolation=0.25) == [(20.0, 20.0), (30.0, 30.0)]
+    assert found(min_excess=3000.0) == []
+
+
+def test_find_positive_spikes_needs_min_sigma_over_the_noise_of_its_annulus():
+    sci, dq = _flat()
+    # the columns step through -600 ... +600 around the background: a noisy halo whose
+    # annulus MAD-sigma is hundreds of MJy/sr, and no pixel stands over the one above it
+    sci += np.array([-600.0, -300.0, 0.0, 300.0, 600.0])[np.arange(40) % 5][None, :]
+    sci[19:22, 19:22] = 10.0                     # calm neighbours
+    sci[20, 20] = 5000.0
+    (probe,) = se.find_positive_spikes(sci, dq, 300.0, min_sigma=0.0)
+    bkg, sigma = probe['bkg'], probe['sigma']
+    assert sigma > 300.0
+    found = lambda **kw: [(s['x'], s['y']) for s in se.find_positive_spikes(sci, dq, 300.0, **kw)]
+    sci[20, 20] = bkg + 3.0 * sigma
+    assert found() == []                         # three sigma of the halo is noise at the default
+    assert found(min_sigma=2.0) == [(20.0, 20.0)]
+    assert found(min_sigma=0.0) == [(20.0, 20.0)]
+    sci[20, 20] = bkg + 8.0 * sigma
+    assert found() == [(20.0, 20.0)]
+    assert se.SPIKE_MIN_SIGMA == 5.0
+
+
+def test_find_positive_spikes_of_a_frame_without_one():
+    sci, dq = _flat()
+    assert se.find_positive_spikes(sci, dq, 300.0) == []
+    sci[:] = np.nan
+    assert se.find_positive_spikes(sci, dq, 300.0) == []
+
+
+def test_positive_spike_mask_is_the_three_by_three_box_around_each_spike():
+    spikes = [dict(x=20.0, y=20.0), dict(x=21.0, y=22.0), dict(x=5.0, y=30.0)]
+    mask = se.positive_spike_mask((40, 40), spikes)
+    assert mask.dtype == bool and mask.shape == (40, 40)
+    assert mask[19:22, 19:22].all() and mask[21:24, 20:23].all() and mask[29:32, 4:7].all()
+    assert int(mask.sum()) == 9 + 9 + 9 - 2          # the first two boxes overlap in x 20-21 at y 21
+    assert not se.positive_spike_mask((40, 40), []).any()
+
+
+@pytest.mark.parametrize('value, expected', [
+    (None, None), ('', None), ('  ', None), ('0', None), ('0.0', None),
+    ('300', 300.0), (' 2.5 ', 2.5), ('1e3', 1000.0),
+])
+def test_positive_spike_min_excess_values(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv(se.ENV_SPIKE, raising=False)
+    else:
+        monkeypatch.setenv(se.ENV_SPIKE, value)
+    assert se.positive_spike_min_excess() == expected
+
+
+@pytest.mark.parametrize('value', ['abc', 'nan', 'inf', '-1', '300 MJy/sr'])
+def test_positive_spike_min_excess_typo_raises_naming_the_variable(monkeypatch, value):
+    monkeypatch.setenv(se.ENV_SPIKE, value)
+    with pytest.raises(ValueError, match=se.ENV_SPIKE):
+        se.positive_spike_min_excess()
