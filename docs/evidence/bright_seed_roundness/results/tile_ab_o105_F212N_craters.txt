@@ -1,0 +1,176 @@
+# Big craters of o105 F212N residual tags matched by position (3 px) against a control tag (same definitions as the counts file).
+# The sections up to the one headed "same PSF grid state" use dnp3 (rebuilt PSF grid) as the control, so the PSF grid state differs between control and sd1/sd1p there;
+# the later sections use dncg and dncgp (cached PSF grid, the state of sd1) as the controls.
+
+################ union-seed arms sd1, sd1p (replay-state difference present)
+dq4mkrdnp3: 35 big craters; 244 craters with depth > 50 at any depth/model; deepest 507
+dq4mkrdnp3p: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+dq4mkrsd1: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -9.5, max +1.4 MJy/sr; 245 craters with depth > 50 at any depth/model; deepest 508
+    new ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+    gone ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+dq4mkrsd1p: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -9.5, max +1.4 MJy/sr; 245 craters with depth > 50 at any depth/model; deepest 508
+    new ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+    gone ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+ee8dq4mkrdnp3: 35 big craters; 243 craters with depth > 50 at any depth/model; deepest 507
+ee8dq4mkrdnp3p: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 243 craters with depth > 50 at any depth/model; deepest 507
+ee8dq4mkrsd1: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -9.5, max +1.4 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 508
+    new ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+    gone ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+ee8dq4mkrsd1p: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -9.5, max +1.4 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 508
+    new ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+    gone ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+
+################ seed-local arms sdloc, sdlocp
+dq4mkrdnp3: 35 big craters; 244 craters with depth > 50 at any depth/model; deepest 507
+dq4mkrsdloc: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+dq4mkrsdlocp: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+ee8dq4mkrdnp3: 35 big craters; 243 craters with depth > 50 at any depth/model; deepest 507
+ee8dq4mkrsdloc: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 243 craters with depth > 50 at any depth/model; deepest 507
+ee8dq4mkrsdlocp: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 243 craters with depth > 50 at any depth/model; deepest 507
+
+################ the crater that appears in sd1 and the one that drops out, and the deepest crater, through all arms (nearest added seed row in arcsec; 'none' = no crater record within 3 px)
+
+crater (6771,3357); nearest added seed exempt nrcb at 11.679"; seeds within 0.3": 0, within 1": 0
+   dq4mkrdnc        none
+   dq4mkrdnp3       none
+   dq4mkrdnp3p      none
+   dq4mkrsd1        depth  371.4  model_peak     854  depth/model  0.44  d_vet1 0.056"  flux1      6411  nmatch1 1  forced1 0.0
+   dq4mkrsd1p       depth  371.4  model_peak     854  depth/model  0.44  d_vet1 0.056"  flux1      6411  nmatch1 1  forced1 0.0
+
+crater (2513,951); nearest added seed exempt nrca at 12.007"; seeds within 0.3": 0, within 1": 0
+   dq4mkrdnc        depth  210.2  model_peak     690  depth/model  0.30  d_vet1 0.126"  flux1      3534  nmatch1 1  forced1 0.0
+   dq4mkrdnp3       depth  210.2  model_peak     690  depth/model  0.30  d_vet1 0.126"  flux1      3534  nmatch1 1  forced1 0.0
+   dq4mkrdnp3p      depth  210.2  model_peak     690  depth/model  0.30  d_vet1 0.126"  flux1      3534  nmatch1 1  forced1 0.0
+   dq4mkrsd1        depth  194.4  model_peak     690  depth/model  0.28  d_vet1 0.126"  flux1      3534  nmatch1 1  forced1 0.0
+   dq4mkrsd1p       depth  194.4  model_peak     690  depth/model  0.28  d_vet1 0.126"  flux1      3534  nmatch1 1  forced1 0.0
+
+crater (6712,3387); nearest added seed exempt nrcb at 10.849"; seeds within 0.3": 0, within 1": 0
+   dq4mkrdnc        depth  506.7  model_peak    1363  depth/model  0.37  d_vet1 0.264"  flux1      2875  nmatch1 1  forced1 0.0
+   dq4mkrdnp3       depth  506.7  model_peak    1363  depth/model  0.37  d_vet1 0.264"  flux1      2875  nmatch1 1  forced1 0.0
+   dq4mkrdnp3p      depth  506.7  model_peak    1363  depth/model  0.37  d_vet1 0.264"  flux1      2875  nmatch1 1  forced1 0.0
+   dq4mkrsd1        depth  508.1  model_peak    1363  depth/model  0.37  d_vet1 0.264"  flux1      2875  nmatch1 1  forced1 0.0
+   dq4mkrsd1p       depth  508.1  model_peak    1363  depth/model  0.37  d_vet1 0.264"  flux1      2875  nmatch1 1  forced1 0.0
+
+################ render without any mask: control dnp3, treatments dnc (#1366 off), dnp3p, sd1, sd1p, sdloc, sdlocp
+dnp3: 137 big craters; 6109 craters with depth > 50 at any depth/model; deepest 17667
+dnc: 132 big craters; new vs control 0, gone 5; matched 132 with depth change median +0.00, min -0.1, max +0.0 MJy/sr; 6106 craters with depth > 50 at any depth/model; deepest 17667
+    gone ( 4942, 3866) depth 161 model_peak 489 d_vet1 0.15"
+    gone ( 9131,  581) depth 152 model_peak 119 d_vet1 0.13"
+    gone ( 9940, 1484) depth 133 model_peak 193 d_vet1 0.14"
+    gone (11076, 4383) depth 102 model_peak 50 d_vet1 0.14"
+    gone (  305, 3083) depth 82 model_peak 62 d_vet1 0.15"
+dnp3p: 138 big craters; new vs control 1, gone 0; matched 137 with depth change median +0.00, min -0.1, max +0.1 MJy/sr; 6109 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 4658, 4352) depth 201 model_peak 125 d_vet1 0.14"
+sd1: 134 big craters; new vs control 0, gone 3; matched 134 with depth change median +0.00, min -9.5, max +1.3 MJy/sr; 6108 craters with depth > 50 at any depth/model; deepest 17667
+    gone ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 2571, 1972) depth 200 model_peak 663 d_vet1 0.01"
+    gone ( 9011, 2617) depth 159 model_peak 501 d_vet1 0.48"
+sd1p: 135 big craters; new vs control 1, gone 3; matched 134 with depth change median +0.00, min -9.5, max +1.3 MJy/sr; 6108 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 4658, 4352) depth 201 model_peak 125 d_vet1 0.14"
+    gone ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 2571, 1972) depth 200 model_peak 663 d_vet1 0.01"
+    gone ( 9011, 2617) depth 159 model_peak 501 d_vet1 0.48"
+sdloc: 137 big craters; new vs control 0, gone 0; matched 137 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 6110 craters with depth > 50 at any depth/model; deepest 17667
+sdlocp: 138 big craters; new vs control 1, gone 0; matched 137 with depth change median +0.00, min -0.1, max +0.1 MJy/sr; 6110 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 4658, 4352) depth 201 model_peak 125 d_vet1 0.14"
+
+################ footprint mask with ring zone (no DQ_SAT dilation): control mkrdnp3
+mkrdnp3: 46 big craters; 270 craters with depth > 50 at any depth/model; deepest 507
+mkrsd1: 46 big craters; new vs control 1, gone 1; matched 45 with depth change median +0.00, min -9.5, max +1.3 MJy/sr; 271 craters with depth > 50 at any depth/model; deepest 508
+    new ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+    gone ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+mkrsdloc: 46 big craters; new vs control 0, gone 0; matched 46 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 270 craters with depth > 50 at any depth/model; deepest 507
+mkrsdlocp: 46 big craters; new vs control 0, gone 0; matched 46 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 270 craters with depth > 50 at any depth/model; deepest 507
+
+################ #1366 alone (dnc = switch off against dnp3 = switch on): DQ_SAT render, footprint-and-ring render, footprint-mask-only render
+dq4mkrdnp3: 35 big craters; 244 craters with depth > 50 at any depth/model; deepest 507
+dq4mkrdnc: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+mkrdnp3: 46 big craters; 270 craters with depth > 50 at any depth/model; deepest 507
+mkrdnc: 46 big craters; new vs control 0, gone 0; matched 46 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 270 craters with depth > 50 at any depth/model; deepest 507
+mkdnp3: 96 big craters; 607 craters with depth > 50 at any depth/model; deepest 527
+mkdnc: 96 big craters; new vs control 0, gone 0; matched 96 with depth change median +0.00, min -0.1, max +0.1 MJy/sr; 607 craters with depth > 50 at any depth/model; deepest 527
+
+################ same PSF grid state: control dncg; DQ_SAT dilation (dq4mkr), edge band (ee8dq4mkr), ring zone only (mkr), no mask
+dq4mkrdncg: 35 big craters; 245 craters with depth > 50 at any depth/model; deepest 508
+dq4mkrdnp3: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -1.4, max +9.5 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+dq4mkrdnc: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -1.4, max +9.5 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+dq4mkrdncgp: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 245 craters with depth > 50 at any depth/model; deepest 508
+dq4mkrsd1: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 245 craters with depth > 50 at any depth/model; deepest 508
+dq4mkrsd1p: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 245 craters with depth > 50 at any depth/model; deepest 508
+dq4mkrsdloc: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -1.4, max +9.5 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+dq4mkrsdlocp: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -1.4, max +9.5 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+ee8dq4mkrdncg: 35 big craters; 244 craters with depth > 50 at any depth/model; deepest 508
+ee8dq4mkrdnp3: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -1.4, max +9.5 MJy/sr; 243 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+ee8dq4mkrdncgp: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 508
+ee8dq4mkrsd1: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 508
+ee8dq4mkrsd1p: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 508
+ee8dq4mkrsdloc: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -1.4, max +9.5 MJy/sr; 243 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+ee8dq4mkrsdlocp: 35 big craters; new vs control 1, gone 1; matched 34 with depth change median +0.00, min -1.4, max +9.5 MJy/sr; 243 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+mkrdncg: 46 big craters; 271 craters with depth > 50 at any depth/model; deepest 508
+mkrdnp3: 46 big craters; new vs control 1, gone 1; matched 45 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 270 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+mkrdnc: 46 big craters; new vs control 1, gone 1; matched 45 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 270 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+mkrdncgp: 46 big craters; new vs control 0, gone 0; matched 46 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 271 craters with depth > 50 at any depth/model; deepest 508
+mkrsd1: 46 big craters; new vs control 0, gone 0; matched 46 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 271 craters with depth > 50 at any depth/model; deepest 508
+mkrsd1p: 46 big craters; new vs control 0, gone 0; matched 46 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 271 craters with depth > 50 at any depth/model; deepest 508
+mkrsdloc: 46 big craters; new vs control 1, gone 1; matched 45 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 270 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+mkrsdlocp: 46 big craters; new vs control 1, gone 1; matched 45 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 270 craters with depth > 50 at any depth/model; deepest 507
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    gone ( 6771, 3357) depth 371 model_peak 854 d_vet1 0.06"
+dncg: 134 big craters; 6107 craters with depth > 50 at any depth/model; deepest 17667
+dnp3: 137 big craters; new vs control 3, gone 0; matched 134 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 6109 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    new ( 2571, 1972) depth 200 model_peak 663 d_vet1 0.01"
+    new ( 9011, 2617) depth 159 model_peak 501 d_vet1 0.48"
+dnc: 132 big craters; new vs control 3, gone 5; matched 129 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 6106 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    new ( 2571, 1972) depth 200 model_peak 663 d_vet1 0.01"
+    new ( 9011, 2617) depth 159 model_peak 501 d_vet1 0.48"
+    gone ( 4942, 3866) depth 161 model_peak 489 d_vet1 0.15"
+    gone ( 9131,  581) depth 152 model_peak 119 d_vet1 0.13"
+    gone ( 9940, 1484) depth 133 model_peak 193 d_vet1 0.14"
+    gone (11076, 4383) depth 102 model_peak 50 d_vet1 0.14"
+    gone (  305, 3083) depth 82 model_peak 62 d_vet1 0.15"
+dncgp: 135 big craters; new vs control 1, gone 0; matched 134 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 6107 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 4658, 4352) depth 201 model_peak 125 d_vet1 0.14"
+sd1: 134 big craters; new vs control 0, gone 0; matched 134 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 6108 craters with depth > 50 at any depth/model; deepest 17667
+sd1p: 135 big craters; new vs control 1, gone 0; matched 134 with depth change median +0.00, min -0.0, max +0.1 MJy/sr; 6108 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 4658, 4352) depth 201 model_peak 125 d_vet1 0.14"
+sdloc: 137 big craters; new vs control 3, gone 0; matched 134 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 6110 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    new ( 2571, 1972) depth 200 model_peak 663 d_vet1 0.01"
+    new ( 9011, 2617) depth 159 model_peak 501 d_vet1 0.48"
+sdlocp: 138 big craters; new vs control 4, gone 0; matched 134 with depth change median +0.00, min -1.3, max +9.5 MJy/sr; 6110 craters with depth > 50 at any depth/model; deepest 17667
+    new ( 2513,  951) depth 210 model_peak 690 d_vet1 0.13"
+    new ( 4658, 4352) depth 201 model_peak 125 d_vet1 0.14"
+    new ( 2571, 1972) depth 200 model_peak 663 d_vet1 0.01"
+    new ( 9011, 2617) depth 159 model_peak 501 d_vet1 0.48"
+
+################ same PSF grid state, rescue on in both arms: control dncgp, treatment sd1p; same four render levels
+dq4mkrdncgp: 35 big craters; 245 craters with depth > 50 at any depth/model; deepest 508
+dq4mkrsd1p: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 245 craters with depth > 50 at any depth/model; deepest 508
+ee8dq4mkrdncgp: 35 big craters; 244 craters with depth > 50 at any depth/model; deepest 508
+ee8dq4mkrsd1p: 35 big craters; new vs control 0, gone 0; matched 35 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 244 craters with depth > 50 at any depth/model; deepest 508
+mkrdncgp: 46 big craters; 271 craters with depth > 50 at any depth/model; deepest 508
+mkrsd1p: 46 big craters; new vs control 0, gone 0; matched 46 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 271 craters with depth > 50 at any depth/model; deepest 508
+dncgp: 135 big craters; 6107 craters with depth > 50 at any depth/model; deepest 17667
+sd1p: 135 big craters; new vs control 0, gone 0; matched 135 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 6108 craters with depth > 50 at any depth/model; deepest 17667
