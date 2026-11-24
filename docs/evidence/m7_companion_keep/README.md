@@ -190,6 +190,196 @@ treatment fit row more than 1 pixel from every control row.
   −50 MJy/sr in the treatment and not in the control, with a depth above 0.3 of
   the treatment model at that pixel): 0 in all seven frames.
 
+## Tile-level A/B on o105 F212N
+
+The 42 exemption rows of this PR and the 39 rows of the relaxed bright window
+(#1376) were fitted together in all 48 frames of o105 F212N (8 detectors, 6
+exposures), merged and rendered into the m7 residual i2d.  The aim was to see
+whether the rows survive the frame fit and the merge, and what they do to the
+whole-star leftovers and the big craters of that image.  The scripts of this
+section (the replay of the m7 fit, the combination of the frame catalogs, the
+render and the scoring) are not part of this repo;
+`results/tile_ab_o105_F212N_*.txt` hold their outputs.
+
+**Arms.**  Each arm replays the production m7 fit command of every frame with
+the production options and combines the 48 frame catalogs into one merged
+catalog.  The replays used two states of the saturated-star PSF grid (see
+[below](#two-psf-grid-states-among-the-replays)); the arms with the same state
+are the ones to compare.
+
+| arm | m7 seed | saturated-star PSF grid | `DAOPHOT_DEDUP_NONPOSITIVE` (#1366) | merge-pair rescue (#1365; ratio 3, floor 500) |
+|---|---|---|---|---|
+| `dnc` | production | rebuilt | off | off |
+| `dnp3` | production | rebuilt | on | off |
+| `dnp3p` | production | rebuilt | on | on |
+| `dncg` | production | cached | on | off |
+| `dncgp` | production | cached | on | on |
+| `sd1` | production + 81 rows | cached | on | off |
+| `sd1p` | production + 81 rows | cached | on | on |
+
+The 81 added rows are the 42 exemption rows of this PR (own-band S/N 50) and 39
+rows of the relaxed window (#1376; ERR S/N 30; a relaxed row within 30 mas of
+an exemption row is dropped).  Per module the added rows are nrca 15 + 15 and
+nrcb 27 + 24 (exemption + relaxed).  `sd1` against `dncg` is the effect of the
+81 added rows alone, and `sd1p` against `dncgp` the same with the rescue on in
+both arms.  `dnp3` against `dnc` is the effect of #1366 alone, `dncgp` against
+`dncg` the effect of the rescue alone, and `dnp3` against `dncg` the effect of
+the PSF grid state alone.  Two further arms, `sdloc` and `sdlocp`, were built
+before `dncg` existed: they take the `dnp3` and `dnp3p` rows farther than 0.3″
+(about 4 FWHM of F212N, 0.072″) from every added row and the `sd1` and `sd1p`
+rows inside those discs.  They give the leftover counts of `sd1` and `sd1p` and
+the crater lists of `dnp3`; their numbers are in the results files.
+
+An arm enters the render as the difference between its merged catalog and that
+of `dnc`: rows of the production vetted catalog within 0.03″ of a row that
+disappeared are removed, and new rows with flux ≥ 0 are added.  No added row is
+vetted again, so a row that the vetting would drop stays in the catalog, and
+the counts below are the best case for the added rows.  Every arm is rendered
+with the same settings: the footprint mask with its ring zone (#1361, #1364),
+the DQ_SAT dilation of 4 px (#1372) and, in the second table, the edge band of
+8 px (#1373).  None of these PRs is merged.
+
+**Counts.**  Whole-star leftovers (residual peak ≥ N MJy/sr, at least 50, and
+more than 0.7 of the data peak at the star) and big craters (depth > 50 MJy/sr
+and depth more than 0.3 of the model peak, counted at depth ≥ 50, 200 and 500
+MJy/sr) of the m7 residual i2d of o105 F212N.
+
+DQ_SAT dilation of 4 px:
+
+| arm | leftovers ≥ 50 | ≥ 100 | ≥ 200 | ≥ 500 | ≥ 1000 | big craters ≥ 50 | ≥ 200 | ≥ 500 |
+|---|---|---|---|---|---|---|---|---|
+| `dnc` | 752 | 201 | 48 | 6 | 3 | 35 | 9 | 1 |
+| `dnp3` | 741 | 194 | 45 | 5 | 2 | 35 | 9 | 1 |
+| `dnp3p` | 729 | 185 | 41 | 5 | 2 | 35 | 9 | 1 |
+| `dncg` | 742 | 194 | 45 | 5 | 2 | 35 | 9 | 1 |
+| `dncgp` | 730 | 185 | 41 | 5 | 2 | 35 | 9 | 1 |
+| `sd1` | 681 | 149 | 34 | 5 | 2 | 35 | 9 | 1 |
+| `sd1p` | 669 | 140 | 30 | 5 | 2 | 35 | 9 | 1 |
+
+DQ_SAT dilation of 4 px and edge band of 8 px:
+
+| arm | leftovers ≥ 50 | ≥ 100 | ≥ 200 | ≥ 500 | ≥ 1000 | big craters ≥ 50 | ≥ 200 | ≥ 500 |
+|---|---|---|---|---|---|---|---|---|
+| `dnc` | 735 | 186 | 38 | 1 | 1 | 35 | 9 | 1 |
+| `dnp3` | 724 | 179 | 35 | 0 | 0 | 35 | 9 | 1 |
+| `dnp3p` | 712 | 170 | 31 | 0 | 0 | 35 | 9 | 1 |
+| `dncg` | 725 | 179 | 35 | 0 | 0 | 35 | 9 | 1 |
+| `dncgp` | 713 | 170 | 31 | 0 | 0 | 35 | 9 | 1 |
+| `sd1` | 664 | 134 | 24 | 0 | 0 | 35 | 9 | 1 |
+| `sd1p` | 652 | 125 | 20 | 0 | 0 | 35 | 9 | 1 |
+
+**Leftovers.**  Against `dncg`, `sd1` clears 45 of the 194 whole-star leftovers
+≥ 100 MJy/sr (a leftover is cleared when the treatment has none within 3 px of
+its position).  No leftover ≥ 100 MJy/sr gets worse by more than a factor of
+1.5, and none appears that `dncg` does not have.  The count at ≥ 200 MJy/sr
+falls from 45 to 34 (35 to 24 with the edge band), and the ≥ 500 count stays at
+5 (0 with the edge band).  By leftover class, the 45 leftovers ≥ 200 MJy/sr of
+`dncg` are 29 SATSTAR_NEAR, 11 NOT_IN_M7_CATALOG, 4 VETTED_BUT_UNSUBTRACTED and
+1 VETTED_OUT; the 34 of `sd1` are 21, 8, 4 and 1.  With the rescue on in both
+arms, `sd1p` against `dncgp` clears 45 as well and adds none (≥ 200 MJy/sr: 41
+to 30, and 31 to 20 with the edge band).  The rescue alone clears 9 leftovers
+(`dncgp` against `dncg`), and the same 9 positions (within 3 px) with the added
+rows (`sd1p` against `sd1`); these 9 have no added row nearby.  Leftovers of
+212 to 358 MJy/sr at (434, 3684), (3245, 3878), (7030, 3275) and (9794, 833)
+remain in every arm (the counts file lists the residual peak at 13 stars of
+this tile for each arm).
+
+**Where the clears occur.**  Of the 194 leftovers of `dncg`, 48 have an added
+row within 0.1″, and `sd1` clears 45 of them.  It clears none of the other 146.
+The attribution is by position (`results/tile_ab_o105_F212N_attribution.txt`).
+The nearest added row of each of the 45 cleared leftovers lies within 0.036″
+(median 0.011″): an exemption row of this PR for 20 leftovers and a relaxed row
+of #1376 for 25.  45 of the 81 added rows lie under a cleared leftover.  The
+three leftovers with an added row nearby that persist have peaks of 181, 178
+and 150 MJy/sr, and the rows under them are relaxed rows (0.008″, 0.025″ and
+0.025″ away).  No arm contains one kind of row alone, so the effect of the
+exemption alone and of the relaxed window alone is not measured.
+
+**Craters.**  The big craters of `sd1` are those of `dncg`: 35 in the
+DQ_SAT-dilated render (9 ≥ 200 MJy/sr, 1 ≥ 500), with no crater new or gone
+(positions matched within 3 px), depth changes below 0.1 MJy/sr, and 245
+craters deeper than 50 MJy/sr at any depth/model ratio in both.  The same holds
+with the edge band (35 in both; 244 deeper than 50 MJy/sr), with the footprint
+mask and its ring zone only (46 in both; 271) and in the render without any
+mask (134 in both, none new or gone; 6107 craters deeper than 50 MJy/sr in
+`dncg` and 6108 in `sd1`).  With the rescue on in both arms, `sd1p` against
+`dncgp` gives the same lists at the same four render levels (35, 35, 46 and 135
+big craters in both, none new or gone).  The rescue adds one big crater to the
+unmasked render, (4658, 4352) of depth 201 MJy/sr, to `dncgp` and `sd1p` alike.
+The 81 added rows therefore add no big crater to this tile and remove none at
+any of these four render levels (`results/tile_ab_o105_F212N_craters.txt`).
+#1366 alone (`dnp3` against `dnc`) leaves the masked crater lists unchanged and
+adds five big craters of depth 82 to 161 MJy/sr to the unmasked render (132 to
+137).
+
+**Survival of the added rows.**  Of the 42 exemption rows, 38 appear as new
+rows of the merged catalog (no row of `dnp3` within 0.1″) and 4 coincide with a
+row that `dnp3` already had.  Of the 39 relaxed rows, 33 are new, 5 coincide
+with a `dnp3` row and 1 has no merged row within 0.1″ (a seed of flux 3.2 × 10⁵
+whose nearest merged row lies 0.22″ away).  The median `flux_fit_avg` of the
+new rows (in the unit of the catalog column) is 1411 for the exemption rows
+against a median seed flux of 1392, and 1693 for the relaxed rows against 1341
+(`results/tile_ab_o105_F212N_survival.txt`).  The frame catalogs of `dnp3` and
+`dncg` differ by 4 lost rows and no added row within 0.5″ of an added row; the
+reference for these counts is `dnp3`.
+
+### Two PSF grid states among the replays
+
+The replays of the arms `dnc`, `dnp3` and `dnp3p` and those of `sd1` and `sd1p`
+used two versions of the replay script, which stage the saturated-star PSF grid
+differently.  The first rebuilt it from MAST (the OPD file closest in time to
+2026-09-14, O2026091501), and the second loaded the grid that the production
+run had cached.  The `EPSFSHFT` keyword of the frame catalogs is 0.34–0.50 mpix
+larger with the cached grid in each of the 8 detectors (45.208 against 44.706
+mpix in nrca1; `results/tile_ab_o105_F212N_replay_state.txt`).  `dncg` and
+`dncgp` repeat `dnp3` and `dnp3p` with the cached grid; their `EPSFSHFT` equals
+that of `sd1` in all 8 detectors.
+
+The grid state changes the frame catalogs throughout the tile.  Between `dncg`
+and `dnp3`, 3265 frame rows are lost, 3178 are added, and 145,316 of the 2.24
+million matched rows change their fitted flux by more than 1%.  Within 3″ of an
+added row lie 3.7% of the lost rows, 3.1% of the added rows and 4.0% of the
+rows with a changed flux, against 4.1% of all rows; within 0.5″ of an added row
+lie 4 lost rows and no added row.  Between `dncg` and `sd1`, which share the
+grid state, 11 rows are lost, 279 are added and 126 matched rows change their
+flux by more than 1%, and every one of them lies within 0.5″ of one of the 81
+added rows (277 of the 279 added rows within 0.15″).  The added rows therefore
+change the per-frame fit only locally.  #1366 alone (`dnc` against `dnp3`, same
+grid) removes 121 rows, adds 1739 and changes 376 fluxes, with 4.1% of the
+removed rows and 4.1% of the added rows within 3″ of an added row.
+
+In the render the grid state changes no leftover count: `dnp3` against `dncg`
+clears none and adds none at ≥ 100 MJy/sr (741 and 742 leftovers ≥ 50 MJy/sr).
+It changes the crater list by one in the masked renders: (2513, 951; depth 210
+MJy/sr, model peak 690) is a big crater of `dnp3` and not of `dncg`, and (6771,
+3357; depth 371, model peak 854) is a big crater of `dncg` and `sd1` and not of
+`dnp3`.  The unmasked render of `dnp3` has three big craters that `dncg` lacks:
+(2513, 951), (2571, 1972) and (9011, 2617), of depth 159 to 210 MJy/sr.
+Against the `dnp3` control, `sd1` shows one new and one lost big crater, both
+more than 11″ from every added row (11.7″ and 12.0″); against `dncg` it shows
+none, so these two come from the grid state.
+
+### What this test does not show
+
+- The added rows are not vetted again.  The leftover and crater counts above
+  are the best case for the added rows; a row that the vetting would drop stays
+  in the catalog.
+- One tile and one band: o105 F212N.  The other tiles of 10678 (o045, o118,
+  o130, o138) and F480M were not run with the added rows, and the S/N values
+  (50 for the exemption, 30 for the relaxed window) were tuned on F212N.
+- No arm contains only one kind of added row, so the share of the exemption and
+  of the relaxed window in the cleared leftovers rests on the position of the
+  nearest added row.
+- A leftover that disappears does not show that its source was a star: a
+  PSF-shaped row also subtracts a PSF-shaped excess.  The crater test is the
+  check against over-subtraction (no new crater at any mask level); it does not
+  separate a faint star from a knot of extended emission.
+- An added row does not always clear the leftover under it: 3 of the 48
+  leftovers with an added row within 0.1″ persist.
+- The added rows leave the 35 big craters of the masked render untouched, so
+  they address leftovers only.  With the edge band `sd1p` still has 652, 125,
+  20 and 0 leftovers at ≥ 50, 100, 200 and 500 MJy/sr.
+
 ## Independent-visit test
 
 `scripts/confirm_keep.py` (`results/confirm_keep_f182m.txt`) applies the rule
@@ -249,15 +439,21 @@ F212N S/N value, because the F182M S/N scale is another one.
 - **Rows or a mask.**  The exemption restores a catalog entry that m6 already
   had.  A mask at the star (the ring tier-2 mask style of #1375) would remove
   the residual without adding a catalog row.
-- **Reach.**  Six leftovers ≥ 200 MJy/sr per tile (of 32 and 35).  The remaining
-  causes need other fixes (#1365, #1366, close-pair handling).
+- **Reach.**  Six leftovers ≥ 200 MJy/sr per tile (of 32 and 35).  In the tile
+  test of o105 F212N the exemption rows together with the relaxed rows of #1376
+  clear 45 of the 194 leftovers ≥ 100 MJy/sr, 20 of them under an exemption row,
+  and the count at ≥ 200 MJy/sr falls from 45 to 34 ([tile-level
+  A/B](#tile-level-ab-on-o105-f212n)).  The remaining causes need other fixes
+  (#1365, #1366, close-pair handling).
 
 ## Not measured
 
-- No full-tile m7 fit, vetting and finalize ran with the exemption on.  The
-  replays stop at the per-frame fit catalog: whether the 53 and 42 added rows
-  survive the merge and the vetting, and the effect on the m7 residual i2d, are
-  unmeasured.
+- The tile-level A/B covers o105 F212N only, with the exemption rows and the
+  relaxed rows of #1376 together.  No vetting or finalize ran with the added
+  rows; the production vetted catalog plus the difference of the merged
+  catalogs stands in for them, so the counts are the best case for the added
+  rows.  The 53 rows of o045, the other tiles and F480M were not run at tile
+  level.
 - One field and band: the S/N and separation values come from gc-treasury
   10678 F212N (two tiles) and the F182M independent-visit test.
 - The leftover scoring script is not part of this repo; the leftover lists
