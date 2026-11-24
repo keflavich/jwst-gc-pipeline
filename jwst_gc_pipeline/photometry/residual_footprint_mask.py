@@ -57,6 +57,17 @@ set of NaN pixels of the residual i2d, read before any of the other masks is app
 are 8-connected to the border of the image; the NaN blobs of saturated cores inside the
 footprint do not count, and the image border itself is the edge of the data.
 
+A sixth, optional setting adds a second ring-zone tier for the fainter rows.  A weakly
+saturated row (a few tens of saturated detector pixels) has a footprint disk of about 5
+mosaic pixels, and the PSF's second bright ring lies 0.16-0.22 arcsec (5-7 F212N mosaic
+pixels) from the star, just outside it, so a model that is too faint or too bright
+there leaves a whole-star residual peak that the disk misses.  A second pair,
+``MERGEDCAT_FOOTPRINT_MASK_RING2_FLUX_MIN`` and ``MERGEDCAT_FOOTPRINT_MASK_RING2_RADIUS_PX``,
+works like the first: rows with ``flux_fit`` of at least the first get a disk of at least
+the second.  A row takes the largest radius among the disk of its saturated area and the
+tiers whose flux it reaches, so the second tier is normally set at a lower flux and a
+smaller radius than the first.
+
 The switch is off unless ``MERGEDCAT_FOOTPRINT_MASK_KFAC`` is a number above 0.
 The next phase of a manual run reads the residual i2d for its i2d seeds and its
 smoothed background map, and the replays in ``SATURATED_PIXEL_HANDLING.md``
@@ -92,6 +103,14 @@ ENV_RING_FLUX_MIN = 'MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN'
 
 #: smallest radius in mosaic pixels of a row that ``ENV_RING_FLUX_MIN`` selects
 ENV_RING_RADIUS_PX = 'MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX'
+
+#: second ring-zone tier, set apart from the first one: rows with ``flux_fit`` of at least
+#: this get a disk of at least ``ENV_RING2_RADIUS_PX``; off unless above 0, and read only
+#: when ``KFAC`` is on
+ENV_RING2_FLUX_MIN = 'MERGEDCAT_FOOTPRINT_MASK_RING2_FLUX_MIN'
+
+#: smallest radius in mosaic pixels of a row that ``ENV_RING2_FLUX_MIN`` selects
+ENV_RING2_RADIUS_PX = 'MERGEDCAT_FOOTPRINT_MASK_RING2_RADIUS_PX'
 
 #: also blank the footprints of the gate-rejected satstar fits that the satstar
 #: stage flagged ``sidelobe_maskable``; an on/off switch, off by default, and read
@@ -176,15 +195,31 @@ def ring_params():
     >= 0, and when the flux is set without a radius above 0 (a ring setting that
     would otherwise change nothing).
     """
+    return _ring_tier(ENV_RING_FLUX_MIN, ENV_RING_RADIUS_PX)
+
+
+def ring2_params():
+    """``(flux_min, radius_px)`` of the second ring-zone tier, ``(None, 0.0)`` when off.
+
+    The same rules as ``ring_params`` for ``MERGEDCAT_FOOTPRINT_MASK_RING2_FLUX_MIN``
+    and ``MERGEDCAT_FOOTPRINT_MASK_RING2_RADIUS_PX``.  The tiers are independent: the
+    second one is on without the first.
+    """
+    return _ring_tier(ENV_RING2_FLUX_MIN, ENV_RING2_RADIUS_PX)
+
+
+def _ring_tier(flux_name, radius_name):
+    """``(flux_min, radius_px)`` read from the environment variables ``flux_name`` and
+    ``radius_name``; ``(None, 0.0)`` while the mask or the tier is off."""
     if mask_params()[0] <= 0.0:
         return None, 0.0
-    flux_min = _env_number(ENV_RING_FLUX_MIN, 0.0)
+    flux_min = _env_number(flux_name, 0.0)
     if flux_min == 0.0:
         return None, 0.0
-    radius = _env_number(ENV_RING_RADIUS_PX, 0.0)
+    radius = _env_number(radius_name, 0.0)
     if radius <= 0.0:
         raise ValueError(
-            f"{ENV_RING_FLUX_MIN}={flux_min:g} needs {ENV_RING_RADIUS_PX} set to "
+            f"{flux_name}={flux_min:g} needs {radius_name} set to "
             f"a number above 0 (the smallest radius, in mosaic pixels, of a row "
             f"at or above that flux)")
     return flux_min, radius
@@ -402,14 +437,14 @@ def mask_disks(sci, x, y, radius):
     return n_before - int(np.count_nonzero(np.isfinite(sci)))
 
 
-def _footprint_disks(satstars, wcs, native, scale, kfac, margin_px,
-                     ring_flux_min, ring_radius_px):
-    """``(x, y, radius, ring_rows)`` of the footprint disks of ``satstars``.
+def _footprint_disks(satstars, wcs, native, scale, kfac, margin_px, tiers):
+    """``(x, y, radius, tier_rows)`` of the footprint disks of ``satstars``.
 
     Pixel coordinates and radii in mosaic pixels of the rows that have a positive
-    finite ``sat_area``, and the number of those whose ``flux_fit`` reaches
-    ``ring_flux_min`` (0 when it is None), whose radius is at least
-    ``ring_radius_px``.
+    finite ``sat_area``.  ``tiers`` is a sequence of ``(flux_min, radius_px)`` pairs
+    (``flux_min`` None for a tier that is off): a row whose ``flux_fit`` reaches
+    ``flux_min`` has a radius of at least ``radius_px``.  ``tier_rows`` has one count
+    per tier, of the rows that reach it (0 for a tier that is off).
     """
     area = np.asarray(satstars['sat_area'], dtype=float)
     rows = np.isfinite(area) & (area > 0)
@@ -418,63 +453,74 @@ def _footprint_disks(satstars, wcs, native, scale, kfac, margin_px,
     else:
         x = y = np.empty(0)
     radius = kfac * np.sqrt(area[rows] / np.pi) * native / scale + margin_px
-    ring_rows = 0
-    if ring_flux_min is not None:
+    tier_rows = []
+    for flux_min, radius_px in tiers:
+        if flux_min is None:
+            tier_rows.append(0)
+            continue
         with np.errstate(invalid='ignore'):
-            ring = np.asarray(satstars['flux_fit'], dtype=float)[rows] >= ring_flux_min
-        radius = np.where(ring, np.maximum(radius, ring_radius_px), radius)
-        ring_rows = int(ring.sum())
-    return np.asarray(x, dtype=float), np.asarray(y, dtype=float), radius, ring_rows
+            reached = np.asarray(satstars['flux_fit'], dtype=float)[rows] >= flux_min
+        radius = np.where(reached, np.maximum(radius, radius_px), radius)
+        tier_rows.append(int(reached.sum()))
+    return np.asarray(x, dtype=float), np.asarray(y, dtype=float), radius, tier_rows
 
 
 def mask_residual_i2d(i2d_path, satstars, filtername, instrument, kfac, margin_px,
-                      ring_flux_min=None, ring_radius_px=0.0, rejected=None):
+                      ring_flux_min=None, ring_radius_px=0.0, rejected=None,
+                      ring2_flux_min=None, ring2_radius_px=0.0):
     """Blank the footprints of ``satstars`` in the SCI plane of ``i2d_path``.
 
     The file is updated in place.  A row without a positive finite ``sat_area``
     has no footprint and is not masked.  With ``ring_flux_min`` set, a row whose
     ``flux_fit`` is at least that has a disk of at least ``ring_radius_px`` mosaic
-    pixels (a row with no ``flux_fit`` or a NaN one is not widened).  ``rejected``
+    pixels (a row with no ``flux_fit`` or a NaN one is not widened); ``ring2_flux_min``
+    and ``ring2_radius_px`` are a second tier of the same kind, and a row takes the
+    largest radius among its footprint disk and the tiers it reaches.  ``rejected``
     (``read_maskable_rejected``) adds the disks of those rows, of the same radius
     and with the same ring-zone extension.  The SCI header records the setting
     (``FPMASKK`` radius factor, ``FPMASKM`` margin in mosaic pixels, ``FPMASKN``
     rows of ``satstars`` masked, ``FPREJN`` rows of ``rejected`` masked when it is
     given, and with the ring extension ``FPRINGF`` flux, ``FPRINGR`` radius in
-    mosaic pixels, ``FPRINGN`` rows of both tables at or above that flux).  Returns
+    mosaic pixels, ``FPRINGN`` rows of both tables at or above that flux; the second
+    tier writes ``FPRNG2F``, ``FPRNG2R`` and ``FPRNG2N`` the same way).  Returns
     a dict with ``rows`` (of ``satstars``), ``rejected_rows`` (0 without
     ``rejected``), ``ring_rows`` (rows at or above ``ring_flux_min``, 0 without
-    the ring extension), ``pixels`` (finite pixels that became NaN), ``finite``
+    the ring extension), ``ring2_rows`` (the same for the second tier),
+    ``pixels`` (finite pixels that became NaN), ``finite``
     (finite pixels before), ``scale`` (arcsec per mosaic pixel) and
     ``radius_p50`` / ``radius_max`` (mosaic pixels, over every disk).
 
     Raises ``FootprintMaskUnavailable``, with the file untouched, when
-    ``ring_flux_min`` is set and ``satstars`` or ``rejected`` has no ``flux_fit``
-    column.
+    ``ring_flux_min`` or ``ring2_flux_min`` is set and ``satstars`` or ``rejected``
+    has no ``flux_fit`` column.
     """
-    if ring_flux_min is not None:
+    tiers = ((ring_flux_min, ring_radius_px), (ring2_flux_min, ring2_radius_px))
+    flux_readers = [name for name, flux in ((ENV_RING_FLUX_MIN, ring_flux_min),
+                                            (ENV_RING2_FLUX_MIN, ring2_flux_min))
+                    if flux is not None]
+    if flux_readers:
         for name, tbl in (('satstar', satstars), ('rejected satstar', rejected)):
             if tbl is not None and 'flux_fit' not in tbl.colnames:
                 raise FootprintMaskUnavailable(
                     f"the {name} catalog has no flux_fit column, which the "
-                    f"ring-zone extension ({ENV_RING_FLUX_MIN}) reads")
+                    f"ring-zone extension ({', '.join(flux_readers)}) reads")
     native = native_pixel_scale_arcsec(filtername, instrument)
     with fits.open(i2d_path, mode='update', memmap=False) as hdul:
         sci = hdul['SCI'].data
         wcs = WCS(hdul['SCI'].header)
         scale = float(np.sqrt(np.prod(proj_plane_pixel_scales(wcs)[:2]))) * 3600.0
-        x, y, radius, ring_rows = _footprint_disks(
-            satstars, wcs, native, scale, kfac, margin_px,
-            ring_flux_min, ring_radius_px)
+        x, y, radius, tier_rows = _footprint_disks(
+            satstars, wcs, native, scale, kfac, margin_px, tiers)
         n_rows = len(x)
         n_rejected = 0
         if rejected is not None:
-            rx, ry, rradius, rring_rows = _footprint_disks(
-                rejected, wcs, native, scale, kfac, margin_px,
-                ring_flux_min, ring_radius_px)
+            rx, ry, rradius, rtier_rows = _footprint_disks(
+                rejected, wcs, native, scale, kfac, margin_px, tiers)
             n_rejected = len(rx)
             x, y = np.concatenate([x, rx]), np.concatenate([y, ry])
             radius = np.concatenate([radius, rradius])
-            ring_rows += rring_rows
+            tier_rows = [a + b for a, b in zip(tier_rows, rtier_rows)]
+        ring_rows, ring2_rows = tier_rows
         pixels = mask_disks(sci, x, y, radius)
         finite = int(np.count_nonzero(np.isfinite(sci))) + pixels
         header = hdul['SCI'].header
@@ -491,10 +537,16 @@ def mask_residual_i2d(i2d_path, satstars, filtername, instrument, kfac, margin_p
             header['FPRINGR'] = (float(ring_radius_px),
                                  'satstar footprint mask: ring radius [mosaic px]')
             header['FPRINGN'] = (ring_rows, 'satstar footprint mask: ring rows')
+        if ring2_flux_min is not None:
+            header['FPRNG2F'] = (float(ring2_flux_min),
+                                 'satstar footprint mask: ring 2 flux_fit min')
+            header['FPRNG2R'] = (float(ring2_radius_px),
+                                 'satstar footprint mask: ring 2 rad [mosaic px]')
+            header['FPRNG2N'] = (ring2_rows, 'satstar footprint mask: ring 2 rows')
         hdul['SCI'].data = sci
         hdul.flush()
     return {'rows': n_rows, 'rejected_rows': n_rejected, 'ring_rows': ring_rows,
-            'pixels': pixels, 'finite': finite, 'scale': scale,
+            'ring2_rows': ring2_rows, 'pixels': pixels, 'finite': finite, 'scale': scale,
             'radius_p50': float(np.median(radius)) if len(radius) else float('nan'),
             'radius_max': float(np.max(radius)) if len(radius) else float('nan')}
 
