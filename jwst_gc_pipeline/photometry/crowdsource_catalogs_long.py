@@ -5169,6 +5169,36 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-seed-round-loose-prom-min", dest="manual_seed_round_loose_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'],
                     help="Prominence floor of the loose-roundness i2d seeds (default 5).")
+    parser.add_option("--manual-seed-round-bright-max", dest="manual_seed_round_bright_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_max'],
+                    help="Also admit i2d residual-seed detections with roundness beyond "
+                         "the tight and loose windows, up to +-x, but only bright and "
+                         "prominent ones that the previous catalog left in the residual: "
+                         "ERR S/N >= --manual-seed-round-bright-snr-min, annulus "
+                         "prominence >= --manual-seed-round-bright-prom-min and "
+                         "residual peak / data peak >= "
+                         "--manual-seed-round-bright-frac-min and width >= "
+                         "--manual-seed-round-bright-width-min.  Applies to the m7 seed "
+                         "only.  Default 0 = off.  A run whose detection image has no "
+                         "ERR plane or whose data co-add is missing gets no such "
+                         "detection.")
+    parser.add_option("--manual-seed-round-bright-snr-min", dest="manual_seed_round_bright_snr_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_snr_min'],
+                    help="ERR S/N floor of the bright-roundness i2d seeds (default 100).")
+    parser.add_option("--manual-seed-round-bright-prom-min", dest="manual_seed_round_bright_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_prom_min'],
+                    help="Prominence floor of the bright-roundness i2d seeds (default 50).")
+    parser.add_option("--manual-seed-round-bright-frac-min", dest="manual_seed_round_bright_frac_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_frac_min'],
+                    help="Floor of the unsubtracted fraction (3x3 peak of the detection image "
+                         "over the 3x3 peak of the data co-add, both background-subtracted) of "
+                         "the bright-roundness i2d seeds (default 0.9).")
+    parser.add_option("--manual-seed-round-bright-width-min", dest="manual_seed_round_bright_width_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_width_min'],
+                    help="Floor of the width across the short axis of a bright-roundness "
+                         "i2d seed, in units of the PSF standard deviation (FWHM / 2.355; "
+                         "default 0.60): a streak or a single-pixel spike is thinner than "
+                         "a star.  0 = no cut.")
     parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_lo'],
                     help="DAOStarFinder sharpness lower bound for the residual seed "

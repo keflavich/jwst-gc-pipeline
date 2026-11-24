@@ -183,6 +183,44 @@ result is unioned with the previous phase's vetted merged catalog and deduped at
 `0.5 × FWHM`. FWHM is per-filter from `reduction/fwhm_table.ecsv` (F210M 2.30,
 F212N 2.34, F480M 2.57 px).
 
+The **bright roundness window** (opt-in, m7 seed only:
+`--manual-seed-round-bright-max=1.5`) goes beyond the loose window for detections
+that no catalog row subtracted.  A detection with roundness up to ±1.5 becomes a
+seed when it passes five tests on the detection image (the m6 residual minus its
+smoothed background): annulus prominence ≥ `--manual-seed-round-bright-prom-min`
+(50); unsubtracted fraction ≥ `--manual-seed-round-bright-frac-min` (0.9) with no
+hole of the data within reach; width across the short axis ≥
+`--manual-seed-round-bright-width-min` (0.60) times the PSF standard deviation
+(FWHM / 2.355); and ERR S/N ≥ `--manual-seed-round-bright-snr-min` (100).  The
+unsubtracted fraction is the 3×3 peak of the detection image over the 3×3 peak of
+the data co-add after the same background subtraction: the part of the source's
+peak that the previous catalog left in the residual.  The S/N and prominence
+tests alone also pass the residual lobes of subtracted stars and the lumps around
+saturated cores; those have a fraction well below 0.9.  The rim of a saturated
+core is unsubtracted too, so a detection within 4 pixels of a hole of 20 or more
+masked pixels (8-connected, which includes the edge of the data) is dropped as
+well; a single masked pixel beside a star does not count.  Thin streaks and
+single-pixel spikes pass the other tests; the width tells them from stars.  It is
+the square root of the smaller eigenvalue of the covariance of the pixel
+positions (weighted by the pixel values) of the pixels at a quarter of the peak
+or above that connect to the peak in a 15 × 15 window, 0 when those are two
+pixels or fewer.  A Gaussian star of the PSF width measures 0.65–0.9 of its
+standard deviation (400 sub-pixel positions at peak S/N 30 and 100, per band); a
+single pixel or a line one pixel wide measures 0, and a compact source narrower
+than the PSF measures less than a star.  Among the Brick candidates that reach
+the width test (five tiles, every ERR S/N), 6 of 37 (F480M) and 11 of 160
+(F212N) measure 0–0.57 and 0–0.58 of the PSF standard deviation and the others
+0.70–1.25 and 0.63–1.87.  In the cutouts most of those 17 are single pixels, or
+lines and bars one or two pixels wide; the few compact blobs among them look
+like the candidates just above the cut, so the cut cannot separate a compact
+source from a faint star.  The ERR S/N floor acts as a flux floor and the ERR
+differs between the bands: of the Brick candidates that pass the other tests,
+27 of 31 (F480M) and 3 of 149 (F212N) pass 100, and 31 and 132 pass 30, so an
+F212N run passes `--manual-seed-round-bright-snr-min 30`.  A run without an ERR
+plane, or without the data co-add at the same grid, gets no such seed.  The seed
+catalog gains a `seed_round_bright` column when the window is on; with it off the
+catalog is unchanged.  Measurements: `docs/evidence/bright_seed_roundness/README.md`.
+
 ### The fit (identical every phase)
 
 Single-pass **BASIC** `photutils.PSFPhotometry` (`_manual_phot_pass`):
@@ -400,6 +438,11 @@ still run after m6.
 | `--manual-seed-round-max` | 0.5 | 0.5 | 0.5 | 0.5 |
 | `--manual-seed-round-loose-max` | 0.0 (off; -1 = AUTO, opt-in) | 0 | 0 | 0 |
 | `--manual-seed-round-loose-prom-min` | 5.0 | 5.0 | 5.0 | 5.0 |
+| `--manual-seed-round-bright-max` | 0.0 (off, m7 seed only; no AUTO) | 0 | 0 | 0 |
+| `--manual-seed-round-bright-snr-min` | 100 | 100 | 100 | 100 |
+| `--manual-seed-round-bright-prom-min` | 50 | 50 | 50 | 50 |
+| `--manual-seed-round-bright-frac-min` | 0.9 | 0.9 | 0.9 | 0.9 |
+| `--manual-seed-round-bright-width-min` | 0.60 | 0.60 | 0.60 | 0.60 |
 | `--manual-seed-sharp-lo` / `-hi` | 0.4 / 1.2 | 0.4 / 1.2 | | |
 | `--manual-struct-noise-x` (`struct_x`) | 0.0 | 0.0 (off) | **1.0** (auto) | **5.0** m12–m4, **3.0** m5–m6 |
 | `--manual-struct-noise-y` (`struct_y`) | 0.0 | 0.0 (off) | **2.0** (auto) | **8.0** all phases |
