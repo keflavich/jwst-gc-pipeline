@@ -10,7 +10,7 @@ import numpy
 import regions
 import numpy as np
 from pathlib import Path
-from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.frame_wcs import GwcsReadError, frame_wcs
 from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
@@ -4509,6 +4509,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     _fp_kfac, _fp_margin = _residual_footprint_mask.mask_params()
     _fp_ring_flux, _fp_ring_px = _residual_footprint_mask.ring_params()
     _fp_rej_on = _residual_footprint_mask.rejected_enabled()
+    _fp_dq_px, _fp_dq_min = _residual_footprint_mask.dqsat_params()
     _fp_on = _residual_footprint_mask.applies_to(iteration_label)
     if _fp_on:
         print(f"mergedcat: the {iteration_label} residual i2d is NaN inside "
@@ -4530,6 +4531,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
               f"{iteration_label} is not in {_residual_footprint_mask.ENV_PASSES} "
               f"({', '.join(_residual_footprint_mask.mask_passes())}); the "
               f"residual i2d is not masked", flush=True)
+    if _fp_on and _fp_dq_px > 0:
+        print(f"mergedcat: the {iteration_label} residual i2d is also NaN within "
+              f"{_fp_dq_px:g} px of every mosaic pixel that a DQ_SATURATED "
+              f"component of >= {_fp_dq_min} detector px of a resampled frame "
+              f"falls on ({_residual_footprint_mask.ENV_DQSAT_PX}, "
+              f"{_residual_footprint_mask.ENV_DQSAT_MIN_PX})", flush=True)
     # The rejected fits are read once, before the renders: a missing column (the
     # satstar stage ran without SATSTAR_SIDELOBE_MASK_FRAC_MIN) is then in the
     # log before the long part, and the mask keeps the consolidated rows only.
@@ -5017,6 +5024,24 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             except (OSError, ValueError) as _e:
                 print(f"WARNING mergedcat: resid i2d footprint mask skipped: "
                       f"{_e}", flush=True)
+        # Opt-in DQ_SATURATED footprint: the saturated pixels of the resampled
+        # frames, dilated.  Its own step, so that a frame it cannot read does not
+        # take the satstar disks with it.
+        if (_fp_on and _fp_dq_px > 0 and outpaths[kind]
+                and os.path.exists(outpaths[kind])):
+            try:
+                _fq = _residual_footprint_mask.mask_residual_dqsat(
+                    outpaths[kind], written[kind], _fp_dq_px, _fp_dq_min)
+                print(f"  [resid i2d DQ_SAT mask] NaN'd {_fq['pixels']} px "
+                      f"({100.0 * _fq['pixels'] / max(_fq['finite'], 1):.2f}% of "
+                      f"the finite ones) within {_fp_dq_px:g} px of "
+                      f"{_fq['flagged']} mosaic px under {_fq['components']} "
+                      f"saturated components of >= {_fp_dq_min} px "
+                      f"({_fq['saturated_pixels']} detector px) in "
+                      f"{_fq['frames']} frames", flush=True)
+            except (OSError, ValueError, KeyError, GwcsReadError) as _e:
+                print(f"WARNING mergedcat: resid i2d DQ_SAT mask skipped: {_e}",
+                      flush=True)
         # also mosaic the merged-catalog MODEL so the CARTA loaders can show
         # data / model / residual / bg side by side.  This is a full 192-frame
         # resample (~20 min); it is display-only (no pipeline logic reads it and
