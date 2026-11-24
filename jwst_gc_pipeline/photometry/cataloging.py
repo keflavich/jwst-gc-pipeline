@@ -1490,11 +1490,13 @@ def _dedup_nonpositive_refit():
 
     On, a fit with ``flux <= 0`` never wins a dedup cluster against a
     positive-flux fit (``_dedup_close_sources(nonpositive_loses=True)``), the
-    survivor that absorbed one is re-fit at its seed by the overshoot refit,
-    and an absorbed non-positive row whose own seed is a separate source stays
-    as its own row and is re-fit at that seed
-    (``_dedup_nonpositive_cluster_rows``).  The rescued row takes the refit's
-    ``qfit`` and ``cfit``: the free fit's are those of a negative flux.  The
+    survivor that absorbed one is re-fit by the overshoot refit pinned at the
+    flux-weighted position of its cluster (``_dedup_net_positions``; its seed
+    when that position is undefined), and an absorbed non-positive row whose
+    own seed is a separate source stays as its own row and is re-fit at that
+    seed (``_dedup_nonpositive_cluster_rows``).  The rescued row takes the
+    refit's ``qfit`` and ``cfit``: the free fit's are those of a negative
+    flux.  The
     refit exists only with ``overshoot_action='refit'``; with another action
     only the winner rule applies.  Parsed like the hand-off switches: a
     malformed value raises ``ValueError`` naming the variable.
@@ -1578,6 +1580,83 @@ def _dedup_nonpositive_cluster_rows(xfit, yfit, flux, xinit, yinit, keep, owner,
         rescue[np.asarray(taken, dtype=np.int64)] = True
     refit |= rescue
     return refit, rescue
+
+
+def _dedup_net_positions(xfit, yfit, flux, keep, owner, survivors,
+                         max_shift_pix=1.0, min_net_frac=0.5):
+    """Flux-weighted position of a survivor with the non-positive rows it
+    absorbed.
+
+    The grouped fit of a star and a partner that converged onto it models one
+    star as ``f1 PSF(p1) + f2 PSF(p2)`` with ``f2 < 0``.  To first order in
+    ``p2 - p1`` this equals a single source of flux ``f1 + f2`` at the
+    flux-weighted centroid ``(f1 p1 + f2 p2) / (f1 + f2)``: the data fix that
+    flux and position and do not fix the split between the two rows.  The
+    survivor's own fitted position differs from the centroid by
+    ``|f2| / (f1 + f2)`` times the separation, toward the partner (0.04 px for
+    the o130 F212N nrca2 exposure-4 pair).  A seed is a catalog position;
+    pinning the survivor at it leaves a dipole in the residual (in the o130
+    F212N mosaic the model centroids of two stars recovered that way lie 0.12
+    and 0.40 px from the data's, with dipoles of 11 and 22 % of the data
+    peak).
+
+    Parameters
+    ----------
+    xfit, yfit, flux : array, shape (N,)
+        Fitted position and flux of every row before the dedup.
+    keep, owner : array, shape (N,)
+        From ``_dedup_close_sources(..., return_owner=True)``.
+    survivors : array of bool, shape (N,)
+        The survivors to place (the non-rescued rows of
+        ``_dedup_nonpositive_cluster_rows``' ``refit``).
+    max_shift_pix : float, optional
+        A net position farther than this from the survivor's own fit is not
+        used (the first-order argument holds for a partner within the dedup
+        separation).
+    min_net_frac : float, optional
+        A net flux at or below this fraction of the survivor's flux is not
+        used: the centroid of a near-zero total is not defined by the data.
+
+    Returns
+    -------
+    xnet, ynet : ndarray, shape (N,)
+        The net position of each survivor with at least one absorbed
+        non-positive row, NaN elsewhere and where a limit above is not met.
+    """
+    keep = np.asarray(keep, dtype=bool)
+    owner = np.asarray(owner, dtype=np.int64)
+    flux = np.asarray(flux, dtype=float)
+    xfit = np.asarray(xfit, dtype=float)
+    yfit = np.asarray(yfit, dtype=float)
+    survivors = np.asarray(survivors, dtype=bool)
+    n = keep.size
+    xnet = np.full(n, np.nan)
+    ynet = np.full(n, np.nan)
+    with np.errstate(invalid='ignore'):
+        gone = (~keep & np.isfinite(flux) & (flux <= 0) & (flux[owner] > 0)
+                & np.isfinite(xfit) & np.isfinite(yfit))
+    b = np.flatnonzero(gone & survivors[owner])
+    if not b.size:
+        return xnet, ynet
+    s = owner[b]
+    uniq = np.unique(s)
+    ok = np.isfinite(xfit[uniq]) & np.isfinite(yfit[uniq])
+    uniq = uniq[ok]
+    total = flux.copy()
+    wx = flux * xfit
+    wy = flux * yfit
+    sel = np.isin(s, uniq)
+    np.add.at(total, s[sel], flux[b[sel]])
+    np.add.at(wx, s[sel], flux[b[sel]] * xfit[b[sel]])
+    np.add.at(wy, s[sel], flux[b[sel]] * yfit[b[sel]])
+    good = total[uniq] > min_net_frac * flux[uniq]
+    uniq = uniq[good]
+    px = wx[uniq] / total[uniq]
+    py = wy[uniq] / total[uniq]
+    near = np.hypot(px - xfit[uniq], py - yfit[uniq]) <= max_shift_pix
+    xnet[uniq[near]] = px[near]
+    ynet[uniq[near]] = py[near]
+    return xnet, ynet
 
 
 # The model images here render each row on a 21x21 stamp and the overshoot
@@ -1831,6 +1910,19 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                     xfit, yfit, flux, res['x_init'], res['y_init'], keep_fit,
                     owner, min_sep_pix=1.0)
                 if np.any(refit_np):
+                    # A survivor is pinned at the flux-weighted position of
+                    # its cluster, not at its seed: the net position is what
+                    # the data constrain (_dedup_net_positions).  Taken
+                    # before the rescued rows are reset below: xfit, yfit and
+                    # flux are views of the table columns, and the partner's
+                    # free fit is what places the net position.
+                    xnet, ynet = _dedup_net_positions(
+                        xfit, yfit, flux, keep_fit, owner,
+                        refit_np & ~rescue_np)
+                    placed = np.isfinite(xnet) & np.isfinite(ynet)
+                    if np.any(placed):
+                        res['x_init'][placed] = xnet[placed]
+                        res['y_init'][placed] = ynet[placed]
                     # A rescued row is its own source again: back at its seed
                     # with no flux, so the model images ignore it until the
                     # overshoot refit below solves it.  Flag bit 4 (flux <= 0)
@@ -1845,9 +1937,11 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                                           + rescue_np.astype(np.int8))
                     keep_fit = keep_fit | rescue_np
                     print(f"[{label}] post-fit dedup: {int(np.sum(refit_np & ~rescue_np))} "
-                          f"survivor(s) absorbed a non-positive-flux fit and "
+                          f"survivor(s) absorbed a non-positive-flux fit "
+                          f"({int(np.sum(placed))} pinned at the net position "
+                          f"of the cluster) and "
                           f"{int(np.sum(rescue_np))} such row(s) with their own "
-                          f"seed stay as rows; all go to the seed refit",
+                          f"seed stay as rows; all go to the refit",
                           flush=True)
         phot.results = phot.results[keep_fit]
         # phot.init_params keeps each survivor's ORIGINAL seed, so after a
@@ -2028,7 +2122,9 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         # and snap x_fit/y_fit back to the seed.  After the post-fit dedup the
         # seed is the one nearest the fit among the rows the dedup merged
         # (#1239), so a neighbour that converged onto this star does not pull
-        # the refit to its own seed.
+        # the refit to its own seed.  A survivor that absorbed a non-positive
+        # row is pinned at the net position of its cluster (DAOPHOT_DEDUP_
+        # NONPOSITIVE).
         res = phot.results
         xseed = (np.asarray(res['x_init'], dtype=float) if 'x_init' in res.colnames
                  else np.asarray(res['x_fit'], dtype=float))

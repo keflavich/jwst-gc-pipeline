@@ -184,6 +184,88 @@ def test_the_helper_needs_no_dedup_when_nothing_was_absorbed():
 
 
 # ---------------------------------------------------------------------------
+# _dedup_net_positions
+# ---------------------------------------------------------------------------
+
+def _net(xfit, yfit, flux, keep, owner, survivors, **kw):
+    return C._dedup_net_positions(
+        np.array(xfit, float), np.array(yfit, float), np.array(flux, float),
+        np.array(keep, bool), np.array(owner), np.array(survivors, bool), **kw)
+
+
+def test_net_position_is_the_flux_weighted_centroid():
+    # the o130 exposure-4 pair: 5.461e4 at (314.97, 725.77) and -1.044e4 at
+    # (314.80, 725.68); the net flux is the 4.417e4 of the m6 catalog
+    xnet, ynet = _net(xfit=[314.97, 314.80], yfit=[725.77, 725.68],
+                      flux=[5.461e4, -1.044e4], keep=[True, False],
+                      owner=[0, 0], survivors=[True, False])
+    net = 5.461e4 - 1.044e4
+    assert xnet[0] == pytest.approx((5.461e4 * 314.97 - 1.044e4 * 314.80) / net)
+    assert ynet[0] == pytest.approx((5.461e4 * 725.77 - 1.044e4 * 725.68) / net)
+    assert np.isnan(xnet[1]) and np.isnan(ynet[1])
+    # the survivor's own fit is displaced from it toward the partner by
+    # |f2| / (f1 + f2) of the separation: 0.04 px here
+    assert 314.97 - xnet[0] == pytest.approx(
+        1.044e4 / net * (314.80 - 314.97))
+    assert abs(314.97 - xnet[0]) == pytest.approx(0.04, abs=0.005)
+
+
+def test_net_position_sums_every_absorbed_non_positive_row():
+    xnet, _ = _net(xfit=[10.0, 10.4, 9.8], yfit=[5.0, 5.0, 5.0],
+                   flux=[1.0e4, -1.0e3, -2.0e3], keep=[True, False, False],
+                   owner=[0, 0, 0], survivors=[True, False, False])
+    assert xnet[0] == pytest.approx(
+        (1.0e4 * 10.0 - 1.0e3 * 10.4 - 2.0e3 * 9.8) / 7.0e3)
+
+
+def test_net_position_ignores_positive_absorbed_rows():
+    # a positive duplicate is another star the dedup discarded, not part of
+    # the survivor's degenerate pair
+    xnet, ynet = _net(xfit=[10.0, 10.3, 10.5], yfit=[5.0, 5.0, 5.0],
+                      flux=[1.0e4, 8.0e3, -1.0e3], keep=[True, False, False],
+                      owner=[0, 0, 0], survivors=[True, False, False])
+    assert xnet[0] == pytest.approx((1.0e4 * 10.0 - 1.0e3 * 10.5) / 9.0e3)
+
+
+def test_net_position_needs_an_absorbed_non_positive_row():
+    xnet, ynet = _net(xfit=[10.0, 10.3], yfit=[5.0, 5.0], flux=[1.0e4, 8.0e3],
+                      keep=[True, False], owner=[0, 0],
+                      survivors=[True, False])
+    assert np.isnan(xnet).all() and np.isnan(ynet).all()
+
+
+def test_net_position_is_only_for_the_listed_survivors():
+    xnet, _ = _net(xfit=[10.0, 10.2], yfit=[5.0, 5.0], flux=[1.0e4, -1.0e3],
+                   keep=[True, False], owner=[0, 0], survivors=[False, False])
+    assert np.isnan(xnet).all()
+
+
+def test_net_position_is_undefined_for_a_near_zero_net_flux():
+    # f1 + f2 is 10 % of f1: the data do not place the centroid of that
+    xnet, _ = _net(xfit=[10.0, 10.6], yfit=[5.0, 5.0], flux=[1.0e4, -9.0e3],
+                   keep=[True, False], owner=[0, 0], survivors=[True, False])
+    assert np.isnan(xnet[0])
+
+
+def test_net_position_beyond_the_shift_limit_is_not_used():
+    args = dict(xfit=[10.0, 10.5], yfit=[5.0, 5.0], flux=[5.0e4, -1.0e4],
+                keep=[True, False], owner=[0, 0], survivors=[True, False])
+    assert np.isfinite(_net(**args)[0][0])
+    assert np.isnan(_net(**args, max_shift_pix=0.05)[0][0])
+
+
+def test_net_position_ignores_non_finite_rows():
+    xnet, _ = _net(xfit=[10.0, 10.4, np.nan], yfit=[5.0, 5.0, 5.0],
+                   flux=[1.0e4, -1.0e3, -1.0e3], keep=[True, False, False],
+                   owner=[0, 0, 0], survivors=[True, False, False])
+    assert xnet[0] == pytest.approx((1.0e4 * 10.0 - 1.0e3 * 10.4) / 9.0e3)
+    xnet, _ = _net(xfit=[np.nan, 10.4], yfit=[5.0, 5.0],
+                   flux=[1.0e4, -1.0e3], keep=[True, False], owner=[0, 0],
+                   survivors=[True, False])
+    assert np.isnan(xnet).all()
+
+
+# ---------------------------------------------------------------------------
 # the switch
 # ---------------------------------------------------------------------------
 
@@ -219,6 +301,15 @@ COMP = (STAR[0] - 2.2, STAR[1])
 COMP_SEED = (COMP[0] - 0.1, COMP[1] + 0.1)
 F_STAR = 2.0e4
 F_COMP = 4.0e3
+# the collapsed free fit: the star reads 1.24 x truth beside a partner of
+# -0.25 x truth 0.2 px away (the o130 exposure-4 degeneracy)
+COLLAPSE_STAR_RATIO = 1.24
+COLLAPSE_PARTNER_RATIO = -0.25
+COLLAPSE_PARTNER_DX = 0.2
+# flux-weighted position of the two rows
+STAR_NET = ((COLLAPSE_STAR_RATIO * STAR[0]
+             + COLLAPSE_PARTNER_RATIO * (STAR[0] + COLLAPSE_PARTNER_DX))
+            / (COLLAPSE_STAR_RATIO + COLLAPSE_PARTNER_RATIO), STAR[1])
 
 
 def _gaussian_grid_psf():
@@ -255,10 +346,11 @@ def _collapse(monkeypatch):
         out = real_call(self, data, **kwargs)
         res = self.results
         res['x_fit'][0], res['y_fit'][0] = STAR
-        res['flux_fit'][0] = 1.24 * F_STAR
+        res['flux_fit'][0] = COLLAPSE_STAR_RATIO * F_STAR
         res['qfit'][0] = 0.007
-        res['x_fit'][1], res['y_fit'][1] = STAR[0] + 0.2, STAR[1]
-        res['flux_fit'][1] = -0.25 * F_STAR
+        res['x_fit'][1], res['y_fit'][1] = (STAR[0] + COLLAPSE_PARTNER_DX,
+                                            STAR[1])
+        res['flux_fit'][1] = COLLAPSE_PARTNER_RATIO * F_STAR
         res['qfit'][1] = -0.025
         res['flags'][1] = int(res['flags'][1]) | 4
         return out
@@ -307,7 +399,7 @@ def test_switch_keeps_the_star_and_its_neighbour(monkeypatch):
     res = _run_pass()
     assert len(res) == 2
     assert 'dedup_refit' not in res.colnames
-    star = _row_at(res, STAR_SEED)
+    star = _row_at(res, STAR_NET)
     comp = _row_at(res, COMP_SEED)
     for row in (star, comp):
         assert bool(row['forced_refit'])
@@ -317,15 +409,34 @@ def test_switch_keeps_the_star_and_its_neighbour(monkeypatch):
     # a sign-flipped cfit; the refit gives it its own
     assert float(comp['qfit']) > 0
     assert np.isfinite(float(comp['cfit']))
-    # Both are pinned at their seeds, and the star's flux is no longer the
-    # inflated 1.24 x truth of the free fit.  The seeds sit 0.2 px (star) and
-    # 0.14 px (neighbour) off the true positions, which at 2.2 px separation
-    # moves light between the two: the refit reads +5 % (star) and +28 %
-    # (neighbour) on this frame.
-    assert (star['x_fit'], star['y_fit']) == pytest.approx(STAR_SEED)
+    # The star is pinned at the flux-weighted position of the two rows of the
+    # collapsed fit (0.05 px from the true position here, 0.2 px for its
+    # seed), the neighbour at its own seed.  The star's flux is no longer the
+    # inflated 1.24 x truth of the free fit: it reads +8 % on this frame,
+    # the neighbour's light in the star's 5x5 box (the neighbour is solved
+    # after the star; pinned at the true position the star reads +7.5 %).
+    # The neighbour's seed sits 0.14 px off its true position, which at
+    # 2.2 px separation moves light between the two: the refit reads +28 %.
+    assert (star['x_fit'], star['y_fit']) == pytest.approx(STAR_NET)
     assert (comp['x_fit'], comp['y_fit']) == pytest.approx(COMP_SEED)
-    assert float(star['flux_fit']) == pytest.approx(F_STAR, rel=0.15)
+    assert float(star['flux_fit']) == pytest.approx(F_STAR, rel=0.10)
     assert float(comp['flux_fit']) == pytest.approx(F_COMP, rel=0.35)
+
+
+def test_switch_pins_the_star_at_its_seed_without_a_net_position(monkeypatch):
+    # With no net position the survivor goes to the refit at its seed, as
+    # before: 0.2 px off the truth, +5 % in flux on this frame.
+    monkeypatch.setenv('DAOPHOT_DEDUP_NONPOSITIVE', '1')
+    monkeypatch.setattr(
+        C, '_dedup_net_positions',
+        lambda xfit, *a, **k: (np.full(len(xfit), np.nan),
+                               np.full(len(xfit), np.nan)))
+    _collapse(monkeypatch)
+    res = _run_pass()
+    assert len(res) == 2
+    star = _row_at(res, STAR_SEED)
+    assert (star['x_fit'], star['y_fit']) == pytest.approx(STAR_SEED)
+    assert float(star['flux_fit']) == pytest.approx(F_STAR, rel=0.15)
 
 
 def test_switch_is_a_no_op_without_a_non_positive_row(monkeypatch):
