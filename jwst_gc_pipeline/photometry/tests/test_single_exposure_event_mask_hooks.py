@@ -34,6 +34,7 @@ NPIX = 160
 @pytest.fixture(autouse=True)
 def _no_cached_masks(monkeypatch):
     monkeypatch.delenv(se.ENV_NEGATIVE, raising=False)
+    monkeypatch.delenv(se.ENV_SPIKE, raising=False)
     L._EVENT_MASK_CACHE.clear()
     yield
     L._EVENT_MASK_CACHE.clear()
@@ -197,6 +198,63 @@ def test_negative_pixel_masks_follow_the_switch_in_the_cache(tmp_path, monkeypat
 def test_negative_pixel_switch_typo_raises_naming_the_variable(tmp_path, monkeypatch):
     monkeypatch.setenv(se.ENV_NEGATIVE, 'many')
     with pytest.raises(ValueError, match=se.ENV_NEGATIVE):
+        L.single_exposure_event_masks([str(tmp_path / 'x.fits')])
+
+
+# --- isolated one-pixel spikes over crf files --------------------------------------
+
+def test_positive_spikes_are_masked_in_their_own_frame_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    files = [_crf_defects(tmp_path / 'f0_crf.fits', 0),
+             _crf_defects(tmp_path / 'f1_crf.fits', 1, [(20, 30, 2000.0, 0)]),
+             _crf_defects(tmp_path / 'f2_crf.fits', 2)]
+    masks = L.single_exposure_event_masks(files)
+    assert list(masks) == [files[1]]
+    assert masks[files[1]].sum() == 9 and masks[files[1]][29:32, 19:22].all()
+    assert ('positive spikes: 1 isolated one-pixel spikes of >= 300 MJy/sr in 1 of 3 '
+            'frames, 9 px set to DO_NOT_USE' in capsys.readouterr().out)
+
+
+def test_positive_spikes_are_tested_with_one_file_where_events_cannot_be(tmp_path, monkeypatch):
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    (f,) = [_crf_defects(tmp_path / 'f0_crf.fits', 0, [(5, 6, 900.0, 0)])]
+    masks = L.single_exposure_event_masks([f])
+    assert list(masks) == [f] and masks[f].sum() == 9 and masks[f][5:8, 4:7].all()
+
+
+def test_event_negative_pixel_and_spike_masks_are_one_mask_per_frame(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV, '1')
+    monkeypatch.setenv(se.ENV_NEGATIVE, '50')
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    files = [_crf_defects(tmp_path / f'f{k}_crf.fits', k,
+                          [(20, 30, -19000.0, 4), (60, 120, 2000.0, 0)] if k == 1 else [],
+                          event=(100, 90) if k == 1 else None)
+             for k in range(3)]
+    masks = L.single_exposure_event_masks(files)
+    assert list(masks) == [files[1]]
+    mask = masks[files[1]]
+    assert mask[30, 20] and mask[90, 100] and mask[119:122, 59:62].all()
+    no_spike = int(mask.sum()) - 9
+    monkeypatch.delenv(se.ENV_SPIKE)
+    L._EVENT_MASK_CACHE.clear()
+    assert int(L.single_exposure_event_masks(files)[files[1]].sum()) == no_spike
+
+
+def test_spike_masks_follow_the_switch_in_the_cache(tmp_path, monkeypatch):
+    files = [_crf_defects(tmp_path / f'f{k}_crf.fits', k,
+                          [(20, 30, 2000.0, 0)] if k == 0 else []) for k in range(2)]
+    assert L.single_exposure_event_masks(files) == {}
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    first = L.single_exposure_event_masks(files)
+    assert list(first) == [files[0]]
+    assert L.single_exposure_event_masks(files) is first
+    monkeypatch.setenv(se.ENV_SPIKE, '1e6')
+    assert L.single_exposure_event_masks(files) == {}
+
+
+def test_spike_switch_typo_raises_naming_the_variable(tmp_path, monkeypatch):
+    monkeypatch.setenv(se.ENV_SPIKE, 'big')
+    with pytest.raises(ValueError, match=se.ENV_SPIKE):
         L.single_exposure_event_masks([str(tmp_path / 'x.fits')])
 
 

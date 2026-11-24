@@ -3188,25 +3188,27 @@ _EVENT_MASK_CACHE = {}
 def single_exposure_event_masks(files):
     """``{path: bool mask}`` of the pixels to drop from per-frame images before
     they are resampled into one mosaic: the single-exposure transients of
-    ``single_exposure_events`` (env ``SINGLE_EXPOSURE_EVENT_MASK``) and the
-    extreme negative pixels (env ``NEGATIVE_PIXEL_MASK_NSIGMA``).
+    ``single_exposure_events`` (env ``SINGLE_EXPOSURE_EVENT_MASK``), the extreme
+    negative pixels (env ``NEGATIVE_PIXEL_MASK_NSIGMA``) and the isolated
+    one-pixel positive spikes (env ``POSITIVE_SPIKE_MASK_MIN_EXCESS``).
 
-    Empty unless one of the two is on.  ``files`` are all the per-frame images
+    Empty unless one of the three is on.  ``files`` are all the per-frame images
     of ONE filter that the mosaic is built from (the original frames, or the
     ``--cutout-region`` crops).  An event is told from a star by the other
     frames at its sky position, so a partial list tests against fewer frames
-    (and one file cannot be tested at all); a negative pixel is judged in its
-    own frame.  Only the frames that carry a masked pixel are keys.  The answer
-    is kept per (file, size, mtime) list and switch state, so the data and the
-    residual mosaic of one run share one detection.
+    (and one file cannot be tested at all); a negative pixel and a spike are
+    judged in their own frame.  Only the frames that carry a masked pixel are
+    keys.  The answer is kept per (file, size, mtime) list and switch state, so
+    the data and the residual mosaic of one run share one detection.
     """
     events_on = _single_exposure_events.event_mask_enabled()
     nsigma = _single_exposure_events.negative_pixel_nsigma()
-    if not (events_on or nsigma):
+    spike_min = _single_exposure_events.positive_spike_min_excess()
+    if not (events_on or nsigma or spike_min):
         return {}
     files = sorted({os.fspath(f) for f in files})
     key = (tuple((f, os.stat(f).st_size, os.stat(f).st_mtime_ns) for f in files),
-           events_on, nsigma)
+           events_on, nsigma, spike_min)
     hit = _EVENT_MASK_CACHE.get(key)
     if hit is not None:
         return hit
@@ -3236,6 +3238,27 @@ def single_exposure_event_masks(files):
         print(f"negative pixels: {n_px} px below -{nsigma:g} ERR in {n_fr} of "
               f"{len(files)} frames set to DO_NOT_USE "
               f"(NEGATIVE_PIXEL_MASK_NSIGMA)", flush=True)
+    if spike_min:
+        t0 = time.time()
+        n_sp = 0
+        n_px = 0
+        n_fr = 0
+        for f in files:
+            with fits.open(f, memmap=False) as hdul:
+                sci = hdul['SCI'].data
+                spikes = _single_exposure_events.find_positive_spikes(
+                    sci, hdul['DQ'].data, spike_min)
+                if not spikes:
+                    continue
+                box = _single_exposure_events.positive_spike_mask(sci.shape, spikes)
+            n_sp += len(spikes)
+            n_px += int(box.sum())
+            n_fr += 1
+            masks[f] = masks[f] | box if f in masks else box
+        print(f"positive spikes: {n_sp} isolated one-pixel spikes of >= {spike_min:g} "
+              f"MJy/sr in {n_fr} of {len(files)} frames, {n_px} px set to "
+              f"DO_NOT_USE ({time.time() - t0:.0f} s) "
+              f"(POSITIVE_SPIKE_MASK_MIN_EXCESS)", flush=True)
     _EVENT_MASK_CACHE.clear()
     _EVENT_MASK_CACHE[key] = masks
     return masks
@@ -4579,8 +4602,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     import threading as _threading
     _save_lock = _threading.Lock()
     # Single-exposure transients (env SINGLE_EXPOSURE_EVENT_MASK, off by default):
-    # the pixels of each frame's fitter input that only that frame sees, and the
-    # extreme negative pixels (env NEGATIVE_PIXEL_MASK_NSIGMA, off by default).
+    # the pixels of each frame's fitter input that only that frame sees, the
+    # extreme negative pixels (env NEGATIVE_PIXEL_MASK_NSIGMA, off by default)
+    # and the isolated one-pixel positive spikes (env POSITIVE_SPIKE_MASK_MIN_EXCESS,
+    # off by default).
     # They are written into the per-frame residual's DQ as DO_NOT_USE, so the
     # residual mosaic does not carry them (see single_exposure_events).
     _event_bad = _event_masks_by_frame(overlapping_frames, pipeline_dir, options)

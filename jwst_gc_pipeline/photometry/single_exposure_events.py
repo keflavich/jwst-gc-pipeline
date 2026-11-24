@@ -38,6 +38,21 @@ The same mosaic builders also drop the extreme negative pixels
 (``negative_pixel_mask``, env ``NEGATIVE_PIXEL_MASK_NSIGMA``): a pixel far below
 the frame's own noise is a detector defect, not sky, and it enters the data
 mosaic and the merged-catalog residual as a one-pixel crater.
+
+Their positive twin is the isolated one-pixel spike (``find_positive_spikes``,
+env ``POSITIVE_SPIKE_MASK_MIN_EXCESS``): one pixel hundreds of MJy/sr over its
+surroundings whose eight neighbours stay at the background and whose DQ carries
+neither SATURATED nor DO_NOT_USE, so it is neither a snowball core nor a pixel
+the pipeline already drops (F480M o130 nrcalong exp00001 pixel (1961, 1452):
+2228 MJy/sr against 28 MJy/sr at the same sky position in the next exposure).
+It enters a six-exposure mosaic at 1/6 of its excess and the merged-catalog
+residual keeps it as a star-sized blob, because no catalog model subtracts it.
+The test needs no other frame: the PSF of a star puts at least 0.3 of its peak
+into the brightest neighbour, a one-pixel spike puts none.  A pixel in the
+noisy halo of a saturated star can also stand over calm neighbours; the excess
+must therefore be at least ``SPIKE_MIN_SIGMA`` times the scatter of the annulus
+the background comes from (halo pixels: 0.2-1.1 sigma, the defects of one
+exposure: 10.8 sigma or more).
 """
 import os
 from dataclasses import dataclass, field
@@ -54,6 +69,26 @@ ENV_FLAG = 'SINGLE_EXPOSURE_EVENT_MASK'
 
 #: environment switch of the extreme-negative-pixel mask; off unless set
 ENV_NEGATIVE = 'NEGATIVE_PIXEL_MASK_NSIGMA'
+
+#: environment switch of the isolated positive spike mask (MJy/sr); off unless set
+ENV_SPIKE = 'POSITIVE_SPIKE_MASK_MIN_EXCESS'
+
+#: the brightest neighbour of a spike rises at most this fraction of the spike's own
+#: excess over the local background; the brightest neighbour of a star is at 0.3 or
+#: more of its peak (the 1.5 micron PSF core, the sharpest of the filters observed)
+SPIKE_ISOLATION = 0.15
+
+#: annulus in pixels of the local background of a spike candidate
+SPIKE_BKG_R_IN = 3.0
+SPIKE_BKG_R_OUT = 8.0
+
+#: a spike also rises at least this many sigma (the MAD-sigma of its annulus) over
+#: the local background: in the noisy halo of a saturated star the annulus scatter is
+#: hundreds of MJy/sr, and a pixel one sigma up whose neighbours happen to be calm is
+#: noise (the same structure sits at the same sky position in the other exposures).
+#: Between 300 MJy/sr and the 0.15 isolation the 10678 tiles give halo pixels at 0.2-1.1
+#: sigma and defects seen in one exposure only at 10.8 sigma or more
+SPIKE_MIN_SIGMA = 5.0
 
 
 def event_mask_enabled():
@@ -328,22 +363,38 @@ def apply_mask_to_dq(dq, mask):
     return out
 
 
+def _env_threshold(name):
+    """The number in environment variable ``name``: ``None`` (off) when unset,
+    blank or 0.  A value that is not a finite number >= 0 raises ``ValueError``
+    naming the variable, so a typo is not read as off."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        value = np.nan
+    if not (np.isfinite(value) and value >= 0.0):
+        raise ValueError(f'{name}={raw!r}: expected a finite number >= 0 '
+                         f'(0 is off)')
+    return value or None
+
+
 def negative_pixel_nsigma():
     """``NEGATIVE_PIXEL_MASK_NSIGMA``: ``None`` (off) when unset, blank or 0;
     otherwise the number of ERR below zero at which a pixel is masked.  A value
     that is not a finite number >= 0 raises ``ValueError`` naming the variable,
     so a typo is not read as off."""
-    raw = os.environ.get(ENV_NEGATIVE)
-    if raw is None or not raw.strip():
-        return None
-    try:
-        nsigma = float(raw)
-    except ValueError:
-        nsigma = np.nan
-    if not (np.isfinite(nsigma) and nsigma >= 0.0):
-        raise ValueError(f'{ENV_NEGATIVE}={raw!r}: expected a finite number >= 0 '
-                         f'(0 is off)')
-    return nsigma or None
+    return _env_threshold(ENV_NEGATIVE)
+
+
+def positive_spike_min_excess():
+    """``POSITIVE_SPIKE_MASK_MIN_EXCESS``: ``None`` (off) when unset, blank or 0;
+    otherwise the excess in MJy/sr over the local background that an isolated
+    one-pixel spike must reach to be masked.  A value that is not a finite
+    number >= 0 raises ``ValueError`` naming the variable, so a typo is not read
+    as off."""
+    return _env_threshold(ENV_SPIKE)
 
 
 def negative_pixel_mask(sci, err, dq, nsigma):
@@ -362,3 +413,62 @@ def negative_pixel_mask(sci, err, dq, nsigma):
     unflagged = (dq & (DO_NOT_USE | SATURATED)) == 0
     with np.errstate(invalid='ignore'):
         return usable & unflagged & (sci < -float(nsigma) * err)
+
+
+def find_positive_spikes(sci, dq, min_excess, isolation=SPIKE_ISOLATION,
+                         bkg_r_in=SPIKE_BKG_R_IN, bkg_r_out=SPIKE_BKG_R_OUT,
+                         min_sigma=SPIKE_MIN_SIGMA):
+    """The isolated one-pixel spikes of one frame, as a list of dicts ``x, y, peak,
+    excess, bkg, sigma, neighbour``.
+
+    A spike is a pixel that is at least ``min_excess`` and at least ``min_sigma``
+    sigma over the local background (the median and MAD-sigma of the finite pixels
+    between ``bkg_r_in`` and ``bkg_r_out`` of it; ``min_sigma`` 0 drops the second
+    condition) and whose brightest neighbour of the eight is at most ``isolation``
+    of that excess over the same background (``neighbour`` is that neighbour's
+    excess).  All nine pixels of the 3x3 box must be finite and carry
+    neither SATURATED nor DO_NOT_USE: a pixel beside a saturated core, a dropped
+    pixel or the edge of the array is not judged, so the rim of a snowball and a
+    star cut by the edge are left to the event test and the satstar handling.
+    A star is never isolated: its PSF puts 0.3 or more of the peak into the
+    brightest neighbour."""
+    sci = np.asarray(sci, dtype=float)
+    dq = np.asarray(dq)
+    usable = np.isfinite(sci) & ((dq & (DO_NOT_USE | SATURATED)) == 0)
+    complete = ndimage.minimum_filter(usable.astype(np.uint8), size=3,
+                                      mode='constant', cval=0) > 0
+    filled = np.where(usable, sci, -np.inf)
+    ring = np.ones((3, 3), dtype=bool)
+    ring[1, 1] = False
+    neighbour_max = ndimage.maximum_filter(filled, footprint=ring, mode='constant',
+                                           cval=-np.inf)
+    # excess - neighbour excess = peak - brightest neighbour, whatever the
+    # background, and it must be at least (1 - isolation) * min_excess
+    with np.errstate(invalid='ignore'):
+        step = filled - neighbour_max
+        pre = complete & (step >= (1.0 - float(isolation)) * float(min_excess))
+    out = []
+    for y, x in zip(*np.nonzero(pre)):
+        bkg, sig = _annulus_stats(sci, x, y, bkg_r_in, bkg_r_out)
+        if not np.isfinite(bkg):
+            continue
+        excess = float(sci[y, x] - bkg)
+        neighbour = float(neighbour_max[y, x] - bkg)
+        if (excess < min_excess or neighbour > isolation * excess
+                or excess < min_sigma * sig):
+            continue
+        out.append(dict(x=float(x), y=float(y), peak=float(sci[y, x]), excess=excess,
+                        bkg=bkg, sigma=sig, neighbour=neighbour))
+    return out
+
+
+def positive_spike_mask(shape, spikes):
+    """Bool mask of the 3x3 boxes around ``spikes`` (the dicts of
+    ``find_positive_spikes``), an array of ``shape``.  A charge that one pixel
+    holds leaks into its neighbours through the inter-pixel capacitance, so the
+    box, not the pixel, is dropped."""
+    mask = np.zeros(shape, dtype=bool)
+    for s in spikes:
+        y, x = int(s['y']), int(s['x'])
+        mask[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2] = True
+    return mask
