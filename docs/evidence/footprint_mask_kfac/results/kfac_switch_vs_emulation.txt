@@ -1,0 +1,7 @@
+# Production KFAC code (residual_footprint_mask.mask_residual_i2d at KFAC 4, MARGIN 2, ring zone flux_fit >= 1e6 to 25 px) on a scratch copy of the production residual i2d of o105 F212N,
+# against the emulation used for the counts in kfac_counts.txt (same disks, same ring zone).
+o105 F212N: masking a copy of the production residual with KFAC 4, margin 2.0, ring zone flux >= 1e6 radius 25 px; 10356 satstar rows
+production summary {'rows': 10356, 'rejected_rows': 0, 'ring_rows': 239, 'pixels': 6757246, 'finite': 51825305, 'scale': 0.03122278484164718, 'radius_p50': 12.976925921688023, 'radius_max': 129.77632141568984}
+NaN pixels: production residual 2365975, masked copy 9123221, emulation 9123221; copy-only 0, emulation-only 0; differing 0; finite values identical: True
+masked fraction of the finite pixels of the production residual: masked copy 13.039%, emulation 13.039%
+header {'FPMASKK': 4.0, 'FPMASKM': 2.0, 'FPMASKN': 10356, 'FPRINGF': 1000000.0, 'FPRINGR': 25.0, 'FPRINGN': 239}

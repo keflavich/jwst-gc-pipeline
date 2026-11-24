@@ -1211,6 +1211,24 @@ these flag sets would remove the footgun of setting them individually.)*
     6 and `FPEDGEN` 2361934 and 382474, the outside pixels of the emulation, and the render
     without the setting has neither card.  The band sets 0.494 and 0.755 % of the finite pixels
     of the unmasked render to NaN.  No full m7 + finalize run with the band exists.
+  - Larger disks (`KFAC` 2, 3 and 4 of `MERGEDCAT_FOOTPRINT_MASK_KFAC`; `residual_footprint_mask`;
+    `docs/evidence/footprint_mask_kfac/README.md`).  Emulation on the production residual i2d (no render flags) of
+    o045, o105, o118, o130 and o138 in F212N and F480M, with the ring zone and the DQ_SAT dilation of the bullets above
+    (`RING_FLUX_MIN` 1e6, `RING_RADIUS_PX` 25 and 20, `DQSAT_PX` 4 and 3).  Per tile, `KFAC` 1 -> 4: craters deeper than
+    50 MJy/sr 110-280 -> 35-105 (F212N) and 10-35 -> 6-23 (F480M); whole-star leftovers above
+    200 MJy/sr 13-65 -> 8-38 and 17-24 -> 11-19; masked fraction of the finite pixels
+    1.0-3.2 % -> 4.0-15.2 % (F212N) and 1.8-4.5 % -> 7.2-22.9 % (F480M).  From `KFAC` 3 to 4 F212N loses
+    8-35 more craters deeper than 50 MJy/sr per tile for 1.4-5.3 percentage points of area, F480M
+    0-1 craters and 0-3 leftovers above 200 MJy/sr for 2.5-8.3 percentage points, so `KFAC` 3
+    (4.7-14.6 % of an F480M tile masked) is the cheaper F480M setting.  At `KFAC` 4 the F212N craters deeper than 500 MJy/sr
+    number 5-7 per tile (30 over the five tiles), and 28 of those 30 have a depth of more than twice the model peak (the data are
+    deeper than the model there).  The render of o105 F212N with `SINGLE_EXPOSURE_EVENT_MASK=1 NEGATIVE_PIXEL_MASK_NSIGMA=50
+    MERGE_ROW_RESID_SUPPORT_MIN=0.3` has 0 craters deeper than 500 MJy/sr at `KFAC` 4 (6 in the production render) and the same leftovers
+    above 200 MJy/sr.  The switch at `KFAC` 4 and `MARGIN_PX` 2 with the ring zone sets the same 9123221 NaN pixels as the emulation on o105
+    F212N (none in only one) and every finite value is identical.  A radial profile correction of the satstar model (median residual / model in
+    1-pixel annuli, six flux bins, subtracted within 14 or 30 pixels; o045 and o105 F212N) leaves the craters deeper than 200 MJy/sr under the `KFAC` 4 mask at
+    18 and 9.  The disks hide pixels; the model, the catalogs and the photometry do not change.
+    No full m7 + finalize run at `KFAC` 4 exists.
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
@@ -1363,7 +1381,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `MIRI_DAOPHOT_PROM_ROBUST` | 0 | neighbour-robust prominence on the daophot side |
 | `MIRI_EDGE_DETECT_MARGIN` | 8 | detection margin at the detector edge |
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
-| `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section) |
+| `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section); `KFAC` 4 with the ring zone and the DQ_SAT dilation masks 4.0-15.2 % (F212N) and 7.2-22.9 % (F480M) of the finite pixels of a tile (`docs/evidence/footprint_mask_kfac/README.md`) |
 | `MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN` / `MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX` | off / none | with the footprint mask on: a row of the consolidated satstar catalog with `flux_fit` of at least `RING_FLUX_MIN` gets a disk of at least `RING_RADIUS_PX` mosaic pixels (the ring craters lie 12-20 pixels out); off unless `KFAC` and `RING_FLUX_MIN` are above 0, and `RING_RADIUS_PX` has no default and must then be above 0; a bad value raises before any residual is rendered; the SCI header records `FPRINGF`, `FPRINGR`, `FPRINGN` (guards section) |
 | `MERGEDCAT_FOOTPRINT_MASK_REJECTED` | off | with the footprint mask on: also NaN the disks (same radius, same ring-zone extension) of the gate-rejected satstar fits whose `sidelobe_maskable` is true in the `*_satstar_rejected.fits` the merge reads (observation scope, phase of the pass, frame variants of its frames; `skycoord_fit` re-projected through each frame's current GWCS); `1/true/yes/on` or `0/false/no/off`, anything else raises before any residual is rendered; not read while `KFAC` is off; rows are marked by `SATSTAR_SIDELOBE_MASK_FRAC_MIN` in the satstar stage, and a missing column warns and keeps the consolidated rows' mask; the SCI header records `FPREJN` (guards section) |
 | `SATSTAR_DAO_RESTORE_FRAC_MIN` / `SATSTAR_DAO_RESTORE_FRAC_MAX` / `SATSTAR_DAO_RESTORE_SEP_MAX_ARCSEC` / `SATSTAR_DAO_RESTORE_NEIGHBOUR_MIN_ARCSEC` | off / 1.25 / 0.03 / 0.1 | keep the daophot row a satstar overwrote when the in-field dedup would drop the satstar row: recorded flux in [`FRAC_MIN`, `FRAC_MAX`) of the satstar's, recorded position within `SEP_MAX_ARCSEC` of the satstar, no surviving satstar row within `NEIGHBOUR_MIN_ARCSEC` of it (0 turns that check off); off unless `FRAC_MIN` is above 0 (the other three are then not read); needs a merge that ran with the switch on (`satstar_dao_*` columns, section 6); a bad value raises at the start of `run_manual_pipeline` and `merge_individual_frames` |
