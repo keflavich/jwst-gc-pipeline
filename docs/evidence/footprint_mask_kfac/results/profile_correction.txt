@@ -1,0 +1,88 @@
+# Radial profile correction of the satstar model in the production residual i2d (o045 and o105 F212N), then the footprint mask at KFAC 1 and 4 (ring zone, DQ_SAT dilation 4 px).
+# prod = production residual i2d.  pc14: correction within 14 px of every satstar row with flux_fit >= 1e5, tapered to zero at 16 px;  pc30: 30 px, taper to zero at 34 px.
+# The correction subtracts rho(r; F) x (the star's own median model profile x flux_fit); rho(r; F) = median(residual / model) in 1-px annuli of the isolated satstar rows of six flux bins (>= 8 rows per bin),
+# interpolated in log10(flux_fit).  Same leftover and crater definitions as kfac_counts.txt.
+
+## no mask
+o045 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+prod                                   1085      376      190      140      123      554    220     84      18  | NOT_IN_M7_CATALOG 31, SATSTAR_NEAR 141, VETTED_BUT_UNSUBTRACTED 15, VETTED_OUT 3
+pc14                                   1071      371      192      140      122      611    246     97      18  | NOT_IN_M7_CATALOG 31, SATSTAR_NEAR 143, VETTED_BUT_UNSUBTRACTED 15, VETTED_OUT 3
+pc30                                    979      359      194      141      122      557    239     97      17  | NOT_IN_M7_CATALOG 33, SATSTAR_NEAR 143, VETTED_BUT_UNSUBTRACTED 15, VETTED_OUT 3
+## footprint mask (disks + ring zone + DQ_SAT dilation 4 px)
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4kf1mkr1e6x25                         971      239       65       15        4      272     59     10       4  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 41, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 2
+dq4pc14kf1mkr1e6x25                     953      231       64       15        4      299     64     10       4  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 40, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 2
+dq4pc30kf1mkr1e6x25                     858      222       63       15        4      253     70     11       4  | NOT_IN_M7_CATALOG 17, SATSTAR_NEAR 38, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 2
+dq4kf4mkr1e6x25                         794      169       38        7        1       83     18      7       4  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 18, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4pc14kf4mkr1e6x25                     794      169       38        7        1       83     18      7       4  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 18, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4pc30kf4mkr1e6x25                     718      162       36        7        1       79     18      7       4  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 18, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 0
+
+## no mask
+o105 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+prod                                    845      317      178      133      116      489    166     71      20  | NOT_IN_M7_CATALOG 24, SATSTAR_NEAR 122, VETTED_BUT_UNSUBTRACTED 22, VETTED_OUT 10
+pc14                                    832      313      177      132      115      524    174     73      20  | NOT_IN_M7_CATALOG 24, SATSTAR_NEAR 121, VETTED_BUT_UNSUBTRACTED 22, VETTED_OUT 10
+pc30                                    751      301      174      131      114      459    168     70      19  | NOT_IN_M7_CATALOG 24, SATSTAR_NEAR 118, VETTED_BUT_UNSUBTRACTED 22, VETTED_OUT 10
+## footprint mask (disks + ring zone + DQ_SAT dilation 4 px)
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4kf1mkr1e6x25                         748      201       48        6        3      280     44      9       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 31, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4pc14kf1mkr1e6x25                     730      191       47        6        3      303     45      9       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 30, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4pc30kf1mkr1e6x25                     653      184       46        6        3      244     47     10       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 29, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf4mkr1e6x25                         593      127       31        3        1      105      9      6       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 14, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4pc14kf4mkr1e6x25                     593      127       31        3        1      105      9      6       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 14, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4pc30kf4mkr1e6x25                     539      124       31        3        1       92      9      6       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 14, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+
+## rho(r) and the own-star profile (job logs)
+# pctile_pct_045_14
+######## o045 F212N profile correction RCORR=14 RTAPER=16
+11572 satstars; isolated with flux >= 100000: 1822 (fit all)
+  bin 1e+05-2e+05: 774 stars, median log10 flux 5.14; rho(r=0.5..13.5) = -0.013 -0.011 -0.013 0.018 0.020 0.140 0.409 0.347 0.228 0.311 0.550 0.884 0.861 0.731
+  bin 2e+05-5e+05: 524 stars, median log10 flux 5.47; rho(r=0.5..13.5) = -0.021 -0.013 -0.011 0.007 0.007 0.082 0.277 0.231 0.153 0.202 0.365 0.618 0.566 0.476
+  bin 5e+05-1e+06: 207 stars, median log10 flux 5.86; rho(r=0.5..13.5) = -0.046 -0.052 -0.060 -0.035 -0.009 0.064 0.215 0.165 0.107 0.136 0.251 0.454 0.358 0.273
+  bin 1e+06-2e+06: 133 stars, median log10 flux 6.16; rho(r=0.5..13.5) = -0.069 -0.070 -0.123 -0.106 -0.028 0.060 0.211 0.144 0.086 0.103 0.195 0.362 0.283 0.177
+  bin 2e+06-5e+06: 137 stars, median log10 flux 6.48; rho(r=0.5..13.5) = -0.115 -0.024 -0.059 -0.092 -0.085 0.003 0.194 0.127 0.065 0.075 0.149 0.301 0.203 0.084
+  bin 5e+06-1e+13: 47 stars, median log10 flux 6.84; rho(r=0.5..13.5) = 0.001 0.001 -0.020 -0.039 -0.060 0.014 0.190 0.117 0.063 0.076 0.155 0.289 0.184 0.069
+own-star model profile (ppm of flux) r=0.5..: 74038 31535 5418 2811 2002 508 183 207 352 214 109 61 53 59
+corrected 2053 stars; pixels touched 1626947; corr p1/p50/p99 on touched = [-686.5145105     8.90642166  116.07616028]
+######## o045 F212N K=1 src=pc14
+######## o045 F212N K=4 src=pc14
+# pctile_pct_045_30
+######## o045 F212N profile correction RCORR=30 RTAPER=34
+11572 satstars; isolated with flux >= 100000: 1130 (fit all)
+  bin 1e+05-2e+05: 430 stars, median log10 flux 5.14; rho(r=0.5..29.5) = -0.010 -0.008 -0.010 0.019 0.023 0.140 0.427 0.356 0.232 0.318 0.569 0.939 0.933 0.794 0.755 0.768 0.825 1.010 1.073 1.018 1.151 1.335 1.571 1.770 1.810 1.881 1.882 1.857 1.786 1.833
+  bin 2e+05-5e+05: 307 stars, median log10 flux 5.47; rho(r=0.5..29.5) = -0.018 -0.011 -0.008 0.010 0.009 0.085 0.289 0.236 0.155 0.206 0.375 0.637 0.592 0.496 0.486 0.476 0.518 0.646 0.690 0.668 0.763 0.885 1.057 1.210 1.284 1.339 1.263 1.235 1.217 1.306
+  bin 5e+05-1e+06: 132 stars, median log10 flux 5.86; rho(r=0.5..29.5) = -0.041 -0.049 -0.057 -0.034 -0.006 0.066 0.223 0.165 0.109 0.137 0.256 0.444 0.357 0.273 0.237 0.228 0.260 0.321 0.371 0.372 0.459 0.510 0.615 0.731 0.820 0.846 0.762 0.744 0.727 0.780
+  bin 1e+06-2e+06: 97 stars, median log10 flux 6.17; rho(r=0.5..29.5) = -0.068 -0.069 -0.121 -0.106 -0.024 0.069 0.225 0.152 0.091 0.112 0.197 0.369 0.294 0.179 0.148 0.134 0.151 0.200 0.230 0.243 0.309 0.339 0.405 0.488 0.557 0.561 0.474 0.459 0.476 0.522
+  bin 2e+06-5e+06: 123 stars, median log10 flux 6.50; rho(r=0.5..29.5) = -0.119 -0.020 -0.056 -0.090 -0.083 0.006 0.200 0.129 0.066 0.077 0.154 0.306 0.203 0.085 0.059 0.047 0.060 0.089 0.107 0.128 0.193 0.209 0.235 0.284 0.323 0.306 0.266 0.258 0.275 0.315
+  bin 5e+06-1e+13: 41 stars, median log10 flux 6.84; rho(r=0.5..29.5) = 0.001 0.001 -0.017 -0.035 -0.058 0.022 0.193 0.121 0.067 0.080 0.157 0.292 0.184 0.076 0.041 0.021 0.037 0.055 0.066 0.097 0.147 0.156 0.153 0.190 0.216 0.200 0.151 0.135 0.160 0.202
+own-star model profile (ppm of flux) r=0.5..: 74157 31412 5412 2820 2007 507 180 204 349 211 105 57 49 55 59 55 51 42 38 41 37 30 23 20 19 18 19 19 20 19
+corrected 2053 stars; pixels touched 6933660; corr p1/p50/p99 on touched = [-13.15949797   6.67346716  53.95820446]
+######## o045 F212N K=1 src=pc30
+######## o045 F212N K=4 src=pc30
+# pctile_pct_105_14
+######## o105 F212N profile correction RCORR=14 RTAPER=16
+10356 satstars; isolated with flux >= 100000: 1574 (fit all)
+  bin 1e+05-2e+05: 724 stars, median log10 flux 5.13; rho(r=0.5..13.5) = -0.008 -0.006 -0.011 0.017 0.021 0.137 0.405 0.349 0.236 0.319 0.565 0.942 0.938 0.789
+  bin 2e+05-5e+05: 429 stars, median log10 flux 5.45; rho(r=0.5..13.5) = -0.015 -0.007 -0.008 0.008 0.006 0.079 0.267 0.228 0.154 0.202 0.368 0.635 0.579 0.503
+  bin 5e+05-1e+06: 192 stars, median log10 flux 5.85; rho(r=0.5..13.5) = -0.044 -0.045 -0.058 -0.031 -0.009 0.066 0.223 0.172 0.110 0.139 0.253 0.435 0.363 0.279
+  bin 1e+06-2e+06: 113 stars, median log10 flux 6.16; rho(r=0.5..13.5) = -0.061 -0.061 -0.106 -0.093 -0.020 0.073 0.218 0.148 0.089 0.108 0.193 0.351 0.269 0.167
+  bin 2e+06-5e+06: 87 stars, median log10 flux 6.43; rho(r=0.5..13.5) = -0.114 -0.029 -0.064 -0.102 -0.082 0.018 0.225 0.127 0.069 0.078 0.157 0.304 0.207 0.090
+  bin 5e+06-1e+13: 29 stars, median log10 flux 6.90; rho(r=0.5..13.5) = -0.013 -0.013 0.002 -0.028 -0.045 0.056 0.215 0.129 0.070 0.090 0.182 0.332 0.229 0.096
+own-star model profile (ppm of flux) r=0.5..: 74096 31464 5361 2771 1991 499 181 205 350 212 106 59 51 58
+corrected 1746 stars; pixels touched 1388342; corr p1/p50/p99 on touched = [-500.54115112    8.59878588  118.96329254]
+######## o105 F212N K=1 src=pc14
+######## o105 F212N K=4 src=pc14
+# pctile_pct_105_30
+######## o105 F212N profile correction RCORR=30 RTAPER=34
+10356 satstars; isolated with flux >= 100000: 1038 (fit all)
+  bin 1e+05-2e+05: 439 stars, median log10 flux 5.13; rho(r=0.5..29.5) = -0.006 -0.004 -0.010 0.019 0.022 0.141 0.424 0.359 0.240 0.334 0.591 1.016 1.027 0.863 0.825 0.823 0.900 1.112 1.167 1.105 1.245 1.480 1.768 1.980 2.077 2.147 2.084 2.046 2.048 2.139
+  bin 2e+05-5e+05: 275 stars, median log10 flux 5.45; rho(r=0.5..29.5) = -0.013 -0.004 -0.005 0.011 0.008 0.080 0.269 0.232 0.155 0.204 0.379 0.663 0.627 0.535 0.508 0.517 0.563 0.698 0.762 0.736 0.846 0.989 1.178 1.401 1.540 1.556 1.461 1.470 1.399 1.536
+  bin 5e+05-1e+06: 134 stars, median log10 flux 5.84; rho(r=0.5..29.5) = -0.039 -0.043 -0.059 -0.031 -0.007 0.071 0.227 0.174 0.114 0.143 0.263 0.450 0.383 0.284 0.250 0.240 0.281 0.335 0.386 0.402 0.487 0.555 0.667 0.800 0.899 0.935 0.842 0.796 0.817 0.895
+  bin 1e+06-2e+06: 91 stars, median log10 flux 6.16; rho(r=0.5..29.5) = -0.059 -0.059 -0.101 -0.090 -0.020 0.074 0.222 0.149 0.091 0.110 0.201 0.354 0.272 0.171 0.147 0.132 0.146 0.195 0.221 0.245 0.311 0.350 0.401 0.481 0.548 0.572 0.510 0.462 0.479 0.540
+  bin 2e+06-5e+06: 73 stars, median log10 flux 6.44; rho(r=0.5..29.5) = -0.121 -0.025 -0.055 -0.099 -0.078 0.021 0.225 0.133 0.071 0.080 0.163 0.309 0.217 0.093 0.075 0.056 0.075 0.095 0.115 0.131 0.200 0.220 0.243 0.297 0.343 0.342 0.279 0.268 0.275 0.336
+  bin 5e+06-1e+13: 26 stars, median log10 flux 6.95; rho(r=0.5..29.5) = -0.013 -0.013 0.005 -0.027 -0.041 0.057 0.221 0.138 0.071 0.097 0.183 0.342 0.248 0.119 0.078 0.045 0.046 0.059 0.063 0.093 0.149 0.168 0.148 0.181 0.225 0.185 0.142 0.125 0.148 0.185
+own-star model profile (ppm of flux) r=0.5..: 74076 31387 5363 2773 1985 496 178 202 347 208 102 55 47 54 58 53 50 40 37 39 36 29 22 19 18 17 18 18 18 17
+corrected 1746 stars; pixels touched 5969442; corr p1/p50/p99 on touched = [-7.32936319  6.75417566 53.47954502]
+######## o105 F212N K=1 src=pc30
+######## o105 F212N K=4 src=pc30

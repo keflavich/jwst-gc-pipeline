@@ -1,0 +1,137 @@
+# Masked area and vetted rows under the masked pixels, production residual i2d with the footprint mask at KFAC 1-4 (5 for o105 F212N).
+# masked px = pixels finite in the production residual i2d and NaN in the tag (% of the finite production pixels); rows = vetted-catalog rows whose pixel is masked
+# (% of the vetted rows that fall on a finite production pixel); flux>=1e5 and 1e6: the same for the bright rows (the vetted flux of a saturated star is its satstar flux_fit).
+# Tags: kf<K>mkr1e6x<R> = disks + ring zone only;  dq<D>kf... = + DQ_SAT dilation;  ee<W>dq... = + edge band.  F212N: R 25, D 4, W 8.  F480M: R 20, D 3, W 6.
+o045 F212N: 51827751 finite production pixels; 582722 vetted rows, 582499 on a finite production pixel; rows with flux >= 1e5: 1888, >= 1e6: 154
+kf1mkr1e6x25                 masked px   1508907 =   2.91%  rows   13976 =  2.40%  flux>=1e+05: 1883/1888 =  99.7%  flux>=1e+06: 154/154 = 100.0%
+dq4kf1mkr1e6x25              masked px   1673979 =   3.23%  rows   15607 =  2.68%  flux>=1e+05: 1883/1888 =  99.7%  flux>=1e+06: 154/154 = 100.0%
+ee8dq4kf1mkr1e6x25           masked px   1925434 =   3.72%  rows   18176 =  3.12%  flux>=1e+05: 1884/1888 =  99.8%  flux>=1e+06: 154/154 = 100.0%
+kf2mkr1e6x25                 masked px   2878205 =   5.55%  rows   19557 =  3.36%  flux>=1e+05: 1883/1888 =  99.7%  flux>=1e+06: 154/154 = 100.0%
+dq4kf2mkr1e6x25              masked px   3011361 =   5.81%  rows   21046 =  3.61%  flux>=1e+05: 1883/1888 =  99.7%  flux>=1e+06: 154/154 = 100.0%
+ee8dq4kf2mkr1e6x25           masked px   3258204 =   6.29%  rows   23595 =  4.05%  flux>=1e+05: 1884/1888 =  99.8%  flux>=1e+06: 154/154 = 100.0%
+kf3mkr1e6x25                 masked px   4992565 =   9.63%  rows   34738 =  5.96%  flux>=1e+05: 1884/1888 =  99.8%  flux>=1e+06: 154/154 = 100.0%
+dq4kf3mkr1e6x25              masked px   5111931 =   9.86%  rows   36120 =  6.20%  flux>=1e+05: 1884/1888 =  99.8%  flux>=1e+06: 154/154 = 100.0%
+ee8dq4kf3mkr1e6x25           masked px   5352585 =  10.33%  rows   38635 =  6.63%  flux>=1e+05: 1885/1888 =  99.8%  flux>=1e+06: 154/154 = 100.0%
+kf4mkr1e6x25                 masked px   7764376 =  14.98%  rows   58054 =  9.97%  flux>=1e+05: 1885/1888 =  99.8%  flux>=1e+06: 154/154 = 100.0%
+dq4kf4mkr1e6x25              masked px   7870499 =  15.19%  rows   59304 = 10.18%  flux>=1e+05: 1885/1888 =  99.8%  flux>=1e+06: 154/154 = 100.0%
+ee8dq4kf4mkr1e6x25           masked px   8103849 =  15.64%  rows   61753 = 10.60%  flux>=1e+05: 1886/1888 =  99.9%  flux>=1e+06: 154/154 = 100.0%
+o105 F212N: 51825305 finite production pixels; 522372 vetted rows, 522224 on a finite production pixel; rows with flux >= 1e5: 1637, >= 1e6: 133
+kf1mkr1e6x25                 masked px   1245111 =   2.40%  rows   12208 =  2.34%  flux>=1e+05: 1636/1637 =  99.9%  flux>=1e+06: 133/133 = 100.0%
+dq4kf1mkr1e6x25              masked px   1412536 =   2.73%  rows   13712 =  2.63%  flux>=1e+05: 1636/1637 =  99.9%  flux>=1e+06: 133/133 = 100.0%
+ee8dq4kf1mkr1e6x25           masked px   1664008 =   3.21%  rows   15986 =  3.06%  flux>=1e+05: 1636/1637 =  99.9%  flux>=1e+06: 133/133 = 100.0%
+kf2mkr1e6x25                 masked px   2477828 =   4.78%  rows   16847 =  3.23%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+dq4kf2mkr1e6x25              masked px   2619646 =   5.05%  rows   18256 =  3.50%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+ee8dq4kf2mkr1e6x25           masked px   2866782 =   5.53%  rows   20513 =  3.93%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+kf3mkr1e6x25                 masked px   4335607 =   8.37%  rows   28671 =  5.49%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+dq4kf3mkr1e6x25              masked px   4467563 =   8.62%  rows   30015 =  5.75%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+ee8dq4kf3mkr1e6x25           masked px   4709292 =   9.09%  rows   32238 =  6.17%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+kf4mkr1e6x25                 masked px   6757246 =  13.04%  rows   46878 =  8.98%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+dq4kf4mkr1e6x25              masked px   6879229 =  13.27%  rows   48138 =  9.22%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+ee8dq4kf4mkr1e6x25           masked px   7114732 =  13.73%  rows   50319 =  9.64%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+kf5mkr1e6x25                 masked px   9696180 =  18.71%  rows   71993 = 13.79%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+dq4kf5mkr1e6x25              masked px   9807889 =  18.92%  rows   73158 = 14.01%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+ee8dq4kf5mkr1e6x25           masked px  10036062 =  19.37%  rows   75280 = 14.42%  flux>=1e+05: 1637/1637 = 100.0%  flux>=1e+06: 133/133 = 100.0%
+o118 F212N: 51826881 finite production pixels; 298329 vetted rows, 298253 on a finite production pixel; rows with flux >= 1e5: 569, >= 1e6: 43
+kf1mkr1e6x25                 masked px    447506 =   0.86%  rows    3784 =  1.27%  flux>=1e+05: 568/569 =  99.8%  flux>=1e+06: 43/43 = 100.0%
+dq4kf1mkr1e6x25              masked px    608566 =   1.17%  rows    4582 =  1.54%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+ee8dq4kf1mkr1e6x25           masked px    861740 =   1.66%  rows    6001 =  2.01%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+kf2mkr1e6x25                 masked px    872575 =   1.68%  rows    4647 =  1.56%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+dq4kf2mkr1e6x25              masked px   1022479 =   1.97%  rows    5424 =  1.82%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+ee8dq4kf2mkr1e6x25           masked px   1274284 =   2.46%  rows    6840 =  2.29%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+kf3mkr1e6x25                 masked px   1540008 =   2.97%  rows    7005 =  2.35%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+dq4kf3mkr1e6x25              masked px   1687109 =   3.26%  rows    7773 =  2.61%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+ee8dq4kf3mkr1e6x25           masked px   1936771 =   3.74%  rows    9182 =  3.08%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+kf4mkr1e6x25                 masked px   2440316 =   4.71%  rows   10903 =  3.66%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+dq4kf4mkr1e6x25              masked px   2584118 =   4.99%  rows   11659 =  3.91%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+ee8dq4kf4mkr1e6x25           masked px   2830621 =   5.46%  rows   13055 =  4.38%  flux>=1e+05: 569/569 = 100.0%  flux>=1e+06: 43/43 = 100.0%
+o130 F212N: 51826720 finite production pixels; 252457 vetted rows, 252405 on a finite production pixel; rows with flux >= 1e5: 512, >= 1e6: 38
+kf1mkr1e6x25                 masked px    353755 =   0.68%  rows    3083 =  1.22%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+dq4kf1mkr1e6x25              masked px    521178 =   1.01%  rows    3916 =  1.55%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+ee8dq4kf1mkr1e6x25           masked px    774488 =   1.49%  rows    5013 =  1.99%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+kf2mkr1e6x25                 masked px    701180 =   1.35%  rows    3652 =  1.45%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+dq4kf2mkr1e6x25              masked px    859325 =   1.66%  rows    4463 =  1.77%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+ee8dq4kf2mkr1e6x25           masked px   1111658 =   2.14%  rows    5558 =  2.20%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+kf3mkr1e6x25                 masked px   1230694 =   2.37%  rows    5332 =  2.11%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+dq4kf3mkr1e6x25              masked px   1384790 =   2.67%  rows    6128 =  2.43%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+ee8dq4kf3mkr1e6x25           masked px   1635363 =   3.16%  rows    7219 =  2.86%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+kf4mkr1e6x25                 masked px   1944550 =   3.75%  rows    7996 =  3.17%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+dq4kf4mkr1e6x25              masked px   2095045 =   4.04%  rows    8772 =  3.48%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+ee8dq4kf4mkr1e6x25           masked px   2343274 =   4.52%  rows    9856 =  3.90%  flux>=1e+05: 511/512 =  99.8%  flux>=1e+06: 38/38 = 100.0%
+o138 F212N: 51827646 finite production pixels; 474369 vetted rows, 474235 on a finite production pixel; rows with flux >= 1e5: 947, >= 1e6: 92
+kf1mkr1e6x25                 masked px    742643 =   1.43%  rows    5888 =  1.24%  flux>=1e+05: 945/947 =  99.8%  flux>=1e+06: 92/92 = 100.0%
+dq4kf1mkr1e6x25              masked px    902178 =   1.74%  rows    7264 =  1.53%  flux>=1e+05: 945/947 =  99.8%  flux>=1e+06: 92/92 = 100.0%
+ee8dq4kf1mkr1e6x25           masked px   1154743 =   2.23%  rows    9400 =  1.98%  flux>=1e+05: 945/947 =  99.8%  flux>=1e+06: 92/92 = 100.0%
+kf2mkr1e6x25                 masked px   1352789 =   2.61%  rows    7697 =  1.62%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+dq4kf2mkr1e6x25              masked px   1495577 =   2.89%  rows    9010 =  1.90%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+ee8dq4kf2mkr1e6x25           masked px   1745814 =   3.37%  rows   11142 =  2.35%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+kf3mkr1e6x25                 masked px   2339037 =   4.51%  rows   12838 =  2.71%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+dq4kf3mkr1e6x25              masked px   2475422 =   4.78%  rows   14106 =  2.97%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+ee8dq4kf3mkr1e6x25           masked px   2722424 =   5.25%  rows   16216 =  3.42%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+kf4mkr1e6x25                 masked px   3675857 =   7.09%  rows   21350 =  4.50%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+dq4kf4mkr1e6x25              masked px   3805543 =   7.34%  rows   22567 =  4.76%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+ee8dq4kf4mkr1e6x25           masked px   4048229 =   7.81%  rows   24645 =  5.20%  flux>=1e+05: 946/947 =  99.9%  flux>=1e+06: 92/92 = 100.0%
+o045 F480M: 12465701 finite production pixels; 144976 vetted rows, 144502 on a finite production pixel; rows with flux >= 1e5: 67, >= 1e6: 0
+kf1mkr1e6x20                 masked px    307932 =   2.47%  rows    1951 =  1.35%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf1mkr1e6x20              masked px    557297 =   4.47%  rows    4063 =  2.81%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf1mkr1e6x20           masked px    649147 =   5.21%  rows    5201 =  3.60%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf2mkr1e6x20                 masked px    863730 =   6.93%  rows    4920 =  3.40%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf2mkr1e6x20              masked px    996279 =   7.99%  rows    6462 =  4.47%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf2mkr1e6x20           masked px   1085533 =   8.71%  rows    7593 =  5.25%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf3mkr1e6x20                 masked px   1703092 =  13.66%  rows   12638 =  8.75%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf3mkr1e6x20              masked px   1825520 =  14.64%  rows   14077 =  9.74%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf3mkr1e6x20           masked px   1910832 =  15.33%  rows   15171 = 10.50%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf4mkr1e6x20                 masked px   2743111 =  22.01%  rows   24280 = 16.80%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf4mkr1e6x20              masked px   2854764 =  22.90%  rows   25587 = 17.71%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf4mkr1e6x20           masked px   2935959 =  23.55%  rows   26633 = 18.43%  flux>=1e+05: 67/67 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+o105 F480M: 12464795 finite production pixels; 145740 vetted rows, 145326 on a finite production pixel; rows with flux >= 1e5: 50, >= 1e6: 0
+kf1mkr1e6x20                 masked px    294007 =   2.36%  rows    1840 =  1.27%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf1mkr1e6x20              masked px    545699 =   4.38%  rows    4012 =  2.76%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf1mkr1e6x20           masked px    637322 =   5.11%  rows    5232 =  3.60%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf2mkr1e6x20                 masked px    831652 =   6.67%  rows    4655 =  3.20%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf2mkr1e6x20              masked px    969705 =   7.78%  rows    6241 =  4.29%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf2mkr1e6x20           masked px   1059082 =   8.50%  rows    7452 =  5.13%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf3mkr1e6x20                 masked px   1634693 =  13.11%  rows   11817 =  8.13%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf3mkr1e6x20              masked px   1761719 =  14.13%  rows   13293 =  9.15%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf3mkr1e6x20           masked px   1847912 =  14.83%  rows   14480 =  9.96%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf4mkr1e6x20                 masked px   2613422 =  20.97%  rows   22744 = 15.65%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf4mkr1e6x20              masked px   2729329 =  21.90%  rows   24096 = 16.58%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf4mkr1e6x20           masked px   2811822 =  22.56%  rows   25234 = 17.36%  flux>=1e+05: 50/50 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+o118 F480M: 12470721 finite production pixels; 139908 vetted rows, 139693 on a finite production pixel; rows with flux >= 1e5: 20, >= 1e6: 0
+kf1mkr1e6x20                 masked px    115704 =   0.93%  rows     648 =  0.46%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf1mkr1e6x20              masked px    272969 =   2.19%  rows    1995 =  1.43%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf1mkr1e6x20           masked px    365262 =   2.93%  rows    3155 =  2.26%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf2mkr1e6x20                 masked px    345668 =   2.77%  rows    1372 =  0.98%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf2mkr1e6x20              masked px    455560 =   3.65%  rows    2586 =  1.85%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf2mkr1e6x20           masked px    546660 =   4.38%  rows    3742 =  2.68%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf3mkr1e6x20                 masked px    695580 =   5.58%  rows    3723 =  2.67%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf3mkr1e6x20              masked px    802108 =   6.43%  rows    4899 =  3.51%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf3mkr1e6x20           masked px    891569 =   7.15%  rows    6052 =  4.33%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf4mkr1e6x20                 masked px   1145958 =   9.19%  rows    7965 =  5.70%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf4mkr1e6x20              masked px   1248102 =  10.01%  rows    9107 =  6.52%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf4mkr1e6x20           masked px   1335409 =  10.71%  rows   10245 =  7.33%  flux>=1e+05: 20/20 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+o130 F480M: 12472748 finite production pixels; 139868 vetted rows, 139731 on a finite production pixel; rows with flux >= 1e5: 21, >= 1e6: 0
+kf1mkr1e6x20                 masked px     84377 =   0.68%  rows     511 =  0.37%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf1mkr1e6x20              masked px    219396 =   1.76%  rows    1707 =  1.22%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf1mkr1e6x20           masked px    311957 =   2.50%  rows    2889 =  2.07%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf2mkr1e6x20                 masked px    242174 =   1.94%  rows    1053 =  0.75%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf2mkr1e6x20              masked px    342246 =   2.74%  rows    2138 =  1.53%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf2mkr1e6x20           masked px    434050 =   3.48%  rows    3317 =  2.37%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf3mkr1e6x20                 masked px    484820 =   3.89%  rows    2606 =  1.87%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf3mkr1e6x20              masked px    582111 =   4.67%  rows    3671 =  2.63%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf3mkr1e6x20           masked px    672623 =   5.39%  rows    4842 =  3.47%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf4mkr1e6x20                 masked px    802632 =   6.44%  rows    5373 =  3.85%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf4mkr1e6x20              masked px    897520 =   7.20%  rows    6417 =  4.59%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf4mkr1e6x20           masked px    986582 =   7.91%  rows    7572 =  5.42%  flux>=1e+05: 21/21 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+o138 F480M: 12472006 finite production pixels; 160045 vetted rows, 159833 on a finite production pixel; rows with flux >= 1e5: 18, >= 1e6: 0
+kf1mkr1e6x20                 masked px    103530 =   0.83%  rows     554 =  0.35%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf1mkr1e6x20              masked px    244388 =   1.96%  rows    1898 =  1.19%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf1mkr1e6x20           masked px    337965 =   2.71%  rows    3226 =  2.02%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf2mkr1e6x20                 masked px    304142 =   2.44%  rows    1293 =  0.81%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf2mkr1e6x20              masked px    403284 =   3.23%  rows    2501 =  1.56%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf2mkr1e6x20           masked px    496475 =   3.98%  rows    3828 =  2.39%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf3mkr1e6x20                 masked px    613328 =   4.92%  rows    3470 =  2.17%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf3mkr1e6x20              masked px    709160 =   5.69%  rows    4645 =  2.91%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf3mkr1e6x20           masked px    801637 =   6.43%  rows    5966 =  3.73%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+kf4mkr1e6x20                 masked px   1015798 =   8.14%  rows    7589 =  4.75%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+dq3kf4mkr1e6x20              masked px   1108336 =   8.89%  rows    8738 =  5.47%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%
+ee6dq3kf4mkr1e6x20           masked px   1199608 =   9.62%  rows   10036 =  6.28%  flux>=1e+05: 18/18 = 100.0%  flux>=1e+06: 0/0 =   0.0%

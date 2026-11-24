@@ -1,0 +1,132 @@
+# Whole-star leftovers and big craters of the production residual i2d with the footprint mask at KFAC 1 and 4 (MARGIN 2, ring zone, DQ_SAT dilation, edge band).
+# Source = production mergedcat residual i2d of each tile and band (read only), masked by emulation; no render flags, so the single-exposure negative spikes are in it.
+# Tags: dq<D>kf<K>mkr1e6x<R> = disks at KFAC K + ring zone (flux_fit >= 1e6 to radius R px) + DQ_SAT dilation D px;  ee<W>dq... = the same + edge band W px.
+# F212N: R 25, D 4, W 8.  F480M: R 20, D 3, W 6.  Leftover = resid_over_data > 0.7 and resid_peak >= N MJy/sr (N from 50);  big crater = depth > 50 MJy/sr and depth/model peak > 0.3;
+# nostar = big craters with model peak < 20 MJy/sr (a spike or hole in the data, not a model over-subtraction).
+
+o045 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4kf1mkr1e6x25                         971      239       65       15        4      272     59     10       4  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 41, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 2
+dq4kf2mkr1e6x25                         853      192       47        9        1      170     30      9       4  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 23, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 2
+dq4kf3mkr1e6x25                         821      176       38        7        1      106     23      7       4  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 18, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4kf4mkr1e6x25                         794      169       38        7        1       83     18      7       4  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 18, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+ee8dq4kf1mkr1e6x25                      949      228       60       10        3      270     58     10       4  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 38, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 2
+ee8dq4kf2mkr1e6x25                      829      180       42        4        1      169     29      9       4  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 20, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 2
+ee8dq4kf3mkr1e6x25                      798      167       34        3        1      105     22      7       4  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 16, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee8dq4kf4mkr1e6x25                      774      161       34        3        1       82     17      7       4  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 16, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+
+o105 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4kf1mkr1e6x25                         748      201       48        6        3      280     44      9       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 31, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf2mkr1e6x25                         643      147       38        4        1      199     26      8       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 21, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf3mkr1e6x25                         618      137       34        3        1      136     12      6       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 17, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf4mkr1e6x25                         593      127       31        3        1      105      9      6       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 14, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf5mkr1e6x25                         559      117       30        3        1       76     10      6       7  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 13, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee8dq4kf1mkr1e6x25                      731      186       38        1        1      280     44      9       7  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 27, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4kf2mkr1e6x25                      626      134       30        1        1      199     26      8       7  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 19, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4kf3mkr1e6x25                      604      127       28        1        1      136     12      6       7  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 17, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4kf4mkr1e6x25                      578      116       25        1        1      105      9      6       7  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 14, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4kf5mkr1e6x25                      545      107       24        1        1       76     10      6       7  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 13, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+
+o118 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4kf1mkr1e6x25                         131       39       13        5        2      185     38     13       6  | NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf2mkr1e6x25                         122       37       13        5        2      144     26     11       6  | NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf3mkr1e6x25                         116       34       12        5        2       98     15      6       6  | NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4kf4mkr1e6x25                         115       34       12        5        2       63      8      6       6  | NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee8dq4kf1mkr1e6x25                      121       33        9        4        2      183     38     13       6  | NOT_IN_M7_CATALOG 3, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 1
+ee8dq4kf2mkr1e6x25                      112       31        9        4        2      143     26     11       6  | NOT_IN_M7_CATALOG 3, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 1
+ee8dq4kf3mkr1e6x25                      107       29        9        4        2       97     15      6       6  | NOT_IN_M7_CATALOG 3, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 1
+ee8dq4kf4mkr1e6x25                      106       29        9        4        2       61      8      6       6  | NOT_IN_M7_CATALOG 3, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 1
+
+o130 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4kf1mkr1e6x25                          94       30       20        6        4      110     16      6       5  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 6, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4kf2mkr1e6x25                          90       28       19        6        4       79      8      6       5  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 5, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4kf3mkr1e6x25                          85       28       18        6        4       43      7      5       4  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4kf4mkr1e6x25                          82       26       17        5        3       35      6      5       4  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+ee8dq4kf1mkr1e6x25                       90       27       16        4        3      109     16      6       5  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee8dq4kf2mkr1e6x25                       87       26       16        4        3       78      8      6       5  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee8dq4kf3mkr1e6x25                       80       24       16        4        3       42      7      5       4  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee8dq4kf4mkr1e6x25                       79       24       16        4        3       34      6      5       4  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+
+o138 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4kf1mkr1e6x25                         397       89       25       14        5      219     35      8       6  | NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 17, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+dq4kf2mkr1e6x25                         358       75       18        9        1      163     23      7       6  | NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 10, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+dq4kf3mkr1e6x25                         338       63        9        2        1      104     13      6       6  | NOT_IN_M7_CATALOG 5, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+dq4kf4mkr1e6x25                         323       57        8        1        1       69     10      6       6  | NOT_IN_M7_CATALOG 5, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+ee8dq4kf1mkr1e6x25                      376       77       18       10        4      219     35      8       6  | NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 12, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+ee8dq4kf2mkr1e6x25                      337       63       11        6        1      163     23      7       6  | NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 5, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+ee8dq4kf3mkr1e6x25                      321       55        6        2        1      105     13      6       6  | NOT_IN_M7_CATALOG 3, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+ee8dq4kf4mkr1e6x25                      306       49        5        1        1       69     10      6       6  | NOT_IN_M7_CATALOG 3, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+
+o045 F480M
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq3kf1mkr1e6x20                         129       56       17        1        0       35      6      0       0  | NOT_IN_M7_CATALOG 10, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq3kf2mkr1e6x20                         121       48       14        1        0       32      5      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq3kf3mkr1e6x20                         108       40       13        1        0       24      3      0       0  | NOT_IN_M7_CATALOG 8, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq3kf4mkr1e6x20                          99       33       11        0        0       23      3      0       0  | NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf1mkr1e6x20                      120       52       16        1        0       33      6      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf2mkr1e6x20                      112       44       13        1        0       30      5      0       0  | NOT_IN_M7_CATALOG 8, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf3mkr1e6x20                       99       36       12        1        0       23      3      0       0  | NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf4mkr1e6x20                       91       30       10        0        0       22      3      0       0  | NOT_IN_M7_CATALOG 5, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+
+o105 F480M
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq3kf1mkr1e6x20                         120       41       24        3        0       19      1      0       0  | NOT_IN_M7_CATALOG 14, SATSTAR_NEAR 6, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 0
+dq3kf2mkr1e6x20                         109       34       20        3        0       17      1      0       0  | NOT_IN_M7_CATALOG 14, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 0
+dq3kf3mkr1e6x20                          95       28       17        2        0       11      1      0       0  | NOT_IN_M7_CATALOG 14, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 0
+dq3kf4mkr1e6x20                          89       25       14        2        0       11      1      0       0  | NOT_IN_M7_CATALOG 11, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 0
+ee6dq3kf1mkr1e6x20                      113       36       20        2        0       19      1      0       0  | NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 6, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 0
+ee6dq3kf2mkr1e6x20                      102       29       16        2        0       17      1      0       0  | NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 0
+ee6dq3kf3mkr1e6x20                       88       23       13        1        0       11      1      0       0  | NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee6dq3kf4mkr1e6x20                       83       21       11        1        0       11      1      0       0  | NOT_IN_M7_CATALOG 9, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+
+o118 F480M
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq3kf1mkr1e6x20                         130       57       23        3        0       10      1      0       0  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 2
+dq3kf2mkr1e6x20                         128       55       23        3        0       10      1      0       0  | NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 2
+dq3kf3mkr1e6x20                         120       51       20        2        0        8      0      0       0  | NOT_IN_M7_CATALOG 15, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 2
+dq3kf4mkr1e6x20                         117       50       19        2        0        8      0      0       0  | NOT_IN_M7_CATALOG 15, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 1
+ee6dq3kf1mkr1e6x20                      119       50       20        2        0        9      1      0       0  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 2
+ee6dq3kf2mkr1e6x20                      117       48       20        2        0        9      1      0       0  | NOT_IN_M7_CATALOG 13, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 2
+ee6dq3kf3mkr1e6x20                      109       44       17        1        0        7      0      0       0  | NOT_IN_M7_CATALOG 12, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 2
+ee6dq3kf4mkr1e6x20                      106       43       16        1        0        7      0      0       0  | NOT_IN_M7_CATALOG 12, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 1
+
+o130 F480M
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq3kf1mkr1e6x20                         126       53       24        4        0       14      0      0       0  | NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+dq3kf2mkr1e6x20                         123       51       22        4        0       10      0      0       0  | NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+dq3kf3mkr1e6x20                         118       48       20        3        0        7      0      0       0  | NOT_IN_M7_CATALOG 10, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+dq3kf4mkr1e6x20                         116       47       19        3        0        7      0      0       0  | NOT_IN_M7_CATALOG 9, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+ee6dq3kf1mkr1e6x20                      119       51       23        3        0       14      0      0       0  | NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+ee6dq3kf2mkr1e6x20                      116       49       21        3        0       10      0      0       0  | NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+ee6dq3kf3mkr1e6x20                      112       47       20        3        0        7      0      0       0  | NOT_IN_M7_CATALOG 10, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+ee6dq3kf4mkr1e6x20                      111       46       19        3        0        7      0      0       0  | NOT_IN_M7_CATALOG 9, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0
+
+o138 F480M
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq3kf1mkr1e6x20                         115       48       18        3        0       10      0      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+dq3kf2mkr1e6x20                         112       45       16        2        0        9      0      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+dq3kf3mkr1e6x20                         105       42       14        2        0        7      0      0       0  | NOT_IN_M7_CATALOG 9, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq3kf4mkr1e6x20                         100       42       14        2        0        6      0      0       0  | NOT_IN_M7_CATALOG 9, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf1mkr1e6x20                      108       45       18        3        0       10      0      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee6dq3kf2mkr1e6x20                      105       42       16        2        0        9      0      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee6dq3kf3mkr1e6x20                       98       39       14        2        0        7      0      0       0  | NOT_IN_M7_CATALOG 9, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf4mkr1e6x20                       93       39       14        2        0        6      0      0       0  | NOT_IN_M7_CATALOG 9, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+
+################ flagged render of o105 F212N (s3): SINGLE_EXPOSURE_EVENT_MASK=1 NEGATIVE_PIXEL_MASK_NSIGMA=50 MERGE_ROW_RESID_SUPPORT_MIN=0.3; K = 1-5, ring zone 1e6 / 25 px, DQ_SAT dilation 4 px, edge band 8 px
+# Tags: dq4s3kf<K>mkr1e6x25 = disks + ring zone + DQ_SAT dilation;  ee8dq4s3kf<K>... = + edge band.  Same columns as above.
+o105 F212N
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500  nostar  | leftovers>=200 by class
+dq4s3kf1mkr1e6x25                       752      201       48        6        3       35      9      1       0  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 31, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4s3kf2mkr1e6x25                       645      147       38        4        1       34      9      1       0  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 21, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4s3kf3mkr1e6x25                       619      137       34        3        1       23      1      0       0  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 17, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4s3kf4mkr1e6x25                       594      127       31        3        1       13      0      0       0  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 14, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq4s3kf5mkr1e6x25                       560      117       30        3        1        4      0      0       0  | NOT_IN_M7_CATALOG 12, SATSTAR_NEAR 13, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee8dq4s3kf1mkr1e6x25                    735      186       38        1        1       35      9      1       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 27, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4s3kf2mkr1e6x25                    628      134       30        1        1       34      9      1       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 19, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4s3kf3mkr1e6x25                    605      127       28        1        1       23      1      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 17, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4s3kf4mkr1e6x25                    579      116       25        1        1       13      0      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 14, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+ee8dq4s3kf5mkr1e6x25                    546      107       24        1        1        4      0      0       0  | NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 13, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0

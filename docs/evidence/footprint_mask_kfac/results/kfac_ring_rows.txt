@@ -1,0 +1,10 @@
+o045 F212N: 11572 rows, 11572 with a footprint; flux_fit >= 1e5: 2053; >= 1e6: 324; max 2.84e+07
+o105 F212N: 10356 rows, 10356 with a footprint; flux_fit >= 1e5: 1746; >= 1e6: 239; max 8.56e+07
+o118 F212N: 3418 rows, 3418 with a footprint; flux_fit >= 1e5: 623; >= 1e6: 95; max 4.7e+07
+o130 F212N: 2880 rows, 2880 with a footprint; flux_fit >= 1e5: 544; >= 1e6: 68; max 1.25e+07
+o138 F212N: 5027 rows, 5027 with a footprint; flux_fit >= 1e5: 1042; >= 1e6: 187; max 1.98e+07
+o045 F480M: 1758 rows, 1758 with a footprint; flux_fit >= 1e5: 506; >= 1e6: 42; max 8.67e+06
+o105 F480M: 1703 rows, 1703 with a footprint; flux_fit >= 1e5: 433; >= 1e6: 42; max 2.68e+07
+o118 F480M: 669 rows, 669 with a footprint; flux_fit >= 1e5: 200; >= 1e6: 9; max 1.91e+07
+o130 F480M: 531 rows, 531 with a footprint; flux_fit >= 1e5: 134; >= 1e6: 6; max 3.58e+06
+o138 F480M: 596 rows, 596 with a footprint; flux_fit >= 1e5: 190; >= 1e6: 9; max 4.86e+06

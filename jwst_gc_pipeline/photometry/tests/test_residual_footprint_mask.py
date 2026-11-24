@@ -133,6 +133,7 @@ def test_off_by_default_and_the_margin_is_not_read(monkeypatch):
     ('1', None, (1.0, 2.0)),
     ('1.5', '3', (1.5, 3.0)),
     ('0.5', '0', (0.5, 0.0)),
+    ('4', None, (4.0, 2.0)),
 ])
 def test_switch_values(monkeypatch, kfac, margin, expected):
     monkeypatch.setenv(fm.ENV_KFAC, kfac)
