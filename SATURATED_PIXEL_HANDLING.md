@@ -772,6 +772,101 @@ these flag sets would remove the footgun of setting them individually.)*
     changes the leftovers by one star.  A row lowered although it was right would
     show up as a leftover; the count above 500 MJy/sr goes from 58 to 59 between
     0.3 and 0.8, and the replay cannot say whether that star is one of them.
+  - `POSITIVE_SPIKE_MASK_MIN_EXCESS` (a number >= 0 in MJy/sr; blank or 0 is off; a value
+    that is not a finite number >= 0 raises before any frame is read, naming the variable).
+    Sets DO_NOT_USE on the 3x3 box around each isolated one-pixel spike of a frame, in the
+    same two places as `SINGLE_EXPOSURE_EVENT_MASK` and `NEGATIVE_PIXEL_MASK_NSIGMA`: the data mosaic and the DQ of each per-frame
+    residual before it is resampled.  The render logs one line (`positive spikes: ...`, with
+    the spikes, the frames and the pixels) and writes no header card, like those two.
+    A spike (`find_positive_spikes`, one frame at a time) is a pixel with neither SATURATED
+    nor DO_NOT_USE in its DQ that (1) stands at least `MIN_EXCESS` over the median of the
+    finite pixels 3-8 pixels from it, (2) has a brightest neighbour, of the eight, that
+    stands at most 0.15 of that excess over the same median, and (3) stands at least
+    `SPIKE_MIN_SIGMA` = 5 times the MAD-sigma of that annulus over its median.  All nine
+    pixels of the 3x3 box must be finite and carry neither flag; a pixel beside a saturated
+    core, a dropped pixel or the edge of the array is not judged, so the rim of a snowball
+    stays with the event mask and a star cut by the edge with the satstar handling.  The
+    box is masked because the charge of one pixel leaks into its neighbours through the
+    inter-pixel capacitance.  Why it leaves a leftover: a spike enters a six-exposure mosaic
+    at 1/6 of its excess and no catalog model subtracts it, so the merged-catalog residual
+    keeps it as a star-sized blob (F480M o130 nrcalong exposure 1, pixel (1961, 1452):
+    2228 MJy/sr against 28 MJy/sr at the same sky position in the next exposure).
+    Condition (2) needs no other frame: the PSF core at 1.5 micron, the sharpest of the
+    filters observed, puts at least 0.3 of its peak into the brightest neighbour, and a
+    one-pixel spike puts close to none.  Condition (3) removes the noisy halo of a
+    saturated star: there the annulus MAD-sigma is 400-1700 MJy/sr over a background of
+    490-2000 MJy/sr, and a pixel that stands 0.2-1.1 of it over the background with calm
+    neighbours passes (1) and (2); the same structure sits at the same sky position in the
+    other exposures.  The scan of the ten tile-bands at `MIN_EXCESS` 300 finds 408 pixels
+    that pass (1) and (2): 314 in F480M and 94 in F212N.  The 26 that fail (3) are all in
+    F212N (o118 9, o138 5, o105 10, o045 2) at 0.2-1.1 sigma; the other 382 stand at
+    10.8 sigma or more, so a cut anywhere between 1.1 and 10.8 selects the same set.
+    Cross-frame check (a comparison, not part of the mask): the sky position of each
+    detection is computed from its own frame's WCS and looked up in every other frame that
+    covers it and has no SATURATED pixel in the 5x5 box there, as the excess of the box
+    peak over the 3-8 pixel annulus median.  F480M, 314 detections: 287 have every other
+    frame below 0.1 of the excess (a defect of one exposure), 12 have a frame at 0.1-0.3, 5
+    have a frame at 0.3 or more, 2 have no other covering frame and 8 have a SATURATED
+    pixel in the 5x5 box of another frame (o130 66 / 2 / 1 / 0 / 0 of 69; o045 57 / 5 / 0 /
+    0 / 2 of 64; o105 42 / 5 / 2 / 1 / 4 of 54; o118 56 / 0 / 1 / 1 / 2 of 60; o138 66 / 0 /
+    1 / 0 / 0 of 67, in the order confirmed / 0.1-0.3 / 0.3 or more / no other frame /
+    saturated).  The last four classes hold defects over a faint star or extended emission
+    and detector pixels that recur in other tiles (nrcalong (716, 1075) and (1526, 117),
+    nrcblong (1950, 822)).  F212N: of the 25 detections with a frame at 0.3 or more, 24 fail
+    (3) (o118 8, o105 10, o138 4, o045 2); the one that passes is o045 nrcb3 (374, 1176),
+    excess 305 MJy/sr at 58.6 sigma, 0.32 of it in another frame (a defect over a faint
+    star).  68 F212N detections pass: 61 with every other frame below 0.1, 5 at 0.1-0.3, 1
+    at 0.3 or more and 1 with no other covering frame.
+    Size at `MIN_EXCESS` 300 (all frames of the tile-band): F480M o045 64 spikes (576
+    pixels in 12 of 12 frames), o118 60 (540, 12 of 12), o130 69 (621, 12 of 12), o138 67
+    (603, 11 of 12), o105 54 (486, 12 of 12); F212N o045 27 (243 pixels in 20 of 48
+    frames), o118 12 (108, 11 of 48), o130 9 (81, 7 of 48), o138 5 (45, 5 of 48), o105 15
+    (135, 15 of 48).
+    Emulation on the replays of the edge-band table above (DQ_SAT dilation and edge band
+    on): the per-frame residual files of each replay were resampled again with the spike
+    boxes set to DO_NOT_USE in their DQ, on the grid of the replay's residual i2d, and the
+    NaN set of the replay's i2d (disks, ring zone, rejected-fit disks, DQ_SAT dilation, edge
+    band) was applied to the new mosaic.  The o105 F212N row is the exception to the
+    edge band: its replay is the one that carries the production post-fit dedup, with the
+    disks, the ring zone and the DQ_SAT dilation 4, and no edge band.  A run with `MIN_EXCESS` 0 reproduces the replay
+    (o130 F480M: 0 of 12472747 pixels that are finite in both differ; o105 F212N: 0 of 50412769).  Leftovers above 50 / 200 / 500 / 1000 /
+    2000 / 5000 MJy/sr | craters deeper than 50 / 200 / 500 / 1000 / 2000 MJy/sr without
+    and with the mask:
+    - o045 F480M 120 / 16 / 1 / 0 / 0 / 0 | 1 / 0 / 0 / 0 / 0 -> 78 / 9 / 1 / 0 / 0 / 0 |
+      1 / 0 / 0 / 0 / 0.
+    - o118 F480M 119 / 20 / 2 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 69 / 7 / 1 / 0 / 0 / 0 |
+      0 / 0 / 0 / 0 / 0.
+    - o130 F480M 119 / 23 / 3 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 63 / 1 / 0 / 0 / 0 / 0 |
+      0 / 0 / 0 / 0 / 0.
+    - o138 F480M 108 / 18 / 3 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 -> 52 / 3 / 1 / 0 / 0 / 0 |
+      0 / 0 / 0 / 0 / 0.
+    - o105 F480M 113 / 20 / 2 / 0 / 0 / 0 | 1 / 0 / 0 / 0 / 0 -> 77 / 9 / 1 / 0 / 0 / 0 |
+      1 / 0 / 0 / 0 / 0.
+    - o045 F212N 906 / 39 / 4 / 1 / 0 / 0 | 18 / 0 / 0 / 0 / 0 -> 887 / 32 / 3 / 1 / 0 / 0 |
+      18 / 0 / 0 / 0 / 0.
+    - o118 F212N 111 / 7 / 4 / 2 / 1 / 0 | 24 / 6 / 1 / 0 / 0 -> 101 / 4 / 2 / 1 / 0 / 0 |
+      24 / 6 / 1 / 0 / 0.
+    - o130 F212N 88 / 15 / 3 / 2 / 1 / 0 | 8 / 0 / 0 / 0 / 0 -> 84 / 13 / 2 / 1 / 0 / 0 |
+      8 / 0 / 0 / 0 / 0.
+    - o138 F212N 352 / 6 / 0 / 0 / 0 / 0 | 24 / 5 / 1 / 1 / 0 -> 348 / 6 / 0 / 0 / 0 / 0 |
+      24 / 5 / 1 / 1 / 0.
+    - o105 F212N 752 / 48 / 6 / 3 / 1 / 0 | 35 / 9 / 1 / 0 / 0 -> 743 / 48 / 6 / 3 / 1 / 0 | 35 / 9 / 1 / 0 / 0.
+    Sums over the five F480M tiles: 579 / 97 / 11 -> 339 / 29 / 4 above 50 / 200 / 500;
+    craters unchanged in all ten tile-bands.
+    The mask removes the leftovers that a spike feeds.  Of the leftovers with a detection
+    (`MIN_EXCESS` 300, isolation 0.15) within 3 mosaic pixels, the replay without the mask
+    has, above 50 / 200 / 500 MJy/sr: F480M o045 42 / 7 / 0, o118 50 / 13 / 1, o130 56 / 22
+    / 3, o138 56 / 15 / 2, o105 36 / 11 / 1 (240 of 579, 68 of 97 and 7 of 11 of all);
+    F212N o045 19 / 7 / 1, o118 10 / 3 / 2, o130 4 / 2 / 1, o138 4 / 0 / 0, o105 9 / 0 / 0.  With the mask there are none, at any
+    threshold, in any of the ten tile-bands, and the leftovers without a detection keep
+    their counts (F480M above 50 MJy/sr: 78 / 69 / 63 / 52 / 77 in both).  The F212N
+    leftovers that go are single-pixel defects of one exposure: o118 (5457, 2808) at 3201
+    MJy/sr (the spike is 10777 MJy/sr over its background in nrca exposure 1), (1265, 3438)
+    at 530 and (5206, 4383) at 233; o130 (4934, 195) at 2515 (no catalog row; the spike is
+    6278 MJy/sr over its background in nrca exposure 3) and (6215, 3964) at 213.  Three
+    F212N leftovers above 200 MJy/sr remain within 3 mosaic pixels of a pixel at 300 MJy/sr
+    or more whose brightest neighbour stands at 0.38-0.45 of its excess, which fails (2):
+    o130 (1892, 681) at 236 and (5980, 3928) at 467, o138 (2368, 1325) at 248.
   - `SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN` / `_MAX` (merge time,
     `replace_saturated`; off unless `_MIN` is above 0, `_MAX` defaults to 0.8).
     The mutual-nearest second pass pairs a satstar with the nearest daophot row
