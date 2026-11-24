@@ -5,7 +5,8 @@ the disk geometry, the ring-zone extension of the disks of the brightest rows
 (``MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN`` and ``..._RING_RADIUS_PX``), the catalog
 reader, the gate-rejected fits that ``MERGEDCAT_FOOTPRINT_MASK_REJECTED`` adds to the
 disks, the dilated DQ_SATURATED footprint of the resampled frames
-(``MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX`` and ``..._DQSAT_MIN_PX``), and the hand-over from
+(``MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX`` and ``..._DQSAT_MIN_PX``), the guard band along the
+edge of the data footprint (``MERGEDCAT_FOOTPRINT_MASK_EDGE_PX``), and the hand-over from
 ``build_mergedcat_residuals``."""
 import math
 import os
@@ -49,6 +50,7 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv(fm.ENV_REJECTED, raising=False)
     monkeypatch.delenv(fm.ENV_DQSAT_PX, raising=False)
     monkeypatch.delenv(fm.ENV_DQSAT_MIN_PX, raising=False)
+    monkeypatch.delenv(fm.ENV_EDGE_PX, raising=False)
 
 
 def _i2d_wcs(scale=SCALE):
@@ -497,7 +499,8 @@ def test_read_satstars_reads_the_flux_column_only_for_the_ring_extension(tmp_pat
 # --- build_mergedcat_residuals -> the mask -----------------------------------------------
 
 def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
-           iteration_label=E2E_ITER, flux=None, rejected=None, frame_dq=None):
+           iteration_label=E2E_ITER, flux=None, rejected=None, frame_dq=None,
+           i2d_data=None):
     """Run build_mergedcat_residuals on the render-procs fixture with ``_resample_to_i2d``
     writing a real i2d, optionally with the footprint mask on and a consolidated
     satstar cache beside it (with a ``flux_fit`` column when ``flux`` is given).
@@ -507,7 +510,8 @@ def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
     frame.  ``frame_dq`` is a list with one ``(dq, shift)`` per frame in render order: the
     residual writer then writes a real per-frame file (``_write_frame``) with that DQ
     (None for no DQ extension) and the WCS of ``_frame_wcs(*shift)``; a frame beyond the list
-    gets an all-zero DQ and no shift.
+    gets an all-zero DQ and no shift.  ``i2d_data`` is the image the resample writes (ones
+    by default).
     Returns (residual i2d path, captured stdout)."""
     for var in ('MERGEDCAT_SATSTAR_COVER', 'MERGEDCAT_SATSTAR_COVER_RADIUS_FWHM',
                 'MERGE_RENDER_PSF_SHAPE', 'MERGE_RENDER_FWHM_MULT',
@@ -529,7 +533,7 @@ def _build(root, monkeypatch, capsys, env=None, cache=True, written=None,
 
     def _resample(files, pdir, name, **kw):
         out = os.path.join(pdir, f'{name}_i2d.fits')
-        _write_i2d(out)
+        _write_i2d(out, i2d_data)
         return out
 
     monkeypatch.setattr(L.psf_preflight, 'preflight_psf_data', lambda *a, **k: None)
@@ -1388,3 +1392,227 @@ def test_the_dqsat_mask_does_not_need_the_satstar_cache(tmp_path, monkeypatch, c
                               ndimage.distance_transform_edt(~flagged) <= 2.0)
         assert 'FPMASKK' not in h['SCI'].header and 'FPDQSATD' in h['SCI'].header
     assert 'WARNING mergedcat: resid i2d footprint mask skipped' in out
+
+
+# --- the footprint-edge guard band (MERGEDCAT_FOOTPRINT_MASK_EDGE_PX) ------------------------
+
+def _wedge(columns):
+    """Test i2d data: ones, NaN in the first ``columns`` columns (the outside of a footprint
+    that starts at column ``columns``)."""
+    data = np.ones(SHAPE, 'float32')
+    data[:, :columns] = np.nan
+    return data
+
+
+def _band_of(outside, width):
+    """The band by the definition: the Euclidean distance to the outside, with the image
+    border as the edge of the data."""
+    padded = np.pad(outside, 1, constant_values=True)
+    return (ndimage.distance_transform_edt(~padded) <= width)[1:-1, 1:-1]
+
+
+def test_the_edge_band_is_off_by_default_and_unread_while_it_is_off(monkeypatch):
+    assert fm.edge_params() == 0.0
+    # the mask itself is off: the variable is not read
+    monkeypatch.setenv(fm.ENV_EDGE_PX, 'abc')
+    assert fm.edge_params() == 0.0
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    with pytest.raises(ValueError, match=fm.ENV_EDGE_PX):
+        fm.edge_params()
+    # a width of 0 or a blank one is off
+    monkeypatch.setenv(fm.ENV_EDGE_PX, '0')
+    assert fm.edge_params() == 0.0
+    monkeypatch.setenv(fm.ENV_EDGE_PX, '  ')
+    assert fm.edge_params() == 0.0
+
+
+@pytest.mark.parametrize('width, expected', [('8', 8.0), ('2.5', 2.5), ('0.5', 0.5)])
+def test_edge_values(monkeypatch, width, expected):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_EDGE_PX, width)
+    assert fm.edge_params() == expected
+
+
+@pytest.mark.parametrize('value', ['abc', '-1', 'nan', 'inf'])
+def test_edge_typo_raises_naming_the_variable(monkeypatch, value):
+    monkeypatch.setenv(fm.ENV_KFAC, '1')
+    monkeypatch.setenv(fm.ENV_EDGE_PX, value)
+    with pytest.raises(ValueError, match=fm.ENV_EDGE_PX):
+        fm.edge_params()
+
+
+def test_footprint_outside_is_the_nan_region_that_touches_the_border():
+    sci = _wedge(10)
+    sci[20:23, 30:33] = np.nan          # a blob inside the footprint: not outside
+    sci[40, 10] = np.nan                # next to the wedge: part of it
+    outside = fm.footprint_outside(sci)
+    assert outside[:, :10].all() and outside[40, 10]
+    assert not outside[20:23, 30:33].any()
+    assert int(outside.sum()) == SHAPE[0] * 10 + 1
+
+
+def test_footprint_outside_follows_a_diagonal_chain_of_nan_pixels_from_the_border():
+    sci = np.ones(SHAPE, 'float32')
+    for k in range(5):
+        sci[10 + k, k] = np.nan         # touches the left border and goes up and right
+        sci[40 + k, 30 + k] = np.nan    # the same chain inside the image
+    outside = fm.footprint_outside(sci)
+    assert outside[[10, 11, 12, 13, 14], [0, 1, 2, 3, 4]].all()
+    assert not outside[40:45, 30:35].any()
+
+
+def test_footprint_outside_of_a_finite_image_is_empty():
+    assert not fm.footprint_outside(np.ones(SHAPE, 'float32')).any()
+
+
+@pytest.mark.parametrize('width', [0.5, 1.0, 2.0, 3.5, 6.0, 9.0])
+def test_edge_band_is_the_euclidean_distance_threshold_from_the_outside(width):
+    sci = _wedge(9)
+    sci[SHAPE[0] - 7:, SHAPE[1] - 20:] = np.nan          # a corner of the image
+    yy, xx = np.mgrid[0:SHAPE[0], 0:SHAPE[1]]
+    sci[(xx - 40) ** 2 + (yy - 5) ** 2 < 30] = np.nan    # touches the bottom border
+    sci[(xx - 25) ** 2 + (yy - 35) ** 2 < 12] = np.nan   # inside the footprint: not outside
+    outside = fm.footprint_outside(sci)
+    assert not outside[(xx - 25) ** 2 + (yy - 35) ** 2 < 12].any()
+    assert np.array_equal(fm.edge_band(outside, width), _band_of(outside, width))
+
+
+def test_edge_band_without_an_outside_region_follows_the_image_border():
+    band = fm.edge_band(np.zeros(SHAPE, bool), 3.0)
+    yy, xx = np.mgrid[0:SHAPE[0], 0:SHAPE[1]]
+    steps_to_the_border = np.minimum.reduce(
+        [yy, SHAPE[0] - 1 - yy, xx, SHAPE[1] - 1 - xx]) + 1
+    assert np.array_equal(band, steps_to_the_border <= 3)
+
+
+def test_edge_band_of_a_fully_outside_image_is_the_whole_image():
+    assert fm.edge_band(np.ones(SHAPE, bool), 2.0).all()
+
+
+def test_mask_residual_edge_blanks_the_band_and_records_the_setting(tmp_path):
+    data = _wedge(12)
+    i2d = str(tmp_path / 'i2d.fits')
+    _write_i2d(i2d, data)
+    summary = fm.mask_residual_edge(i2d, 3.0)
+    outside = np.isnan(data)
+    expected = _band_of(outside, 3.0)
+    with fits.open(i2d) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        assert np.all(h['SCI'].data[~expected] == 1.0)
+        header = h['SCI'].header
+        assert (header['FPEDGEPX'], header['FPEDGEN']) == (3.0, int(outside.sum()))
+    assert summary == {'outside': int(outside.sum()),
+                       'pixels': int((expected & ~outside).sum()),
+                       'finite': int((~outside).sum())}
+
+
+def test_mask_residual_edge_counts_only_the_pixels_it_blanks(tmp_path):
+    data = _wedge(12)
+    data[20:23, 14:16] = np.nan         # inside the band, not touching the wedge: already blank
+    i2d = str(tmp_path / 'i2d.fits')
+    _write_i2d(i2d, data)
+    summary = fm.mask_residual_edge(i2d, 4.0)
+    expected = _band_of(fm.footprint_outside(data), 4.0)
+    with fits.open(i2d) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected | np.isnan(data))
+    assert summary['finite'] == int(np.isfinite(data).sum())
+    assert summary['pixels'] == int((expected & np.isfinite(data)).sum())
+
+
+def test_mask_residual_edge_of_an_image_with_no_outside_blanks_the_border_strip(tmp_path):
+    i2d = str(tmp_path / 'i2d.fits')
+    _write_i2d(i2d)
+    summary = fm.mask_residual_edge(i2d, 2.0)
+    with fits.open(i2d) as h:
+        nan = np.isnan(h['SCI'].data)
+    assert summary['outside'] == 0
+    assert nan.sum() == SHAPE[0] * SHAPE[1] - (SHAPE[0] - 4) * (SHAPE[1] - 4)
+    assert not nan[2:-2, 2:-2].any()
+
+
+# --- the guard band in the render (hand-over from build_mergedcat_residuals) ---------------
+
+def test_the_edge_extension_blanks_the_band_along_the_footprint_edge_in_the_render(
+        tmp_path, monkeypatch, capsys):
+    data = _wedge(12)
+    path, out = _build(tmp_path / 'g1', monkeypatch, capsys, i2d_data=data,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_EDGE_PX: '3'})
+    band = _band_of(np.isnan(data), 3.0)
+    assert not (band & _disks_of_build()).any()
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data),
+                              np.isnan(data) | band | _disks_of_build())
+        header = h['SCI'].header
+        assert header['FPMASKN'] == 2
+        assert (header['FPEDGEPX'], header['FPEDGEN']) == (3.0, SHAPE[0] * 12)
+    assert ("is also NaN within 3 px of the edge of the data footprint "
+            f"({fm.ENV_EDGE_PX})") in out
+    assert (f"[resid i2d edge band] NaN'd {int((band & ~np.isnan(data)).sum())} px "
+            f"(") in out
+    assert f"of the {SHAPE[0] * 12} px outside the data footprint" in out
+
+
+def test_the_edge_band_is_measured_before_the_satstar_disks_are_blanked(
+        tmp_path, monkeypatch, capsys):
+    # the disk of the first satstar (centre x = 30, radius 4.8) reaches the wedge: the band
+    # comes from the wedge alone, not from the wedge and the disk that touches it
+    data = _wedge(27)
+    path, out = _build(tmp_path / 'g2', monkeypatch, capsys, i2d_data=data,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1', fm.ENV_EDGE_PX: '3'})
+    assert (_disks_of_build() & np.isnan(data)).any()
+    expected = np.isnan(data) | _band_of(np.isnan(data), 3.0) | _disks_of_build()
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), expected)
+        assert h['SCI'].header['FPEDGEN'] == SHAPE[0] * 27
+
+
+def test_the_edge_band_does_not_need_the_satstar_cache(tmp_path, monkeypatch, capsys):
+    data = _wedge(12)
+    path, out = _build(tmp_path / 'g3', monkeypatch, capsys, i2d_data=data, cache=False,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_EDGE_PX: '3'})
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data),
+                              np.isnan(data) | _band_of(np.isnan(data), 3.0))
+        assert 'FPMASKK' not in h['SCI'].header and 'FPEDGEPX' in h['SCI'].header
+    assert 'WARNING mergedcat: resid i2d footprint mask skipped' in out
+
+
+def test_the_edge_band_stays_out_of_the_image_while_the_extension_is_off(
+        tmp_path, monkeypatch, capsys):
+    data = _wedge(12)
+    path, out = _build(tmp_path / 'g4', monkeypatch, capsys, i2d_data=data,
+                       env={fm.ENV_KFAC: '1.5', fm.ENV_MARGIN: '1'})
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), np.isnan(data) | _disks_of_build())
+        assert 'FPEDGEPX' not in h['SCI'].header
+    assert 'edge band' not in out
+
+
+def test_the_edge_variable_does_nothing_while_the_mask_is_off(tmp_path, monkeypatch, capsys):
+    data = _wedge(12)
+    path, out = _build(tmp_path / 'g5', monkeypatch, capsys, i2d_data=data,
+                       env={fm.ENV_EDGE_PX: 'oops'})
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), np.isnan(data))
+        assert 'FPEDGEPX' not in h['SCI'].header
+    assert 'edge band' not in out
+
+
+def test_the_edge_band_leaves_the_residual_i2d_of_an_earlier_pass_alone(
+        tmp_path, monkeypatch, capsys):
+    data = _wedge(12)
+    path, out = _build(tmp_path / 'g6', monkeypatch, capsys, i2d_data=data,
+                       env={fm.ENV_KFAC: '1', fm.ENV_EDGE_PX: '3'}, iteration_label='m3')
+    with fits.open(path) as h:
+        assert np.array_equal(np.isnan(h['SCI'].data), np.isnan(data))
+        assert 'FPEDGEPX' not in h['SCI'].header
+    assert f'pass m3 is not in {fm.ENV_PASSES} (m7)' in out
+    assert 'edge band' not in out
+
+
+def test_an_edge_typo_fails_before_any_residual_is_rendered(tmp_path, monkeypatch, capsys):
+    written = []
+    with pytest.raises(ValueError, match=fm.ENV_EDGE_PX):
+        _build(tmp_path / 'g7', monkeypatch, capsys,
+               env={fm.ENV_KFAC: '1', fm.ENV_EDGE_PX: 'wide'}, written=written)
+    assert written == []
