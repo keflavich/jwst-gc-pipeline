@@ -1,0 +1,10 @@
+# o045 F212N: the added seed rows against the rows of the merged catalogs of the control (dncg) and the treatment (sd1).
+# 'new row' = no control row within 0.1 arcsec; 'row existed' = the control had a row within 0.1 arcsec; flux column = flux_fit_avg.
+
+seed flux column flux added rows 98
+exempt {'new row': 45, 'row existed': 8}
+   new row           n  45; merged flux_fit_avg median    1535.7; control-row flux median       nan; seed flux median    1522.2; nearest-row sep median 0.000"
+   row existed       n   8; merged flux_fit_avg median    1385.4; control-row flux median    1445.2; seed flux median    1392.7; nearest-row sep median 0.001"
+relaxed {'row existed': 7, 'new row': 38}
+   row existed       n   7; merged flux_fit_avg median    1375.5; control-row flux median    1561.7; seed flux median     813.7; nearest-row sep median 0.010"
+   new row           n  38; merged flux_fit_avg median    1497.0; control-row flux median       nan; seed flux median    1189.9; nearest-row sep median 0.001"
