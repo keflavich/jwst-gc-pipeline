@@ -1,0 +1,114 @@
+# Whole-star leftovers and big craters of the residual i2d of o130 F212N, per arm.
+# Tags: dq4mkr<arm> = footprint mask with ring zone + DQ_SAT dilation 4 px; ee8dq4mkr<arm> = the same + edge band 8 px.
+# Arms: dncg = production seed, #1366 on, with the saturated-star PSF grid that the production run cached; dncgp = dncg + #1365 rescue (ratio 3, floor 500);
+# sd1 = union seed (production + the rows of the far-companion exemption and of the relaxed bright window), #1366 on, cached PSF grid; sd1p = sd1 + rescue.
+# Leftover = resid_over_data > 0.7 and resid_peak >= 50 MJy/sr; big crater = depth > 50 MJy/sr and depth/model > 0.3.  'vs' blocks: control = first tag of the section.
+# The leftover counts of an arm are the same in every section it appears in.
+
+################ DQ_SAT dilation 4 px (no edge band); control dncg (production seed, cached PSF grid), all arms
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500
+dq4mkrdncg                               94       30       20        6        4        8      0      0
+dq4mkrdncgp                              91       29       19        6        4        8      0      0
+dq4mkrsd1                                84       22       17        6        4        8      0      0
+dq4mkrsd1p                               81       21       16        6        4        8      0      0
+
+dq4mkrdncg                         >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 6, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4mkrdncgp                        >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 6, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4mkrsd1                          >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4mkrsd1p                         >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+
+dq4mkrdncgp vs dq4mkrdncg: control leftovers >=100: cleared 1, reduced <0.5x 0, unchanged 29, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 7802, 2717) NOT_IN_M7_CATALOG        249 ->       0
+
+dq4mkrsd1 vs dq4mkrdncg: control leftovers >=100: cleared 8, reduced <0.5x 0, unchanged 22, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 9922, 4546) SATSTAR_NEAR             424 ->       0
+   cleared  (  511,  237) SATSTAR_NEAR             235 ->       0
+   cleared  ( 4078, 1742) SATSTAR_NEAR             230 ->       0
+   cleared  ( 6290, 3309) NOT_IN_M7_CATALOG        190 ->       0
+   cleared  ( 7465, 2350) NOT_IN_M7_CATALOG        188 ->       0
+   cleared  (  354, 2056) SATSTAR_NEAR             119 ->       0
+   cleared  ( 8215, 2869) NOT_IN_M7_CATALOG        108 ->       0
+   cleared  ( 8402, 3107) NOT_IN_M7_CATALOG        101 ->       0
+
+dq4mkrsd1p vs dq4mkrdncg: control leftovers >=100: cleared 9, reduced <0.5x 0, unchanged 21, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 9922, 4546) SATSTAR_NEAR             424 ->       0
+   cleared  ( 7802, 2717) NOT_IN_M7_CATALOG        249 ->       0
+   cleared  (  511,  237) SATSTAR_NEAR             235 ->       0
+   cleared  ( 4078, 1742) SATSTAR_NEAR             230 ->       0
+   cleared  ( 6290, 3309) NOT_IN_M7_CATALOG        190 ->       0
+   cleared  ( 7465, 2350) NOT_IN_M7_CATALOG        188 ->       0
+   cleared  (  354, 2056) SATSTAR_NEAR             119 ->       0
+   cleared  ( 8215, 2869) NOT_IN_M7_CATALOG        108 ->       0
+   cleared  ( 8402, 3107) NOT_IN_M7_CATALOG        101 ->       0
+
+################ DQ_SAT dilation 4 px (no edge band); control dncgp (rescue on in both arms)
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500
+dq4mkrdncgp                              91       29       19        6        4        8      0      0
+dq4mkrsd1p                               81       21       16        6        4        8      0      0
+
+dq4mkrdncgp                        >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 6, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+dq4mkrsd1p                         >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 6, VETTED_OUT 1
+
+dq4mkrsd1p vs dq4mkrdncgp: control leftovers >=100: cleared 8, reduced <0.5x 0, unchanged 21, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 9922, 4546) SATSTAR_NEAR             424 ->       0
+   cleared  (  511,  237) SATSTAR_NEAR             235 ->       0
+   cleared  ( 4078, 1742) SATSTAR_NEAR             230 ->       0
+   cleared  ( 6290, 3309) NOT_IN_M7_CATALOG        190 ->       0
+   cleared  ( 7465, 2350) NOT_IN_M7_CATALOG        188 ->       0
+   cleared  (  354, 2056) SATSTAR_NEAR             119 ->       0
+   cleared  ( 8215, 2869) NOT_IN_M7_CATALOG        108 ->       0
+   cleared  ( 8402, 3107) NOT_IN_M7_CATALOG        101 ->       0
+
+################ DQ_SAT dilation 4 px + edge band 8 px; control dncg (production seed, cached PSF grid), all arms
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500
+ee8dq4mkrdncg                            90       27       16        4        3        8      0      0
+ee8dq4mkrdncgp                           87       26       15        4        3        8      0      0
+ee8dq4mkrsd1                             80       19       13        4        3        8      0      0
+ee8dq4mkrsd1p                            77       18       12        4        3        8      0      0
+
+ee8dq4mkrdncg                      >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee8dq4mkrdncgp                     >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee8dq4mkrsd1                       >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee8dq4mkrsd1p                      >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+
+ee8dq4mkrdncgp vs ee8dq4mkrdncg: control leftovers >=100: cleared 1, reduced <0.5x 0, unchanged 26, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 7802, 2717) NOT_IN_M7_CATALOG        249 ->       0
+
+ee8dq4mkrsd1 vs ee8dq4mkrdncg: control leftovers >=100: cleared 8, reduced <0.5x 0, unchanged 19, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 9922, 4546) SATSTAR_NEAR             424 ->       0
+   cleared  (  511,  237) SATSTAR_NEAR             235 ->       0
+   cleared  ( 4078, 1742) SATSTAR_NEAR             230 ->       0
+   cleared  ( 6290, 3309) NOT_IN_M7_CATALOG        190 ->       0
+   cleared  ( 7465, 2350) NOT_IN_M7_CATALOG        188 ->       0
+   cleared  (  354, 2056) SATSTAR_NEAR             119 ->       0
+   cleared  ( 8215, 2869) NOT_IN_M7_CATALOG        108 ->       0
+   cleared  ( 8402, 3107) NOT_IN_M7_CATALOG        101 ->       0
+
+ee8dq4mkrsd1p vs ee8dq4mkrdncg: control leftovers >=100: cleared 9, reduced <0.5x 0, unchanged 18, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 9922, 4546) SATSTAR_NEAR             424 ->       0
+   cleared  ( 7802, 2717) NOT_IN_M7_CATALOG        249 ->       0
+   cleared  (  511,  237) SATSTAR_NEAR             235 ->       0
+   cleared  ( 4078, 1742) SATSTAR_NEAR             230 ->       0
+   cleared  ( 6290, 3309) NOT_IN_M7_CATALOG        190 ->       0
+   cleared  ( 7465, 2350) NOT_IN_M7_CATALOG        188 ->       0
+   cleared  (  354, 2056) SATSTAR_NEAR             119 ->       0
+   cleared  ( 8215, 2869) NOT_IN_M7_CATALOG        108 ->       0
+   cleared  ( 8402, 3107) NOT_IN_M7_CATALOG        101 ->       0
+
+################ DQ_SAT dilation 4 px + edge band 8 px; control dncgp (rescue on in both arms)
+tag                                L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50 >=200 >=500
+ee8dq4mkrdncgp                           87       26       15        4        3        8      0      0
+ee8dq4mkrsd1p                            77       18       12        4        3        8      0      0
+
+ee8dq4mkrdncgp                     >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+ee8dq4mkrsd1p                      >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 5, VETTED_OUT 1
+
+ee8dq4mkrsd1p vs ee8dq4mkrdncgp: control leftovers >=100: cleared 8, reduced <0.5x 0, unchanged 18, worse >1.5x 0; new >=100 not in control 0
+   cleared  ( 9922, 4546) SATSTAR_NEAR             424 ->       0
+   cleared  (  511,  237) SATSTAR_NEAR             235 ->       0
+   cleared  ( 4078, 1742) SATSTAR_NEAR             230 ->       0
+   cleared  ( 6290, 3309) NOT_IN_M7_CATALOG        190 ->       0
+   cleared  ( 7465, 2350) NOT_IN_M7_CATALOG        188 ->       0
+   cleared  (  354, 2056) SATSTAR_NEAR             119 ->       0
+   cleared  ( 8215, 2869) NOT_IN_M7_CATALOG        108 ->       0
+   cleared  ( 8402, 3107) NOT_IN_M7_CATALOG        101 ->       0
