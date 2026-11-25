@@ -27,9 +27,11 @@ A dominating pool source is a cross-band seed position (it inherits the
 saturation flag of the own-band row within `match_mas`; with no such row it
 counts as saturated) or another own-band candidate (its `is_saturated` or
 `replaced_saturated` flag).  Seed-table keywords: `COMPKSNR`, `COMPKFWH`,
-`NCOMPKEP` (rows exempted); `NCOMPAN` stays the number still cut.  The S/N
-scale depends on the band (it is the ratio of two catalog columns), so the
-documented value belongs to F212N and a band needs its own.
+`NCOMPKEP` (rows exempted); `NCOMPAN` stays the number still cut; `COMPKSNR`
+is the floor that the table's own band used.  The S/N scale depends on the band
+(it is the ratio of two catalog columns), so the documented value belongs to
+F212N and the option takes a value per band: `F212N=50,F480M=0` (see [Per-band
+values of the floor](#per-band-values-of-the-floor)).
 
 All counts below are gc-treasury 10678 F212N, tiles o045 and o105, both
 modules (nrca, nrcb) unless a section says otherwise.  A *leftover* is a
@@ -133,6 +135,80 @@ m6 vetted catalogs of both modules and both tiles (`results/build_exempt_seed.lo
   33 of 887, 29 of 185, 6 of 32; o105 28 of 709, 20 of 168, 6 of 35; none of the
   4 leftovers ≥ 500.  26 of 32 and 29 of 35 leftovers ≥ 200 MJy/sr are not
   reached; of the 22 traced stars 9 are (`results/cover_targets.txt`).
+
+## Per-band values of the floor
+
+The own-band S/N of a source is the ratio of two catalog columns and its scale
+differs between the bands, so `--manual-m7-seed-own-band-companion-keep-snr`
+takes a value per band.  A plain number applies to every band; a run that
+passes one number builds the same seeds as a run before the option took pairs.
+Comma-separated `BAND=VALUE` pairs set the bands they name: `F212N=50,F480M=0`
+gives F212N the floor 50 and leaves the exemption off at F480M.  A band that no
+pair names keeps the default 0 (off).  Band names are case-insensitive and a
+value is a finite number ≥ 0.  A plain number mixed with pairs, a band named
+twice, a value that is negative or is not a number, and an entry that is not
+`BAND=VALUE` stop the run when the command line is read; the message names the
+option and the offending text.  `band_option.py::parse_band_values` parses the
+value and `band_option.py::band_mopt` resolves it for one band (the module is
+shared with the option `--manual-seed-round-bright-snr-min` of #1376).  The m7
+call site hands `_build_m7_band_seed` the value of the band that it builds, the
+seed table records that value as `COMPKSNR`, and with pairs on the command line
+the m7 log names the value that each band uses.
+`--manual-m7-seed-own-band-companion-keep-fwhm` stays one value for every band,
+because it is a distance in PSF FWHM.
+
+**Recipe.**  `--manual-m7-seed-own-band-companion-keep-snr F212N=50,F480M=0`,
+together with `--manual-seed-round-bright-snr-min F212N=30,F480M=100` of #1376.
+
+**Reason.**  With the plain floor 50 for every band, the exemption adds 53 rows
+to the o045 F212N band seeds (25 in nrca, 28 in nrcb) and 2406 rows to the o045
+F480M band seeds (1150 in nrca, 1256 in nrcb).  At F480M the scan of the
+exemption floor (the table in the section [Tile-level A/B on o118, o130, o138
+F212N and o045 F480M](#tile-level-ab-on-o118-o130-o138-f212n-and-o045-f480m))
+puts 8 of the 2406 rows within 0.072″ of a whole-star leftover ≥ 50 MJy/sr of
+the production render and none within 0.072″ of one ≥ 100 MJy/sr; the count at
+≥ 100 MJy/sr is 0 at every floor of the scan from 50 to 250 and 1 row at each of
+the floors 30 and 40.  In the tile-level test at the floor 150, none of the 3
+leftovers ≥ 100 MJy/sr that the added rows cleared lies under an exemption row;
+all 3 lie under rows of the relaxed window.  This is one tile in one band; F480M
+on the other four tiles was not run.
+
+**Real-data check.**  The inputs are those of an end-to-end o045 run of the
+stack of open PRs (one arm with the plain exemption floor 50 and the plain
+relaxed ERR S/N floor 30 for every band, one control arm with both options off;
+the production catalogs of o045 serve as a second reference).  For both modules
+the two seed builders ran as the m7 phase calls them (`_build_m7_band_seed`,
+then `_build_i2d_augmented_seed` with the bright window of #1376 at roundness
+1.5), three times per band: with the recipe, with the plain numbers that give
+the band the same two values (F212N: 50 and 30; F480M: 0 and 100) and, at
+F480M, with the plain 50 and 30 for every band.  The scripts are not part of
+this repo.  In the table, the number in parentheses is the row count of the
+production table of the same name.
+
+| band, module | band seed rows (production) | exemption rows | i2d seed rows (production) | rows of the relaxed window |
+|---|---|---|---|---|
+| F212N nrca | 326,345 (326,320) | 25 | 368,565 (368,524) | 16 |
+| F212N nrcb | 337,746 (337,718) | 28 | 381,134 (381,078) | 28 |
+| F480M nrca | 106,996 (106,996) | 0 | 118,515 (118,513) | 2 |
+| F480M nrcb | 107,224 (107,224) | 0 | 117,768 (117,766) | 2 |
+
+- At F212N the recipe builds the same band seed and i2d seed as the plain 50
+  and 30 and as the seeds of the end-to-end run (which were built before the
+  options took pairs).  After sorting by position the tables have the same rows
+  and columns, equal values (positions bit for bit) and the same header
+  keywords, except `RBSNRMIN`, which #1376 adds.
+- At F480M the band seed of the recipe equals the band seed of the control arm
+  (rows, columns, values and header keywords) and the production band seed
+  (rows, columns and values; the production header has no exemption keywords).
+  The i2d seed of the recipe without its 2 + 2 rows of the relaxed window equals
+  the i2d seed of the control arm (rows, columns and values).
+- With the plain 50 and 30 for every band, the F480M band seeds gain 1150 and
+  1256 exemption rows (`NCOMPKEP`; `COMPKSNR` 50) and equal the band seeds of the
+  end-to-end run; the relaxed window adds the same 2 rows per module at the ERR
+  S/N floor 30 as at 100.
+- The check runs the two seed builders.  It does not run the m7 fit, so it
+  establishes which rows the seeds hold and says nothing about the fitted
+  catalog.
 
 ## One-frame replays of the production m7 fit
 
@@ -644,7 +720,9 @@ every floor of the scan from 80 to 150, so they do not separate the floors in
 that range.  Of the 63 exemption rows, 7 lie within 0.072″ (the radius of the
 F212N tests, kept at F480M) of a whole-star leftover ≥ 50 MJy/sr of the
 production render and 0 within 0.072″ of one ≥ 100 MJy/sr (at 30: 10 of 3769
-rows and 1).  The table lists these numbers for every floor of the scan.
+rows and 1).  The table lists these numbers for every floor of the scan.  The
+recipe of [Per-band values of the floor](#per-band-values-of-the-floor) leaves
+the exemption off at F480M.
 
 | own-band S/N floor | rows added (nrca + nrcb) | rows within 0.072″ of a whole-star leftover ≥ 50, ≥ 100, ≥ 200 MJy/sr of the production render |
 |---|---|---|
@@ -780,7 +858,10 @@ o045 in F480M; F480M on o105, o118, o130 and o138 was not run.  The S/N values
 of the F212N tests (50 for the exemption, 30 for the relaxed window) were
 tuned on F212N.  At F480M the exemption floor of 150 was set by row count, and
 the relaxed window at its default of 100 adds 4 rows, so the F480M test
-measures little of either option.  The counts are those of flagged, masked
+measures little of either option.  The recipe gives F480M no exemption and the
+relaxed window its default of 100; no tile-level test ran with exactly those
+rows, because the o045 F480M test carries its 63 exemption rows as well.  The
+counts are those of flagged, masked
 renders and are not comparable to the counts of the production render of the
 same tile-band.
 
@@ -825,9 +906,10 @@ F212N S/N value, because the F182M S/N scale is another one.
 ## Things to decide or know
 
 - **Default off.**  `keep_snr` 0 leaves the cut unchanged.  50 is the F212N
-  documented value; the S/N of a source depends on the band, so a band needs
-  its own test (the F182M test above does not fix the F212N scale).  A per-band
-  default is a small change.
+  documented value; the S/N of a source depends on the band, so the option
+  takes a value per band (`F212N=50,F480M=0`) and a band needs its own test (the
+  F182M test above does not fix the F212N scale).  A band that no pair names
+  stays off.
 - **Saturated neighbours stay cut.**  Two of the 11 traced companion-cut stars,
   (6092, 3774) and (9794, 833), sit 2.35 and 2.48 FWHM from a saturated
   dominating source (their own S/N is 85 and 76), and stay in the leftover list.
@@ -863,8 +945,8 @@ F212N S/N value, because the F182M S/N scale is another one.
   vetting or finalize ran with the added rows; the production vetted catalog
   plus the difference of the merged catalogs stands in for them, so the counts
   are the best case for the added rows.  F480M on o105, o118, o130 and o138 was
-  not run at tile level, and the exemption floor is one value for all bands
-  (the F480M test used 150, chosen by row count).
+  not run at tile level, and the o045 F480M test used the exemption floor 150
+  (chosen by row count) where the recipe leaves the exemption off at F480M.
 - One field and band: the S/N and separation values come from gc-treasury
   10678 F212N (two tiles) and the F182M independent-visit test.
 - The leftover scoring script is not part of this repo; the leftover lists
@@ -888,5 +970,9 @@ python scripts/replay_added_rows.py CONTROL_BAND_DIR TREATMENT_BAND_DIR --json o
 ```
 
 Unit tests: `jwst_gc_pipeline/photometry/tests/test_m7_band_seed.py` (the
-exemption, the saturated-donor rule, the missing-column error, the flag reader,
-the option wiring); 36 pass.
+exemption, the floor of each band, the saturated-donor rule, the missing-column
+error, the flag reader, the option wiring; 33 tests) and
+`jwst_gc_pipeline/photometry/tests/test_band_option.py` (the parser of per-band
+values and its error messages, the resolution for one band, the `optparse`
+callback, the options of the command line that take pairs and the call sites
+that resolve them; 44 tests); all 77 pass.

@@ -22,6 +22,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 from jwst_gc_pipeline.photometry import cataloging
+from jwst_gc_pipeline.photometry.band_option import band_mopt
 from jwst_gc_pipeline.photometry.cataloging import (
     _auto_m7_seed_own_band, _build_i2d_augmented_seed, _build_m7_band_seed,
     _dedup_m7_band_seed,
@@ -609,6 +610,39 @@ def test_far_companion_exemption_needs_its_columns(tmp_path):
             _build_m7_band_seed(xpath, opath, 'F182M', 'merged', fwhm_arcsec=0.062, **kw)
 
 
+def test_far_companion_exemption_floor_per_band(tmp_path):
+    """``--manual-m7-seed-own-band-companion-keep-snr F212N=50,F480M=0`` sets the
+    exemption on in F212N and off in F480M; a band that the option does not name keeps
+    the default (off), and a plain number keeps its meaning for every band."""
+    xpath, opath = _keep_fixture(tmp_path)
+    run = dict(companion_fwhm=2.5, fwhm_arcsec=0.062)
+
+    def seed(band, raw):
+        opts = types.SimpleNamespace(manual_m7_seed_own_band_companion_keep_snr=raw)
+        floor = band_mopt(opts, 'manual_m7_seed_own_band_companion_keep_snr', band)
+        out = Table.read(_build_m7_band_seed(xpath, opath, band, 'merged',
+                                             companion_keep_snr=floor, **run))
+        return out.meta['COMPKSNR'], out.meta['NCOMPKEP'], sorted(out['flux'])
+
+    off = seed('F480M', '0')
+    assert off[:2] == (0.0, 0)
+    plain = seed('F212N', '50')
+    assert plain[:2] == (50.0, 2)
+    assert plain[2] == sorted(off[2] + [6.0, 6.0])
+    # F212N gets the plain-number result, F480M and a band the option does not name get none
+    assert seed('F212N', 'F212N=50,F480M=0') == plain
+    assert seed('f212n', 'f212n=50') == plain
+    assert seed('F480M', 'F212N=50,F480M=0') == off
+    assert seed('F182M', 'F212N=50,F480M=0') == off
+    assert seed('F182M', 'F212N=50') == off
+    # a plain number applies to every band
+    assert seed('F480M', '50') == plain
+    assert seed('F182M', 50.0) == plain
+    # a floor that no source reaches (the two candidates have S/N 60) leaves the cut as it
+    # is, and the table records the floor of its band
+    assert seed('F480M', 'F212N=50,F480M=61') == (61.0,) + off[1:]
+
+
 def test_flag_array_reads_the_stored_forms():
     flag = cataloging._flag_array
     assert list(flag(np.array([True, False]))) == [True, False]
@@ -658,7 +692,10 @@ def test_pipeline_passes_the_companion_options():
     (call,) = [c for c in ast.walk(tree) if isinstance(c, ast.Call)
                and getattr(c.func, 'id', None) == '_build_m7_band_seed']
     kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
-    for arg in ('companion_fwhm', 'companion_max_ratio',
-                'companion_keep_snr', 'companion_keep_fwhm'):
+    for arg in ('companion_fwhm', 'companion_max_ratio', 'companion_keep_fwhm'):
         assert kw[arg] == f"float(mopt(opts_phase, 'manual_m7_seed_own_band_{arg}'))"
+    # the exemption floor is the value of the band the seed is built for
+    assert kw['companion_keep_snr'] == (
+        "band_mopt(opts_phase, 'manual_m7_seed_own_band_companion_keep_snr', filt, "
+        "label=f'{phase}:{filt}')")
     assert kw['dedup_fwhm'] == "float(mopt(opts_phase, 'manual_m7_seed_dedup_fwhm'))"

@@ -53,6 +53,7 @@ from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import (
     MANUAL_DEFAULTS, manual_group_fit_enabled, mopt)
+from jwst_gc_pipeline.photometry.band_option import band_mopt
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     recorded_source_exposure)
 from jwst_gc_pipeline.photometry.requested_filters import (
@@ -6521,7 +6522,10 @@ def _build_m7_band_seed(crossband_seed_path, own_vetted_path, filtername, module
     S/N 50 and 1.75 FWHM returns 53 and 42 of them
     (docs/evidence/m7_companion_keep).  The default 0 leaves the cut as
     described above; the exemption needs the own-band catalog's ``flux_err``
-    and saturation columns.
+    and saturation columns.  The S/N of a source depends on the band, so the
+    option takes a value per band (``--manual-m7-seed-own-band-companion-keep-snr
+    F212N=50,F480M=0``; see :func:`band_option.parse_band_values`) and the
+    caller passes this function the value of ``filtername``.
 
     Seed dedup (``dedup_fwhm``, ``manual_m7_seed_dedup_fwhm``): a cross-band
     position and the own-band m6 position of the same star can differ by more
@@ -12137,7 +12141,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                 max_sep_mas=float(mopt(opts_phase, 'manual_crossband_seed_max_sep_mas')),
                                 companion_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_fwhm')),
                                 companion_max_ratio=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_max_ratio')),
-                                companion_keep_snr=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_keep_snr')),
+                                companion_keep_snr=band_mopt(
+                                    opts_phase, 'manual_m7_seed_own_band_companion_keep_snr',
+                                    filt, label=f'{phase}:{filt}'),
                                 companion_keep_fwhm=float(mopt(opts_phase, 'manual_m7_seed_own_band_companion_keep_fwhm')),
                                 dedup_fwhm=float(mopt(opts_phase, 'manual_m7_seed_dedup_fwhm')),
                                 label=f'{phase}:{filt}')
