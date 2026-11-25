@@ -788,10 +788,12 @@ Note on the three `--manual-ext-prop-floor-*` guard switches (issue #1025):
   32 and 6 of the 35 whole-star leftovers of at least 200 MJy/sr in the control m7
   residual (`docs/evidence/m7_companion_keep`).  A source's S/N depends on the band,
   so the option takes a value per band and the documented recipe is
-  `F212N=50,F480M=0`.  With the plain 50 for every band the o045 F480M band seeds
-  gain 2406 rows where the F212N seeds gain 53, and none of the F480M rows lies
+  `F212N=50,F480M=0`.  With the plain 50 for every band the F480M band seeds of the
+  five tiles of 10678 gain 2406 (o045), 2200 (o105), 871 (o118), 528 (o130) and 568
+  (o138) rows where the F212N seeds of o045 gain 53, and 3 of those 6573 rows lie
   within 0.072″ of a whole-star leftover of at least 100 MJy/sr of the production
-  render, so the exemption stays off at F480M (same directory).
+  render (none within 0.072″ of one of at least 200 MJy/sr), so the exemption stays
+  off at F480M (same directory).
   `docs/evidence/faint_defaults_on` has the faint-star reference-field
   results with and without it.  It is off on extended-emission targets
   because every m7 seed position is masked out of the smoothed background:
