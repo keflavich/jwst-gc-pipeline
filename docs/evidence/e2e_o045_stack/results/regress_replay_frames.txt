@@ -1,0 +1,5 @@
+| frame | switch off: rows within 2 px of the star (flux, qfit, distance) | earlier rule | this update |
+|---|---|---|---|
+| F212N nrcb4 exp 2 (mosaic star (8653,1078)) | 37825.3 (qfit 0.0157, 0.08 px) | 35092.7 (qfit 0.0157, 0.05 px); 17249.2 (qfit 0.0106, 1.27 px) | 37825.3 (qfit 0.0157, 0.08 px) |
+| F212N nrcb2 exp 4 (mosaic star (8653,1078)) | 47710.9 (qfit 0.0118, 0.06 px) | 33936.2 (qfit 0.0118, 0.19 px); 18947.5 (qfit 0.00791, 1.20 px) | 47710.9 (qfit 0.0118, 0.06 px) |
+| F480M nrcalong exp 6 (mosaic star (410,1680)) | none | 3943.8 (qfit 0.00573, 0.05 px); 107.7 (qfit 1.11, 1.36 px) | 3943.8 (qfit 0.00573, 0.05 px) |

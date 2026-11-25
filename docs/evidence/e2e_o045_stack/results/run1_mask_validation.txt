@@ -1,0 +1,4 @@
+optnm-vs-optfin-F212N: NaN only in A 0, NaN only in B 8119113, NaN in both 2363545, finite in both 43708622; max |A-B| 0, px with |A-B| > 1e-3: 0
+optnm-vs-optfin-F480M: NaN only in A 0, NaN only in B 3034817, NaN in both 393499, finite in both 9430884; max |A-B| 0, px with |A-B| > 1e-3: 0
+optfin-vs-libmask-k4full-F212N: NaN only in A 0, NaN only in B 0, NaN in both 10482658, finite in both 43708622; max |A-B| 0, px with |A-B| > 1e-3: 0
+optfin-vs-libmask-k4full-F480M: NaN only in A 0, NaN only in B 0, NaN in both 3428316, finite in both 9430884; max |A-B| 0, px with |A-B| > 1e-3: 0

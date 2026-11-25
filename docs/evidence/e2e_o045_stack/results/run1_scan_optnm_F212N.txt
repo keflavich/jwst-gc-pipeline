@@ -1,0 +1,53 @@
+# F212N: box 13 x 13 px, leftover threshold 200 MJy/sr, crater threshold 200 MJy/sr, factor 1.5; mosaic 11440 x 4737 px; source optnm, references ctlfin
+## features of optnm against the extremum of ctlfin in the same box (regressions)
+  leftover: 77 features; ctlfin extremum below the threshold and more than 1.5 times lower: 0; more than 1.5 times lower and above the threshold: 1; within a factor 1.5: 66; more than 1.5 times higher: 10
+      ( 8653, 1078) optnm    4803  ctlfin     257  [weak] cls=SATSTAR_NEAR
+  crater  : 56 features; ctlfin extremum below the threshold and more than 1.5 times lower: 0; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 54; more than 1.5 times higher: 2
+## features of ctlfin against the extremum of optnm in the same box (improvements)
+  leftover: 191 features; optnm extremum below the threshold and more than 1.5 times lower: 114; more than 1.5 times lower and above the threshold: 1; within a factor 1.5: 67; more than 1.5 times higher: 9
+      (  266, 1113) ctlfin   48093  optnm    9800  [weak] cls=NOT_IN_M7_CATALOG
+      ( 6443,  197) ctlfin   15349  optnm      16  [regression] cls=VETTED_BUT_UNSUBTRACTED
+      ( 5164,  948) ctlfin   12991  optnm      19  [regression] cls=SATSTAR_NEAR
+      ( 6296, 2636) ctlfin   10826  optnm      24  [regression] cls=NOT_IN_M7_CATALOG
+      ( 4563, 4180) ctlfin    7860  optnm      20  [regression] cls=SATSTAR_NEAR
+      (10685, 3269) ctlfin    6814  optnm      28  [regression] cls=SATSTAR_NEAR
+      (11273, 3602) ctlfin    6764  optnm      21  [regression] cls=SATSTAR_NEAR
+      (  544, 1981) ctlfin    5936  optnm      33  [regression] cls=NOT_IN_M7_CATALOG
+      ( 9708, 3426) ctlfin    5857  optnm      13  [regression] cls=NOT_IN_M7_CATALOG
+      ( 7840, 3229) ctlfin    5457  optnm      35  [regression] cls=NOT_IN_M7_CATALOG
+      ( 6136, 4124) ctlfin    5357  optnm      32  [regression] cls=SATSTAR_NEAR
+      ( 7120, 2278) ctlfin    5306  optnm      19  [regression] cls=SATSTAR_NEAR
+      ( 3540, 1529) ctlfin    4907  optnm       9  [regression] cls=SATSTAR_NEAR
+      (  135, 2383) ctlfin    4780  optnm      14  [regression] cls=SATSTAR_NEAR
+      ( 4546, 4267) ctlfin    4678  optnm      20  [regression] cls=NOT_IN_M7_CATALOG
+  crater  : 190 features; optnm extremum below the threshold and more than 1.5 times lower: 98; more than 1.5 times lower and above the threshold: 12; within a factor 1.5: 73; more than 1.5 times higher: 7
+      ( 4949, 3839) ctlfin    8903  optnm     143  [regression]
+      ( 7199, 2516) ctlfin    4110  optnm     359  [weak]
+      ( 1626, 2418) ctlfin    3696  optnm      41  [regression]
+      ( 2778, 4280) ctlfin    3626  optnm    1855  [weak]
+      ( 2823, 3145) ctlfin    3314  optnm      34  [regression]
+      ( 8388, 2328) ctlfin    2916  optnm     139  [regression]
+      ( 4852, 4202) ctlfin    2590  optnm      -4  [regression]
+      ( 6996, 3783) ctlfin    2508  optnm     334  [weak]
+      ( 4073, 4192) ctlfin    2433  optnm       0  [regression]
+      ( 3295, 4182) ctlfin    2328  optnm      -1  [regression]
+      ( 7298,  633) ctlfin    2308  optnm     361  [weak]
+      ( 2083, 2073) ctlfin    2301  optnm      45  [regression]
+      (10309, 3202) ctlfin    2277  optnm      10  [regression]
+      ( 7296,  538) ctlfin    2203  optnm    1134  [weak]
+      ( 4861, 3856) ctlfin    2116  optnm       2  [regression]
+## probe positions: box extremum (maximum for a leftover, depth of the minimum for a crater) in MJy/sr
+  leftover ( 8653, 1078) optnm    4811  ctlfin     257  # first-run regression (#1366 survivor branch); listed as new by the 3 px matching in ctlfin:optnm (genuine)
+  leftover (  537, 2399) optnm     415  ctlfin     289  # listed as new by the 3 px matching in ctlfin:optnm (genuine)
+  leftover ( 1302, 2399) optnm     132  ctlfin     127  # listed as new by the 3 px matching in ctlfin:optnm (genuine)
+  leftover ( 5805, 2582) optnm     276  ctlfin     421  # listed as new by the 3 px matching in ctlfin:optnm (shifted)
+  crater   ( 9848,  819) optnm      95  ctlfin     737  # listed as new by the 3 px matching in ctlfin:optnm (below_crit)
+  crater   ( 7646, 1159) optnm    1498  ctlfin    1534  # listed as new by the 3 px matching in ctlfin:optnm (shifted)
+  crater   ( 2568, 2322) optnm    1174  ctlfin    1399  # listed as new by the 3 px matching in ctlfin:optnm (below_crit)
+  leftover ( 9314,  425) optnm    2770  ctlfin    2770  # listed as new by the 3 px matching in ctlfin:optfin (genuine)
+  leftover ( 9309,  432) optnm    3360  ctlfin    3360  # listed as new by the 3 px matching in ctlfin:optfin (genuine)
+  leftover ( 9323,  440) optnm   26012  ctlfin   26012  # listed as new by the 3 px matching in ctlfin:optfin (genuine)
+  leftover ( 9314,  441) optnm    9479  ctlfin    9479  # listed as new by the 3 px matching in ctlfin:optfin (genuine)
+  leftover ( 6707,  558) optnm     114  ctlfin     114  # listed as new by the 3 px matching in ctlfin:optfin (genuine)
+  crater   ( 6848, 1074) optnm      85  ctlfin      85  # listed as new by the 3 px matching in ctlfin:optfin (genuine)
+  crater   ( 6848, 1121) optnm      86  ctlfin      86  # listed as new by the 3 px matching in ctlfin:optfin (genuine)

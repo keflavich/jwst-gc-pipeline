@@ -1,0 +1,29 @@
+F480M: survival of the 2410 rows added to the opt seed (nearest row within 0.1 arcsec; the opt arm and, at the same positions, the ctl arm)
+
+opt arm, rows present at every stage (module = the added row's own module):
+group          n     module raw  module vetted     merged raw  merged vetted       xb m7    xb oksep       xb m8  xb m8dedup  m8 carried
+A exempt    2406           2399           2383           2398           2382        2382        2345        2382        2382        2382
+B relaxed      4              4              4              4              4           4           4           4           4           4
+all         2410           2403           2387           2402           2386        2386        2349        2386        2386        2386
+
+present in opt and absent in ctl at the same position (rows that the opt arm adds to the final catalogs):
+group          n       xb m7    xb oksep       xb m8  xb m8dedup
+A exempt    2406        2235        2203        2235        2235
+B relaxed      4           4           4           4           4
+all         2410        2239        2207        2239        2239
+
+ctl arm at the same positions:
+group          n       xb m7    xb oksep       xb m8  xb m8dedup
+A exempt    2406         151         145         151         151
+B relaxed      4           0           0           0           0
+all         2410         151         145         151         151
+
+rows lost at a stage after the merged-module vetted catalog (opt arm):
+  A exempt   xb m7 -> oksep cut                            37
+
+opt arm, the added rows present in the cross-band m7 table: own-band values (median, 16th and 84th percentile) and fractions
+  A exempt   n=2382  S/N 73.4 (56.6..104.6)  qfit 0.251 (0.199..0.333)  flags>0 1715  independently detected 2354  oksep_pass 2345  cmd_default 1506  n_filt_independent>=2 1510
+  B relaxed  n=  4  S/N 683.6 (586.4..768.0)  qfit 0.162 (0.064..0.254)  flags>0 3  independently detected 4  oksep_pass 4  cmd_default 2  n_filt_independent>=2 2
+  all        n=2386  S/N 73.4 (56.6..104.9)  qfit 0.251 (0.199..0.333)  flags>0 1718  independently detected 2358  oksep_pass 2349  cmd_default 1508  n_filt_independent>=2 1512
+
+table sizes (rows; rows with a F480M detection): opt_m7 587759 / 147864; opt_oksep 190354 / 144875; opt_m8 587759 / 147864; opt_m8dedup 583081 / 147837; ctl_m7 587309 / 145483; ctl_oksep 187022 / 142519; ctl_m8 587309 / 145483; ctl_m8dedup 582653 / 145453

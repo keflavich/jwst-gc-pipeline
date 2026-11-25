@@ -1,0 +1,7 @@
+# F212N box 13 x 13 px centred on (8385, 2328), residual i2d in MJy/sr; columns: tag, NaN pixels of 169, maximum, minimum (finite pixels), maximum and minimum with NaN set to 0
+ctlfin     nan   0/169  max     2430  min    -2904  (NaN as 0: max 2430, min -2904)
+optnm      nan   0/169  max       54  min     -139  (NaN as 0: max 54, min -139)
+opt2nm     nan   0/169  max     2663  min     -529  (NaN as 0: max 2663, min -529)
+optfin     nan 169/169  max  all NaN  min  all NaN  (NaN as 0: max 0, min 0)
+opt2fin    nan 169/169  max  all NaN  min  all NaN  (NaN as 0: max 0, min 0)
+ctlk4emu   nan 169/169  max  all NaN  min  all NaN  (NaN as 0: max 0, min 0)

@@ -1,0 +1,149 @@
+{
+ "queried": "2026-11-25",
+ "prs": [
+  {
+   "baseRefName": "main",
+   "headRefOid": "d504c167f3fce49909331b70696e80f3ccf3c5ff",
+   "isDraft": true,
+   "number": 1360,
+   "state": "OPEN",
+   "title": "Opt-in guards that remove bright-star leftovers and craters from the merged-catalog residual"
+  },
+  {
+   "baseRefName": "mergedcat-residual-guards",
+   "headRefOid": "1424a31e4ea4f9f56533098a1bbf8504f03acd68",
+   "isDraft": true,
+   "number": 1361,
+   "state": "OPEN",
+   "title": "Opt-in footprint mask for the merged-catalog residual i2d (stacked on #1360)"
+  },
+  {
+   "baseRefName": "mergedcat-residual-footprint-mask",
+   "headRefOid": "2ebe41c1314ce9a7dc175e123914501aadddec57",
+   "isDraft": true,
+   "number": 1362,
+   "state": "OPEN",
+   "title": "Opt-in restore of the daophot row that a dropped satstar row overwrote (SATSTAR_DAO_RESTORE_FRAC_MIN)"
+  },
+  {
+   "baseRefName": "satstar-dao-restore",
+   "headRefOid": "f095649f17ce970ee29b728170b6041354cf0510",
+   "isDraft": true,
+   "number": 1364,
+   "state": "OPEN",
+   "title": "Add a ring-zone extension to the residual footprint mask (opt-in, stacked on #1362)"
+  },
+  {
+   "baseRefName": "main",
+   "headRefOid": "622fe4676f3a9297a508e442ea595247177e7c53",
+   "isDraft": true,
+   "number": 1365,
+   "state": "OPEN",
+   "title": "combine_singleframe: opt-in flux-aware base-row seeding (MERGE_PAIR_RESCUE_RATIO)"
+  },
+  {
+   "baseRefName": "main",
+   "headRefOid": "38873cf879fcdc8cb1f7b73887b7d103d2205093",
+   "isDraft": true,
+   "number": 1366,
+   "state": "OPEN",
+   "title": "m7 post-fit dedup: keep the positive-flux row against a non-positive fit (DAOPHOT_DEDUP_NONPOSITIVE, default off)"
+  },
+  {
+   "baseRefName": "mergedcat-residual-guards",
+   "headRefOid": "9733dfc0917d4d1d8bd7bdd0363b8e9ba8d66311",
+   "isDraft": true,
+   "number": 1367,
+   "state": "OPEN",
+   "title": "Opt-in ramp test for single-exposure events (SINGLE_EXPOSURE_EVENT_RAMP)"
+  },
+  {
+   "baseRefName": "main",
+   "headRefOid": "3daf043f3eaba70f0ed7662c112e11ca62533ab6",
+   "isDraft": true,
+   "number": 1368,
+   "state": "OPEN",
+   "title": "Satstar accept gate: opt-in fractional waiver of the sidelobe cut"
+  },
+  {
+   "baseRefName": "satstar-sidelobe-frac",
+   "headRefOid": "383a14037af6f1c041f5d391588884202194f7fc",
+   "isDraft": true,
+   "number": 1369,
+   "state": "OPEN",
+   "title": "Satstar accept gate: mark sidelobe-only rejects that a mask can cover (opt-in)"
+  },
+  {
+   "baseRefName": "footprint-mask-ring-zone",
+   "headRefOid": "aaeceeacce2a1b0078f157ffc17a79949e85d6e4",
+   "isDraft": true,
+   "number": 1370,
+   "state": "OPEN",
+   "title": "Mask the footprints of maskable gate-rejected satstar fits in the residual i2d"
+  },
+  {
+   "baseRefName": "main",
+   "headRefOid": "60e6f3a0870e9cd691fb6f6c055535ccfd3cc81b",
+   "isDraft": true,
+   "number": 1371,
+   "state": "OPEN",
+   "title": "Satstar: opt-in LevMar iteration cap and edge position bound"
+  },
+  {
+   "baseRefName": "footprint-mask-rejected-satstars",
+   "headRefOid": "cae05e94945419400b13430ce9187924c29a5d61",
+   "isDraft": true,
+   "number": 1372,
+   "state": "OPEN",
+   "title": "Add a DQ_SATURATED dilation to the residual footprint mask"
+  },
+  {
+   "baseRefName": "footprint-mask-dqsat",
+   "headRefOid": "9434ba67203eda99af890300c9e155b5e4254e4f",
+   "isDraft": true,
+   "number": 1373,
+   "state": "OPEN",
+   "title": "Add an opt-in guard band along the data footprint edge to the residual footprint mask"
+  },
+  {
+   "baseRefName": "footprint-mask-edge-band",
+   "headRefOid": "5617387771505fe4b8e144ef7fc49c7ecf485c17",
+   "isDraft": true,
+   "number": 1374,
+   "state": "OPEN",
+   "title": "Add an opt-in positive one-pixel spike mask for the per-frame residuals"
+  },
+  {
+   "baseRefName": "footprint-mask-edge-band",
+   "headRefOid": "43d61ec7eb3a819f3d38890431bd15578fab7f24",
+   "isDraft": true,
+   "number": 1375,
+   "state": "OPEN",
+   "title": "Add an opt-in second flux/radius tier to the footprint mask ring-zone extension"
+  },
+  {
+   "baseRefName": "main",
+   "headRefOid": "770a1a5c640734373420eab3d309490c4a4ee46a",
+   "isDraft": true,
+   "number": 1376,
+   "state": "OPEN",
+   "title": "Opt-in bright roundness window for the m7 i2d seed (relaxed bright seeds)"
+  },
+  {
+   "baseRefName": "main",
+   "headRefOid": "1553ed4249fdc20892a7701148fef8dd3e4ad281",
+   "isDraft": true,
+   "number": 1377,
+   "state": "OPEN",
+   "title": "Add an opt-in far-companion exemption to the m7 own-band companion cut"
+  },
+  {
+   "baseRefName": "footprint-mask-edge-band",
+   "headRefOid": "b018b059e0041a05c0c7c5031acf002df22c83f1",
+   "isDraft": true,
+   "number": 1380,
+   "state": "OPEN",
+   "title": "Document the footprint mask at KFAC 2-4 on five tiles (counts, masked area, profile-correction test)"
+  }
+ ]
+}

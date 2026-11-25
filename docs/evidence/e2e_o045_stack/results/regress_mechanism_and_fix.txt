@@ -1,0 +1,103 @@
+Excerpt of the analysis of the two regressions of run 1 (F212N (8653,1078) and F480M (410,1680), unmasked residual renders of the opt arm against ctl) and of the update of PR #1366 that answers them.
+Names of scratch scripts and of replay variants in this excerpt refer to the analysis directory of the run and are not part of the repository.
+
+# Mechanism and replays (analysis of the regressions)
+
+## 1. Verdict
+
+| target (mosaic x,y) | ctl -> opt (unmasked residual) | verdict | owner | confidence |
+|---|---|---|---|---|
+| F212N (8653,1078) leftover | max +257 -> +4811 MJy/sr | real regression | #1366 `DAOPHOT_DEDUP_NONPOSITIVE` | high (per-frame replay with the switch off reproduces ctl exactly, with it on reproduces opt exactly, and the fix below returns the ctl rows in both frames) |
+| F480M (410,1680) leftover | max +19 -> +226 | real regression | #1366, rescue branch (a rescued companion row, see 4) | medium-high (per-frame rows replayed; merged-flux drop not replayed end to end) |
+| F480M (3701,498) crater | +52/-5 -> +29/-60 (depth 60-71 against a 642 MJy/sr star peak) | marginal (a -60 dip, below the 200 MJy/sr scan threshold) | not isolated: no switch acting in the replayed m7 pass owns it; the row exists only with the opt tree's staged inputs, so the cause sits in an earlier stage (candidates #1366, #1365, #1376, #1377; untested) | high that it is input-driven, none on the upstream switch |
+| F212N (537,2399), (5805,2582), (1302,2399) leftovers | 289 -> 415, 421 -> 276, 127 -> 132 | not regressions: exist in ctl within 1.5x | none | high |
+| F480M (4470,212), (5140,694) leftovers | 1780 -> 1792, 1800 -> 1800 | not regressions: identical in ctl | none | high |
+| F212N craters (7646,1159), (2568,2322), (9848,819) | min -1534 -> -1498, -1399 -> -1174, -737 -> -95 | not regressions: exist in ctl at equal or greater depth; the minimum pixel moves by 3-4 px, so the 3 px position match and the depth threshold list them as new | none | high |
+| F480M crater (1818,1303) | min -338 -> -267 | not a regression (same reason) | none | high |
+| F212N ring knots (9309-9323, 425-441), (6707,558); craters (6848,1074), (6848,1121); F480M (410,1680) masked-level entry | extrema identical in both arms (e.g. (9316,433): data peak 30418, model peak 7, residual 30417 in both) | render or mask level, not fit time | none | high for the unmasked images; the masked renders were not inspected |
+
+Generality: the new items are special, not a general satstar-neighbourhood effect.
+- Position-independent scan (13x13 box extremum, unmasked `optnm` against `ctlfin`, threshold 200 MJy/sr, `<script>`): F212N has exactly 1 opt leftover that is more than 1.5x ctl (8653,1078; ctl 257 is above the threshold) and 0 craters; F480M has 1 (410,1680) and 0 craters.  In the other direction opt clears 114 of 191 ctl leftovers and 98 of 190 ctl craters in F212N, and 14 of 212 leftovers and 13 of 42 craters in F480M.
+- Replacement flips: of 11,518 saturated F212N merged rows matched between the arms, exactly 1 changes `replaced_saturated` (the (8653,1078) star); 0 of 1,727 in F480M.
+- Both regressions come from #1366, through two branches of it: the refit of a surviving cancelling-pair row (F212N) and a rescued absorbed row (F480M).  In the replayed frames no other switch changes a row within 3 px of either star (`no1366` reproduces the ctl rows exactly at both).
+- F480M (3701,498) is the one item no replay-time switch explains: it is input-driven (see 3), a -60 dip that stays below the 200 MJy/sr scan threshold, so it does not change the count of regressed leftovers or craters.
+
+## 2. Mechanism at F212N (8653,1078) (RA 266.202216, Dec -29.031621)
+
+Frames: nrcb4 exp 2 (pixel 1484.0, 929.1) and nrcb2 exp 4 (851.2, 928.4); the other four exposures are identical in both arms.
+
+nrcb4 exp 2, grouped fit (group 702):
+
+| id | seed (x,y) | seed flux | fitted flux | fitted position |
+|---|---|---|---|---|
+| 57872 | 1484.00, 929.10 | 2.77e4 | +3.78e4 | 1484.0, 929.2 |
+| 708 | 1484.84, 930.04 | 6.07e4 | +1.07e5 | 1485.0, 930.0 |
+| 57001 | 1486.0, 931.1 | 0 | -1.06e5 (flag 5) | 1485.0, 930.2 |
+
+Rows 708 and 57001 are a +1.07e5 / -1.06e5 dipole (net about +1e3) 0.2 px apart, 1.27 px from the star's seed (0.54 FWHM; the seed dedup removes pairs within 1.17 px).
+- ctl (no #1366): the 1.0 px dedup keeps the negative row of the pair, the non-positive-flux ban removes it, the pair vanishes, and the star keeps one row: 3.78e4 (nrcb2 exp 4: 4.77e4).
+- opt (#1366): the positive row 708 survives and is refit at its own seed (the net flux is below 0.5 of its flux, so `_dedup_net_positions` does not move it); the refit takes light from the star: rows 3.51e4 + 1.72e4 (nrcb2 exp 4: 3.39e4 + 1.89e4).
+- Merge: the merged DAO flux falls from 6.12e4 (ctl) to 4.33e4 (opt).  The faint-replacement guard keeps the DAO row when the satstar flux is below 0.8 of the DAO flux: ctl 0.8 x 6.12e4 = 4.90e4 > satstar 4.81e4, so the guard holds with a 1.7 % margin; opt 0.8 x 4.33e4 = 3.46e4 < 4.81e4, so the guard does not hold and the satstar row (6 frames, qfit 2.97, 0.074 arcsec = 2.4 px from the DAO row) replaces the DAO row (merged flux 4.81e4, qfit 0.017 -> satstar).  Residual of the star: ctl +257/-1598, opt +4811/-954 (opt model peak 3970 at (8655,1080), data peak 5171).
+- The ctl arm is marginal for this star too (1.7 % margin on the guard) and the satstar row is a poor fit of its own; the merged ctl row is the DAO row only because the guard holds.
+
+## 3. Replay evidence (`<script>`, `rg/rg_replay.sbatch`; production seed catalogs of the `opt` tree, production logs for the options)
+
+Rows within 3 px of the star in the replayed per-frame daophot table, flux_fit (frf = forced refit):
+
+| variant | nrcb4 exp 2 (F212N) | nrcb2 exp 4 (F212N) | F480M nrcalong exp 6 (star at 6.6, 1486.9) | F480M nrcblong exp 4 (900.2, 452.0) |
+|---|---|---|---|---|
+| e2e opt table | 35092.7 + 17249.2 (frf) | 33936.2 + 18947.5 (frf) | 3943.8 (frf) + 107.7 (frf, qfit 1.11) | 1468.3 |
+| e2e ctl table | 37825.3 | 47710.9 | none at the star | none |
+| replay, all switches (`full`) | identical to opt table | identical to opt table | identical to opt table | 1468.3 |
+| replay, #1366 off (`no1366`) | 37825.3 (= ctl) | 47710.9 (= ctl) | none at the star (= ctl) | 1468.3 (not the cause; 53532 rows) |
+| replay, #1377 off (`nockeep`) | two rows (not the cause) | two rows (not the cause) | not run | 1468.3 (not the cause) |
+| replay, #1376 options off (`noround`) | not run | not run | not run | 1468.3 (not the cause) |
+| replay, ctl (`ctl`) | 37825.3 | not run | not run | not run |
+| replay, rescue separation only (first patch, wt_rgfix at that time) | still two rows (not enough) | still two rows | spurious 107.7 row gone, 3943.8 row kept | not run |
+| replay, final fix (`full` with `wt_rgfix`, `rgfix2*`) | 37825.3 (= ctl, one row) | 47710.9 (= ctl, one row) | 3943.8 kept (qfit 0.006), 107.7 row gone | not run |
+
+Frame row counts: nrcb4 exp 2 ctl 54907, opt 54981, `no1366` 54918 (so #1366 adds 63 rows in this frame).
+
+F480M (3701,498) is nrcblong exp 4, pixel (900.2, 452.0).  The extra row (flux 1468.3, seed flux 319.8, qfit 0.146, group size 1) lies 3.44 px (1.8 FWHM) from a star of flux 8881 whose own row is identical in every run (qfit 0.0238).  Replays of this frame:
+- row present: all switches on; each of #1360, #1362, #1365, #1366, #1367, #1369, #1371, #1374 off singly; the #1376 options off (`noround`); the #1377 keep off (`nockeep`); and `ctlcode` (opt tree inputs, ctl options, no env switches; 53532 rows).
+- row absent within 3 px: `ctlinputs` (ctl tree inputs, opt options and every env switch; 52822 rows).
+
+So the opt tree's staged inputs make the row, and no switch acting in this frame's m7 pass removes it.  What differs in the inputs: the seed table read by the replay holds `118994 -> 56409 sources on frame` with opt inputs and `117766 -> 55574` with ctl inputs (1228 more seeds in the tile, 835 more on this frame; the seed dedup removes 577 and 575).  The per-frame satstar products are not the cause near the target: catalog 501 rows in both arms with no positional difference, rejected table 214 rows each (one ctl-only row, not within 12 px of the target), satstar model and residual images differ in 4.5e5 and 4.1e5 pixels (max 40.4 MJy/sr, x >= 535) and in none within 12 px of the target.  The `i2dseed` catalogs read earlier show no seed at the target (only the neighbour, flux 8762), so which staged input carries the seed (seed table, satstar residual image or another) was not isolated.  Not done: a diff of the two seed tables at the target's sky position, and a rerun of the earlier stage with single switches off.
+
+## 4. F480M (410,1680)
+
+Merged vetted rows: opt flux 1070, qfit 0.78, nmatch 4; ctl flux 3976, qfit 0.01, nmatch 2.  In nrcalong exp 6 the group fit of seeds 11006 (3936), 47879 (1253, 1.32 px = 0.51 FWHM from the first) and 11853 gives fitted fluxes 9312, 0 and 3752.  With #1366 the first row is recovered by the refit (3943.8, qfit 0.006, a good recovery of a star that ctl loses in this frame) and the second is kept as a rescued row with its seed 1.32 px from the survivor's seed (refit 107.7, qfit 1.11).  The rescue test in `_dedup_nonpositive_cluster_rows` asks only for 1.0 px.  A rescue separation of 0.75 FWHM (1.94 px) removes the 107.7 row and keeps the 3943.8 row (replay `rgfixD`).  The drop of the merged flux to 1070 was not replayed through the merge; exp 3 has an opt-only row (2197.9, forced refit) that was not replayed.
+
+## 5. Proposed fix (owner PR #1366), diff in `regress_fix_1366_rescue.diff`
+
+Not applied to any branch; tree `wt_rgfix` (detached, from `wt_e2e` 3d7b94cd).
+1. `_dedup_nonpositive_cluster_rows(..., rescue_min_sep_pix=None)`: a rescued row's seed must be at least `rescue_min_sep_pix` from the survivor's seed (default unchanged, 1.0 px).
+2. New `_dedup_nonpositive_duplicate_survivors(...)`: a survivor whose net flux (own flux plus the non-positive rows it absorbed) is not above the fitted flux of a kept row within `sep_pix` of its seed is a duplicate of that row and is dropped, as it is without #1366.  Survivors are judged in order of decreasing strength.
+3. `_manual_phot_pass(..., dedup_recovery_min_sep_pix=None)`; `do_photometry_step_manual` passes `0.75 * ctx.fwhm_pix` (1.76 px F212N, 1.94 px F480M).
+4. Unit tests: 43 pass in `test_dedup_nonpositive.py` (seven new).
+
+Replay check of the final fix (`rgfix2A`, `rgfix2B`, `rgfix2D`): nrcb4 exp 2 and nrcb2 exp 4 return exactly the ctl rows (37825.3 and 47710.9, one row each); F480M exp 6 keeps the recovered star (3943.8, qfit 0.006) and loses the 107.7 row.  The survivor drop removes 2 survivors in each of the three frames.  Footprint against the all-switches replay: nrcb4 exp 2, 5 of 54981 rows differ (the 1.7e4 row, a 325 row and three rows below 30); nrcb2 exp 4, 9 of 54820 (the 1.9e4 row and rows of 20-480); F480M exp 6, 19 rows lost and 1 gained (median flux 35; two rows of 450-480 with qfit below 0.11 at x = 2-3, y = 677 that `no1366` also lacks).  Against `no1366`, the fixed nrcb4 exp 2 table still has 61 rows with no `no1366` row within 0.6 px (the all-switches replay has 63), and the fixed F480M exp 6 table has 139.
+
+Caveats:
+- 0.75 FWHM is a judgement between the 1.27 px (0.54 FWHM) and 1.32 px (0.51 FWHM) cases here and a pair that is resolved; the pipeline's own seed dedup uses 0.5 FWHM.  A fixed 1.5 px is the alternative.
+- Not run on a tile: the o130 F212N tile A/B that #1366 was validated on (leftovers >= 500 at the four render levels 94/20/6/4/3 -> 91/18/5/3/2) and the o045 F212N/F480M tile A/Bs need a repeat with the fix before it replaces the current rescue rule.
+- The replay stops at the per-frame table.  The merged flux, the faint-replacement guard and the residual image were not re-run with the fix; the single ctl rows at the star imply the ctl merged row, for which the guard held with a 1.7 % margin.
+- A merge-level alternative, not tried: compare the satstar flux with the DAO flux summed over the cluster instead of the merged mean; it would protect against any split star, and it changes behaviour for every replaced row.
+
+
+# Update of PR #1366 (head 38873cf8): code and validation, as written at the time
+
+## Code (`jwst_gc_pipeline/photometry/cataloging.py`, +132/-18 with the tests)
+- `_dedup_nonpositive_cluster_rows(..., rescue_min_sep_pix=None)`: rescued seed at least `max(rescue_min_sep_pix, 1 px)` from the survivor's seed.
+- new `_dedup_nonpositive_duplicate_survivors(...)`: survivor whose net flux is not above the strength of a kept row within `sep_pix` of its seed is dropped; judged in order of decreasing strength; NaN and empty input return early.
+- `_manual_phot_pass(..., dedup_recovery_min_sep_pix=None)`; `do_photometry_step_manual` passes `0.75 * ctx.fwhm_pix` (1.76 px F212N, 1.94 px F480M). None (default) leaves the switch as before.
+- Added on top of fork D's diff: a `keep_in_fit` row is never dropped by the duplicate rule (`dup_np & ~prot`), a NaN test.
+- Tests: `test_dedup_nonpositive.py` 36 -> 49 (13 new, names in the PR body). Docs: row of `DAOPHOT_DEDUP_NONPOSITIVE` in `SATURATED_PIXEL_HANDLING.md` (rules, o045 mechanism, new replay numbers, tile A/Bs marked as measured with the earlier form).
+
+## Validation (11 frames, three arms run the same day: control / earlier form cf5a29d2 / this update; replays on hpg-dev)
+- Stored 2026-11-23 tables do not reproduce today (nrca2 exp4 control: 20141 rows then, 20144 now, 17 rows with no row within 0.5 px, 761 not within 0.01 px; production 20140). Cause not identified. Merge-base control (803d0794) = branch control in all 28 columns of all 20144 rows. So all arms were rerun.
+- Six o130 F212N frames: 40 control positive rows absorbed (8 >= 1e4, max 6.84e4); rows added 38 earlier / 34 now; control rows missing 0 / 0; matched rows with flux change > 1 %: 5 / 5; 4 rows of the earlier form absent now (one of 1166 at 0.50 FWHM from a 2848 row; none >= 1e4). 900 stars >= 1e4; 5 have no control row and are recovered with identical flux by both forms (4.45e4, 1.53e4, 4.43e4, 1.49e4, 1.25e4); (349,2907) 4.449e4 exp4 / 4.427e4 exp5 at (315.01,725.79).
+- o105 nrcb1 exp2: (10976,2600) 42896 in both forms; 495 stars >= 1e4, 0 differ earlier vs now. o045 nrca1 exp3: star at pixel (283.4,1868.0) was 25790 + rescued 6702 (0.60 FWHM) in the earlier form, now one row of 31832. o045 nrca4 exp1: row of 1388 at 0.56 FWHM from a 42647 star left out. o138 F480M exp4/exp5: 143/143 rows added (earlier 158/160, 111/112 below flux 100); 16/17 rows of the earlier form absent, all < 1e3.
+- Regression frames: nrcb4 exp2 and nrcb2 exp4 F212N return the one control row (37825.3, 47710.9); nrcalong exp6 F480M keeps 3943.8 and drops the 107.7 row. Same rows as fork D's replay in the e2e tree for both F212N frames (0 rows differ); F480M table has 3 more rows than fork D's (flux 89.7, 62.3, 45.7; more than 1400 px from the star; cause not isolated: other PRs' code is absent from this branch and the `keep_in_fit` guard is absent from that tree).
+- The duplicate rule fires 0 times in the six o130 frames, 1 in o105, 1 + 0 in the two o045 frames, 4 + 3 in the two o138 frames.
+

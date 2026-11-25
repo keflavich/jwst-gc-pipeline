@@ -1,0 +1,2 @@
+first run : --manual-m7-seed-own-band-companion-keep-snr=50 --manual-seed-round-bright-max=1.5 --manual-seed-round-bright-snr-min=30
+this run  : --manual-m7-seed-own-band-companion-keep-snr=F212N=50,F480M=0 --manual-seed-round-bright-max=1.5 --manual-seed-round-bright-snr-min=F212N=30,F480M=100

@@ -1,0 +1,13 @@
+ctlfin-vs-opt2fin-F212N: NaN only in A 0, NaN only in B 8119129, NaN in both 2363529, finite in both 43708622; max |A-B| 2.59e+03, px with |A-B| > 1e-3: 977018
+optfin-vs-opt2fin-F212N: NaN only in A 0, NaN only in B 0, NaN in both 10482658, finite in both 43708622; max |A-B| 46.6, px with |A-B| > 1e-3: 17912
+prod-vs-opt2fin-F212N: NaN only in A 0, NaN only in B 8119129, NaN in both 2363529, finite in both 43708622; max |A-B| 2.59e+03, px with |A-B| > 1e-3: 41952008
+ctlfin-vs-opt2fin-F480M: NaN only in A 0, NaN only in B 3034817, NaN in both 393499, finite in both 9430884; max |A-B| 518, px with |A-B| > 1e-3: 276470
+optfin-vs-opt2fin-F480M: NaN only in A 0, NaN only in B 0, NaN in both 3428316, finite in both 9430884; max |A-B| 215, px with |A-B| > 1e-3: 966394
+prod-vs-opt2fin-F480M: NaN only in A 0, NaN only in B 3034817, NaN in both 393499, finite in both 9430884; max |A-B| 518, px with |A-B| > 1e-3: 8362590
+opt2nm-vs-opt2fin-F212N: NaN only in A 0, NaN only in B 8119113, NaN in both 2363545, finite in both 43708622; max |A-B| 0, px with |A-B| > 1e-3: 0
+optnm-vs-opt2nm-F212N: NaN only in A 0, NaN only in B 0, NaN in both 2363545, finite in both 51827735; max |A-B| 5.43e+03, px with |A-B| > 1e-3: 25871
+opt2nm-vs-opt2fin-F480M: NaN only in A 0, NaN only in B 3034817, NaN in both 393499, finite in both 9430884; max |A-B| 0, px with |A-B| > 1e-3: 0
+optnm-vs-opt2nm-F480M: NaN only in A 0, NaN only in B 0, NaN in both 393499, finite in both 12465701; max |A-B| 215, px with |A-B| > 1e-3: 1182091
+opt2fin-vs-libmask-k4full-F212N: NaN only in A 0, NaN only in B 0, NaN in both 10482658, finite in both 43708622; max |A-B| 0, px with |A-B| > 1e-3: 0
+opt2fin-vs-libmask-k4full-F480M: NaN only in A 0, NaN only in B 0, NaN in both 3428316, finite in both 9430884; max |A-B| 0, px with |A-B| > 1e-3: 0
+opt2fin-vs-libmask-v480k4full-F480M: NaN only in A 65727, NaN only in B 0, NaN in both 3362589, finite in both 9430884; max |A-B| 0, px with |A-B| > 1e-3: 0

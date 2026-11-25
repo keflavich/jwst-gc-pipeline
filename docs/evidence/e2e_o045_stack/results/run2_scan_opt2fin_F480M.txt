@@ -1,0 +1,44 @@
+# F480M: box 13 x 13 px, leftover threshold 200 MJy/sr, crater threshold 200 MJy/sr, factor 1.5; mosaic 5640 x 2280 px; source opt2fin, references ctlfin, optfin
+## features of opt2fin against the extremum of ctlfin in the same box (regressions)
+  leftover: 2 features; ctlfin extremum below the threshold and more than 1.5 times lower: 0; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 2; more than 1.5 times higher: 0
+  crater  : 0 features
+## features of ctlfin against the extremum of opt2fin in the same box (improvements)
+  leftover: 212 features; opt2fin extremum below the threshold and more than 1.5 times lower: 209; more than 1.5 times lower and above the threshold: 1; within a factor 1.5: 2; more than 1.5 times higher: 0
+      ( 2120, 2233) ctlfin    6940  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 2390, 1685) ctlfin    6452  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      (  390,  117) ctlfin    5101  opt2fin      32  [regression] cls=VETTED_BUT_UNSUBTRACTED
+      (  479,  174) ctlfin    4923  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 1394,  832) ctlfin    4626  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 2000,  126) ctlfin    4440  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 1321, 1528) ctlfin    4080  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      (  346,  177) ctlfin    3903  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 4303, 1540) ctlfin    3738  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 4647,  600) ctlfin    3484  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 5460, 1076) ctlfin    3096  opt2fin       0  [regression] cls=NOT_IN_M7_CATALOG
+      ( 2501, 2047) ctlfin    3056  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 1584, 1769) ctlfin    3044  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 3921,  615) ctlfin    2822  opt2fin       0  [regression] cls=SATSTAR_NEAR
+      ( 3863,  372) ctlfin    2744  opt2fin       0  [regression] cls=SATSTAR_NEAR
+  crater  : 42 features; opt2fin extremum below the threshold and more than 1.5 times lower: 42; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 0; more than 1.5 times higher: 0
+      ( 3419, 2094) ctlfin   14001  opt2fin      -0  [regression]
+      ( 1099, 1974) ctlfin    2130  opt2fin      -0  [regression]
+      (  222, 2005) ctlfin    2058  opt2fin      -0  [regression]
+      ( 4985, 1426) ctlfin    1485  opt2fin      -0  [regression]
+      ( 5470, 1067) ctlfin    1343  opt2fin      -0  [regression]
+      ( 2120, 2229) ctlfin    1222  opt2fin      -0  [regression]
+      ( 3408,  858) ctlfin     983  opt2fin      -0  [regression]
+      ( 3330,  724) ctlfin     814  opt2fin      -0  [regression]
+      ( 5127, 2048) ctlfin     785  opt2fin      -0  [regression]
+      ( 5124,  713) ctlfin     737  opt2fin      -0  [regression]
+      ( 2267, 1747) ctlfin     479  opt2fin      -0  [regression]
+      ( 5336,  750) ctlfin     446  opt2fin      -0  [regression]
+      ( 1763, 2230) ctlfin     430  opt2fin      -0  [regression]
+      ( 2400, 1690) ctlfin     408  opt2fin      -0  [regression]
+      (  598,  192) ctlfin     399  opt2fin      -0  [regression]
+## features of opt2fin against the extremum of optfin in the same box (regressions)
+  leftover: 2 features; optfin extremum below the threshold and more than 1.5 times lower: 0; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 2; more than 1.5 times higher: 0
+  crater  : 0 features
+## features of optfin against the extremum of opt2fin in the same box (improvements)
+  leftover: 3 features; opt2fin extremum below the threshold and more than 1.5 times lower: 1; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 2; more than 1.5 times higher: 0
+      (  410, 1680) optfin     214  opt2fin      19  [regression] cls=VETTED_BUT_UNSUBTRACTED
+  crater  : 0 features

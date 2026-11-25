@@ -1,0 +1,20 @@
+marker 2026-11-24T22:00:23-05:00; now 2026-11-25T09:07:48-05:00
+== (1) o045 entries of /orange/adamginsburg/jwst/gc-treasury/<dir> newer than the marker
+-- catalogs
+2026-11-24 22:08 adamginsburg 224683200 /orange/adamginsburg/jwst/gc-treasury/catalogs/basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits
+2026-11-24 22:08 adamginsburg 699 /orange/adamginsburg/jwst/gc-treasury/catalogs/basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits.prov.json
+2026-11-24 22:08 adamginsburg 245479680 /orange/adamginsburg/jwst/gc-treasury/catalogs/basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits
+2026-11-24 22:13 adamginsburg 426035520 /orange/adamginsburg/jwst/gc-treasury/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits
+2026-11-24 22:13 adamginsburg 699 /orange/adamginsburg/jwst/gc-treasury/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits.prov.json
+2026-11-24 22:13 adamginsburg 465765120 /orange/adamginsburg/jwst/gc-treasury/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits
+-- F212N/pipeline
+-- F480M/pipeline
+-- astrometry_checkpoints
+-- offsets
+-- psfs
+== (2) staged symlink targets: mtime and size now vs before the submission
+identical: 198 targets unchanged
+== (3) CRDS tree: files newer than the marker (bounded scan, 600 s)
+2026-11-25 03:04 adamginsburg 5034 /orange/adamginsburg/jwst/crds/config/jwst/bad_files.txt
+2026-11-25 03:04 adamginsburg 1457934 /orange/adamginsburg/jwst/crds/config/jwst/server_config
+(scan exit 0; 124 = timed out)

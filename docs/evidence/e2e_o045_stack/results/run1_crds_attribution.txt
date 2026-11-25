@@ -1,0 +1,8 @@
+file /orange/adamginsburg/jwst/crds/config/jwst/server_config: mtime 2026-11-25 03:04:53 size 1457934
+file /orange/adamginsburg/jwst/crds/config/jwst/bad_files.txt: mtime 2026-11-25 03:04:53 size 5034
+opt finalize log e2e045-opt-m7-fin_52688508_4294967294.log: 9 CRDS / PARS-RESAMPLESTEP lines
+  closest to the mtime: 2026-11-25 03:02:54.933 (stpipe.step: PARS-RESAMPLESTEP parameters found: /orange/adamginsburg/jwst/crds/references/jw), difference -118.1 s
+  last line at or before the mtime: 03:02:54  first line after: none
+ctl finalize log e2e045-ctl-m7-fin_52689539_4294967294.log: 9 CRDS / PARS-RESAMPLESTEP lines
+  closest to the mtime: 2026-11-25 03:04:53.718 (stpipe.step: PARS-RESAMPLESTEP parameters found: /orange/adamginsburg/jwst/crds/references/jw), difference +0.7 s
+  last line at or before the mtime: 03:04:49  first line after: 03:04:53
