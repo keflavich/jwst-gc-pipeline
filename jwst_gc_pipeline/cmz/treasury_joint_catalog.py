@@ -225,6 +225,11 @@ def saturated_neighbour_sep_arcsec(ra_deg, dec_deg, saturated,
     where no other saturated source lies within ``max_sep_arcsec`` or the tile
     has none.  Local tangent plane about the tile centroid; the cos(dec) error
     is relative to the SEPARATION (~1e-3), not the offset from the centroid.
+
+    Only the sources passed in are searched.  The joint builder passes ONE
+    tile's rows, so a saturated star just across a tile boundary is not seen:
+    rows within ``max_sep_arcsec`` of a tile edge can under-report (the flag is
+    a lower bound there).
     """
     ra = np.asarray(ra_deg, dtype=float)
     dec = np.asarray(dec_deg, dtype=float)
@@ -234,9 +239,13 @@ def saturated_neighbour_sep_arcsec(ra_deg, dec_deg, saturated,
     if sat_idx.size == 0:
         return out
     ok = np.isfinite(ra) & np.isfinite(dec)
-    ra0, dec0 = np.nanmedian(ra[ok]), np.nanmedian(dec[ok])
+    # centre on a point of the tile (not the median RA, which is wrong across
+    # RA = 0/360) and wrap the offset into (-180, 180] so a tile straddling
+    # RA = 0 does not push every separation past the cap.
+    ra_ref, dec0 = float(ra[ok][0]), float(np.nanmedian(dec[ok]))
+    dra = (ra - ra_ref + 180.0) % 360.0 - 180.0
     cosd = np.cos(np.deg2rad(dec0))
-    xy = np.column_stack([(ra - ra0) * cosd * 3600.0, (dec - dec0) * 3600.0])
+    xy = np.column_stack([dra * cosd * 3600.0, (dec - dec0) * 3600.0])
     tree = cKDTree(xy[sat_idx])
     k = min(2, sat_idx.size)
     dd, jj = tree.query(xy[ok], k=k, distance_upper_bound=max_sep_arcsec)
@@ -787,8 +796,10 @@ def build_joint_catalog(input_dir, obsids=None,
     combined.meta['GCTAG'] = prov['pipeline_tag']
     if tile_kind == TILE_KIND_M8_DEDUP:
         combined.meta['CMZTKIND'] = tile_kind
-        combined.meta['CMZSATNR'] = (SATNBR_RADIUS_ARCSEC
-                                     if prov['forced_satnbr']['bands'] else 0.0)
+        # absent (not 0.0) when the flag was not computed, so a FITS-only
+        # reader cannot mistake "not computed" for a zero radius
+        if prov['forced_satnbr']['bands']:
+            combined.meta['CMZSATNR'] = SATNBR_RADIUS_ARCSEC
     return combined, prov
 
 
@@ -803,6 +814,9 @@ def _satnbr_provenance(combined, satnbr_bands):
         radius_arcsec=SATNBR_RADIUS_ARCSEC,
         max_sep_arcsec=SATNBR_MAX_SEP_ARCSEC,
         saturated_definition='is_saturated_<band> | replaced_saturated_<band>, same tile',
+        scope_note=('saturated sources of the row\'s own tile only; a saturated star '
+                    'across a tile boundary is not seen, so the flag is a lower bound '
+                    'within max_sep_arcsec of a tile edge'),
         n_flagged=bands,
         bands=sorted(bands),
     )

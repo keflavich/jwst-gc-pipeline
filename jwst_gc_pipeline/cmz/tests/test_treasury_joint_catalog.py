@@ -542,6 +542,37 @@ def test_saturated_neighbour_sep_without_saturated_sources_is_all_nan():
     assert np.isnan(sep).all()
 
 
+def test_saturated_neighbour_sep_single_saturated_source():
+    """k=1 branch: the lone saturated source is not its own neighbour (NaN);
+    every other row sees it."""
+    dec = -29.1 + np.array([0.0, 0.4, -1.5, 8.0]) * ARCSEC
+    sep = TJC.saturated_neighbour_sep_arcsec(
+        np.full(4, 266.3), dec, [True, False, False, False])
+    assert np.isnan(sep[0])
+    assert sep[1] == pytest.approx(0.4, abs=1e-3)
+    assert sep[2] == pytest.approx(1.5, abs=1e-3)
+    assert np.isnan(sep[3])          # 8" > the 5" cap
+
+
+def test_saturated_neighbour_sep_cap_excludes_farther_sources():
+    dec = -29.1 + np.array([0.0, 4.9, 5.1]) * ARCSEC
+    sep = TJC.saturated_neighbour_sep_arcsec(
+        np.full(3, 266.3), dec, [True, False, False], max_sep_arcsec=5.0)
+    assert sep[1] == pytest.approx(4.9, abs=1e-3)
+    assert np.isnan(sep[2])
+
+
+def test_saturated_neighbour_sep_across_ra_zero():
+    """A tile straddling RA = 0/360 must still pair neighbours; an unwrapped
+    RA offset of ~360 deg would push every separation past the cap."""
+    cosd = np.cos(np.deg2rad(-29.1))
+    # 0.6" apart in RA, one on each side of RA = 0
+    ra = np.array([0.0 + 0.3 * ARCSEC / cosd, 360.0 - 0.3 * ARCSEC / cosd])
+    sep = TJC.saturated_neighbour_sep_arcsec(
+        ra, np.full(2, -29.1), [True, False])
+    assert sep[1] == pytest.approx(0.6, abs=1e-3)
+
+
 def _write_satnbr_tile(path, bands=('f480m',), with_sat_cols=True):
     """One tile: S saturated; A forced 0.5" away; B forced 2" away; C NOT forced 0.5" away
     (on the other side); D forced, isolated."""
