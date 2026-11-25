@@ -16,6 +16,7 @@ from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+from jwst_gc_pipeline.photometry.band_option import band_option_callback
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
@@ -5183,8 +5184,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "ERR plane or whose data co-add is missing gets no such "
                          "detection.")
     parser.add_option("--manual-seed-round-bright-snr-min", dest="manual_seed_round_bright_snr_min",
-                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_snr_min'],
-                    help="ERR S/N floor of the bright-roundness i2d seeds (default 100).")
+                    type='string', action='callback', callback=band_option_callback,
+                    metavar='VALUE|BAND=VALUE,...',
+                    default=MANUAL_DEFAULTS['manual_seed_round_bright_snr_min'],
+                    help="ERR S/N floor of the bright-roundness i2d seeds (default 100).  A "
+                         "number applies to every band; BAND=VALUE pairs (F212N=30,F480M=100) "
+                         "set the bands they name and leave every other band at the default.  "
+                         "The ERR differs between the bands: 30 suits F212N, and F480M keeps "
+                         "the default 100 (docs/evidence/bright_seed_roundness).")
     parser.add_option("--manual-seed-round-bright-prom-min", dest="manual_seed_round_bright_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_prom_min'],
                     help="Prominence floor of the bright-roundness i2d seeds (default 50).")

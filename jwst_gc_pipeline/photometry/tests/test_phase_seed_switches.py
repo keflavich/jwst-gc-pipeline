@@ -142,11 +142,16 @@ def test_run_manual_pipeline_passes_the_bright_window_options():
     tree = _tree(cataloging.run_manual_pipeline)
     (call,) = _calls(tree, '_build_i2d_augmented_seed')
     kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
-    for name in ('snr_min', 'prom_min', 'frac_min', 'width_min'):
+    for name in ('prom_min', 'frac_min', 'width_min'):
         assert kw[f'round_bright_{name}'] == \
             f"float(mopt(opts_phase, 'manual_seed_round_bright_{name}'))"
+    # the ERR S/N floor is the value of the band (test_seed_round_bright reads its source)
+    assert kw['round_bright_snr_min'] == '_rb_snr'
     # the window itself is for the m7 seed only
-    assert kw['round_bright_max'] == (
+    assert kw['round_bright_max'] == '_rb_max'
+    (rb_max,) = [a.value for a in ast.walk(tree) if isinstance(a, ast.Assign)
+                 and any(getattr(t, 'id', None) == '_rb_max' for t in a.targets)]
+    assert ast.unparse(rb_max) == (
         "float(mopt(opts_phase, 'manual_seed_round_bright_max')) if phase == 'm7' else 0.0")
     assert kw['data_i2d_path'] == '_data_i2d_path(module, filt)'
 

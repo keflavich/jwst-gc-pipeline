@@ -215,10 +215,12 @@ lines and bars one or two pixels wide; the few compact blobs among them look
 like the candidates just above the cut, so the cut cannot separate a compact
 source from a faint star.  The ERR S/N floor acts as a flux floor and the ERR
 differs between the bands: of the Brick candidates that pass the other tests,
-27 of 31 (F480M) and 3 of 149 (F212N) pass 100, and 31 and 132 pass 30, so an
-F212N run passes `--manual-seed-round-bright-snr-min 30`.  A run without an ERR
-plane, or without the data co-add at the same grid, gets no such seed.  The seed
-catalog gains a `seed_round_bright` column when the window is on; with it off the
+27 of 31 (F480M) and 3 of 149 (F212N) pass 100, and 31 and 132 pass 30, so the
+option takes a value per band: `--manual-seed-round-bright-snr-min F212N=30,F480M=100`
+(a plain number applies to every band, and a band that no pair names keeps 100).  A
+run without an ERR plane, or without the data co-add at the same grid, gets no such
+seed.  The seed catalog gains a `seed_round_bright` column and an `RBSNRMIN` keyword
+(the floor that the table's band used) when the window is on; with it off the
 catalog is unchanged.  Measurements: `docs/evidence/bright_seed_roundness/README.md`.
 
 ### The fit (identical every phase)
@@ -439,7 +441,7 @@ still run after m6.
 | `--manual-seed-round-loose-max` | 0.0 (off; -1 = AUTO, opt-in) | 0 | 0 | 0 |
 | `--manual-seed-round-loose-prom-min` | 5.0 | 5.0 | 5.0 | 5.0 |
 | `--manual-seed-round-bright-max` | 0.0 (off, m7 seed only; no AUTO) | 0 | 0 | 0 |
-| `--manual-seed-round-bright-snr-min` | 100 | 100 | 100 | 100 |
+| `--manual-seed-round-bright-snr-min` (one number for every band or `BAND=VALUE` pairs such as `F212N=30,F480M=100`; a band that no pair names keeps 100) | 100 | 100 | 100 | 100 |
 | `--manual-seed-round-bright-prom-min` | 50 | 50 | 50 | 50 |
 | `--manual-seed-round-bright-frac-min` | 0.9 | 0.9 | 0.9 | 0.9 |
 | `--manual-seed-round-bright-width-min` | 0.60 | 0.60 | 0.60 | 0.60 |

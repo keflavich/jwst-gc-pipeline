@@ -53,6 +53,7 @@ from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import (
     MANUAL_DEFAULTS, manual_group_fit_enabled, mopt)
+from jwst_gc_pipeline.photometry.band_option import band_mopt
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     recorded_source_exposure)
 from jwst_gc_pipeline.photometry.requested_filters import (
@@ -7252,7 +7253,11 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     windows.  The ERR S/N floor acts as a flux floor and the ERR differs between
     the bands: of the Brick candidates that pass the other tests 27 of 31
     (F480M) and 3 of 149 (F212N) pass 100, and 31 and 132 pass 30, so F212N
-    wants ``round_bright_snr_min`` = 30.  A run without an ERR plane, without a
+    wants ``round_bright_snr_min`` = 30.  The option takes a value per band
+    (``--manual-seed-round-bright-snr-min F212N=30,F480M=100``; see
+    :func:`band_option.parse_band_values`) and the caller passes this function
+    the value of ``filtername``; the seed catalog records it as ``RBSNRMIN``
+    when the window is on.  A run without an ERR plane, without a
     ``data_i2d_path`` that exists, or with a data co-add of another shape gets
     no bright detection (a gate cannot be applied, so the class is dropped).
     Admitted detections carry ``seed_round_bright`` = True in the seed catalog,
@@ -7558,6 +7563,9 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     # every 'i2d' row is at least this far from every prev seed
     # (annotate_independent_detection matches them back at this radius)
     out.meta['DEDUPMAS'] = float(match_as * 1e3)
+    if _bright:
+        # the ERR S/N floor of this band, only with the window on (see seed_round_bright)
+        out.meta['RBSNRMIN'] = float(round_bright_snr_min)
     # keyed by (filter, module), not by shard -- see write_table_atomic
     write_table_atomic(out, outpath)
     print(f"[{label}] i2d-augmented seed: {len(prev_sky)} prev + {n_new} new i2d "
@@ -12323,6 +12331,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # the catalog the i2d detections are added to: the
                     # previous phase's vetted catalog, or m7's band seed
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
+                    # the bright window is for the final seed only; its ERR S/N
+                    # floor is the value of this band (read before the try: a bad
+                    # value must stop the run, not be swallowed by the except)
+                    _rb_max = (float(mopt(opts_phase, 'manual_seed_round_bright_max'))
+                               if phase == 'm7' else 0.0)
+                    _rb_snr = band_mopt(opts_phase, 'manual_seed_round_bright_snr_min', filt,
+                                        label=f'{phase}:{filt}' if _rb_max > 0 else None)
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
                         prev_seed = _build_i2d_augmented_seed(
@@ -12331,10 +12346,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             roundlo=-_sround, roundhi=_sround,
                             round_loose_max=_sround_loose,
                             round_loose_prom_min=float(mopt(opts_phase, 'manual_seed_round_loose_prom_min')),
-                            # the bright window is for the final seed only
-                            round_bright_max=(float(mopt(opts_phase, 'manual_seed_round_bright_max'))
-                                              if phase == 'm7' else 0.0),
-                            round_bright_snr_min=float(mopt(opts_phase, 'manual_seed_round_bright_snr_min')),
+                            round_bright_max=_rb_max,
+                            round_bright_snr_min=_rb_snr,
                             round_bright_prom_min=float(mopt(opts_phase, 'manual_seed_round_bright_prom_min')),
                             round_bright_frac_min=float(mopt(opts_phase, 'manual_seed_round_bright_frac_min')),
                             round_bright_width_min=float(mopt(opts_phase, 'manual_seed_round_bright_width_min')),

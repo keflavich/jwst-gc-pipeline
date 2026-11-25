@@ -9,7 +9,11 @@ and roundness2 +1.2: outside the tight (0.5) and loose (0.8) windows and
 inside the bright window (1.5).  An elongation of 1.7 gives roundness2 +0.74,
 inside the loose window.
 """
+import ast
+import inspect
 import os
+import textwrap
+import types
 
 import numpy as np
 import pytest
@@ -17,6 +21,8 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
+from jwst_gc_pipeline.photometry import cataloging
+from jwst_gc_pipeline.photometry.band_option import band_mopt
 from jwst_gc_pipeline.photometry.cataloging import (_build_i2d_augmented_seed,
                                                    _minor_axis_sigma, _near_large_hole,
                                                    _peak_fraction)
@@ -145,6 +151,7 @@ def test_window_off_leaves_the_seed_table_unchanged(tmp_path):
     a, xy = _run(tmp_path / 'a')
     b, _ = _run(tmp_path / 'b', round_bright_max=0.0)
     assert 'seed_round_bright' not in a.colnames and 'seed_round_bright' not in b.colnames
+    assert 'RBSNRMIN' not in a.meta and 'RBSNRMIN' not in b.meta
     assert _row(xy, BRIGHT) is None
     assert a.colnames == b.colnames
     assert len(a) == len(b)
@@ -189,6 +196,49 @@ def test_snr_gate_rejects_the_faint_star(tmp_path):
                  round_bright_prom_min=10.0)
     i = _row(xy, FAINT)
     assert i is not None and bool(t['seed_round_bright'][i])
+
+
+def test_snr_floor_is_the_value_of_the_band(tmp_path):
+    """``--manual-seed-round-bright-snr-min F182M=10,F212N=30`` gives each band its own
+    floor, and a band that the option does not name the default 100.  The faint star
+    (ERR S/N 20, prominence floor lowered to 10) enters only at the floor of 10, and the
+    seed table records the floor of its band."""
+    name = 'manual_seed_round_bright_snr_min'
+    opts = types.SimpleNamespace(**{name: 'F182M=10,F212N=30'})
+    seen = {}
+    for band in ('F182M', 'f212n', 'F480M'):
+        floor = band_mopt(opts, name, band)
+        t, xy = _run(tmp_path / band, round_bright_max=1.5, round_bright_snr_min=floor,
+                     round_bright_prom_min=10.0)
+        seen[band] = (floor, _row(xy, FAINT) is not None, t.meta['RBSNRMIN'])
+    assert seen == {'F182M': (10.0, True, 10.0), 'f212n': (30.0, False, 30.0),
+                    'F480M': (MANUAL_DEFAULTS[name], False, MANUAL_DEFAULTS[name])}
+    # a plain number is the floor of every band
+    for band in ('F182M', 'F480M'):
+        assert band_mopt(types.SimpleNamespace(**{name: '10'}), name, band) == 10.0
+    # the floor is recorded with the window on only
+    t, _ = _run(tmp_path / 'default', round_bright_max=1.5)
+    assert t.meta['RBSNRMIN'] == 100.0
+
+
+def test_pipeline_reads_the_floor_of_the_band_before_the_try():
+    """run_manual_pipeline hands the builder the floor of the band it builds the seed for,
+    read outside the try whose except falls back to the seed without i2d detections (a
+    malformed value must stop the run)."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(cataloging.run_manual_pipeline)))
+    (call,) = [c for c in ast.walk(tree) if isinstance(c, ast.Call)
+               and getattr(c.func, 'id', None) == '_build_i2d_augmented_seed']
+    kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
+    assert kw['round_bright_snr_min'] == '_rb_snr' and kw['round_bright_max'] == '_rb_max'
+    (read,) = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+               and any(getattr(t, 'id', None) == '_rb_snr' for t in n.targets)]
+    assert ast.unparse(read.value.func) == 'band_mopt'
+    assert [ast.unparse(a) for a in read.value.args] == [
+        'opts_phase', "'manual_seed_round_bright_snr_min'", 'filt']
+    (guard,) = [t for t in ast.walk(tree) if isinstance(t, ast.Try)
+                and 'i2d-augmented seed failed' in ast.unparse(t.handlers[0])]
+    assert any(n is call for stmt in guard.body for n in ast.walk(stmt))
+    assert not any(n is read for stmt in guard.body for n in ast.walk(stmt))
 
 
 def test_prominence_gate_rejects_the_knot(tmp_path):

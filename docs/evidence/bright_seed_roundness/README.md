@@ -19,13 +19,14 @@ m6 residual i2d minus its smoothed background):
 | unsubtracted fraction | `--manual-seed-round-bright-frac-min` | 0.9 | 3×3 peak of the detection image / 3×3 peak of the data co-add, both after the same background subtraction |
 | hole guard | none | 20 px, 4 px | the detection is dropped when an 8-connected masked blob (SCI not finite or WHT ≤ 0) of at least 20 pixels lies within 4 px |
 | width | `--manual-seed-round-bright-width-min` | 0.60 | short-axis width over the PSF standard deviation (FWHM / 2.355); 0 = off |
-| ERR S/N | `--manual-seed-round-bright-snr-min` | 100 | peak / i2d ERR at the detection |
+| ERR S/N | `--manual-seed-round-bright-snr-min` | 100 | peak / i2d ERR at the detection; one number for every band or `BAND=VALUE` pairs |
 
 Admitted detections carry `seed_round_bright` = True.  The column exists only when
 the window is on, and with the window off the seed catalog is unchanged.  A run
 without an ERR plane, or without the data co-add on the same grid, gets no bright
 seeds.  The ERR S/N floor acts as a flux floor and ERR differs between the bands:
-100 is tuned on F480M, and F212N needs `--manual-seed-round-bright-snr-min 30`
+100 is tuned on F480M and F212N needs 30, so the option takes a value per band,
+`--manual-seed-round-bright-snr-min F212N=30,F480M=100`
 ([S/N floor per band](#sn-floor-per-band)).
 
 ## What the evidence covers
@@ -78,7 +79,8 @@ Base run, ten modules per band.  The first column counts the detections with
 roundness in (0.8, 1.5] and sharpness in 0.4–1.2 over the detection image; each
 further column counts the detections left after that test.  The column ERR S/N ≥ 5
 is a fixed floor of the function that no candidate of these runs fails; the next
-column is the ERR S/N floor of the run (F480M the default of 100, F212N 30).  The
+column is the ERR S/N floor of the band (F480M the default of 100, F212N 30; each of
+these runs covers one band).  The
 last column counts rows of the output seed catalog that the production seed lacks:
 a detection within 0.5 × FWHM of a production row merges with it in the seed step.
 
@@ -776,7 +778,9 @@ they do not separate the floors in that range.  Of the 63 exemption rows, 7
 lie within 0.072″ (the radius of the F212N tests, kept at F480M) of a
 whole-star leftover ≥ 50 MJy/sr of the production render and 0 within 0.072″
 of one ≥ 100 MJy/sr (at 30: 10 of 3769 rows and 1).  The table lists these
-numbers for every floor of the scan.
+numbers for every floor of the scan.  #1377 takes a value per band, and its
+recipe `--manual-m7-seed-own-band-companion-keep-snr F212N=50,F480M=0` leaves the
+exemption off at F480M.
 
 | own-band S/N floor | rows added (nrca + nrcb) | rows within 0.072″ of a whole-star leftover ≥ 50, ≥ 100, ≥ 200 MJy/sr of the production render |
 |---|---|---|
@@ -912,7 +916,10 @@ o045 in F480M; F480M on o105, o118, o130 and o138 was not run.  The S/N values
 of the F212N tests (50 for the exemption, 30 for the relaxed window) were
 tuned on F212N.  At F480M the exemption floor of 150 was set by row count, and
 the relaxed window at its default of 100 adds 4 rows, so the F480M test
-measures little of either option.  The counts are those of flagged, masked
+measures little of either option.  The recipe of the two options leaves the
+exemption off at F480M and keeps the relaxed window at 100; no tile-level test
+ran with exactly those rows, because the o045 F480M test carries its 63
+exemption rows as well.  The counts are those of flagged, masked
 renders and are not comparable to the counts of the production render of the
 same tile-band.
 
@@ -930,8 +937,81 @@ At F480M the 4 extra seeds of the floor 30 sit on residual peaks of 11–28 MJy/
 (o130 nrca (2077, 309), o130 nrcb (3186, 869) and (3611, 2051), o138 nrcb
 (3070, 695)), none on a leftover ≥ 50 MJy/sr.  At F212N a floor of 100 leaves 3
 seeds and a floor of 30 leaves 132, 128 of them on a leftover ≥ 50 MJy/sr.  The
-default stays 100, the value validated at F480M; a run on F212N passes
-`--manual-seed-round-bright-snr-min 30`.
+default stays 100, the value validated at F480M.
+
+### Per-band values
+
+The better floor differs between the bands, so
+`--manual-seed-round-bright-snr-min` takes a value per band.  A plain number
+applies to every band; a run that passes one number builds the same seeds as a
+run before the option took pairs.  Comma-separated `BAND=VALUE` pairs set the
+bands they name, and a band that no pair names keeps the default 100.  Band
+names are case-insensitive and a value is a finite number ≥ 0.  A plain number
+mixed with pairs, a band named twice, a value that is negative or is not a
+number, and an entry that is not `BAND=VALUE` stop the run when the command line
+is read; the message names the option and the offending text.  The m7 call site
+resolves the value for the band that it builds ahead of the i2d-augmented seed
+step, whose failures are logged and skipped, so a malformed value that does not
+come from the command line stops the run as well.
+`band_option.py::parse_band_values` parses the value and
+`band_option.py::band_mopt` resolves it for one band (the module is shared with
+the option `--manual-m7-seed-own-band-companion-keep-snr` of #1377).  With the
+window on and pairs on the command line, the m7 log names the floor that each
+band uses, and the seed catalog records it as the keyword `RBSNRMIN`.  The
+keyword exists only when the window is on, so a seed catalog with the window off
+is unchanged.  One command line now serves a run that covers F212N and F480M.
+
+**Recipe.**  The window and its floors, together with the exemption floors of
+#1377:
+
+```
+--manual-seed-round-bright-max=1.5 --manual-seed-round-bright-snr-min F212N=30,F480M=100
+--manual-m7-seed-own-band-companion-keep-snr F212N=50,F480M=0
+```
+
+**Reason.**  At F212N the floor 30 keeps 132 of the 149 candidates and the floor
+100 keeps 3 (table above); at F480M the floor 100 keeps 27 of 31, and the 4
+extra seeds of the floor 30 sit on residual peaks of 11–28 MJy/sr, none on a
+leftover ≥ 50 MJy/sr.  Both values were measured on the five Brick tiles of
+10678; the other bands are unmeasured and keep the default 100 unless a pair
+names them.
+
+**Real-data check.**  The inputs are those of an end-to-end o045 run of the stack
+of open PRs (one arm with the plain relaxed floor 30 and the plain exemption
+floor 50 for every band, one control arm with both options off; the production
+catalogs of o045 serve as a second reference).  For both modules the two seed
+builders ran as the m7 phase calls them (`_build_m7_band_seed` with the
+exemption floor of #1377, then `_build_i2d_augmented_seed` with the bright window
+at roundness 1.5), three times per band: with the recipe, with the plain number
+that gives the band the same floor (F212N: 30; F480M: 100) and, at F480M, with
+the plain 30 for every band.  The scripts are not part of this repo.  In the
+table, the number in parentheses is the row count of the production table.
+
+| band, module | candidates that pass ERR S/N ≥ 5 | rows of the window at the floor of the band | i2d seed rows (production) |
+|---|---|---|---|
+| F212N nrca | 17 | 16 (floor 30) | 368,565 (368,524) |
+| F212N nrcb | 29 | 28 (floor 30) | 381,134 (381,078) |
+| F480M nrca | 2 | 2 (floor 100) | 118,515 (118,513) |
+| F480M nrcb | 2 | 2 (floor 100) | 117,768 (117,766) |
+
+- The i2d seed rows beyond the production table are the rows of the window plus
+  the exemption rows of #1377 (F212N nrca: 16 + 25 = 41; nrcb: 28 + 28 = 56;
+  F480M: 2 + 0 in each module).
+- At F212N the recipe builds the same i2d seed as the plain 30 and as the i2d seed
+  of the end-to-end run (which was built before the option took pairs).  After
+  sorting by position the tables have the same rows and columns, equal values
+  (positions bit for bit) and the same header keywords, except `RBSNRMIN`, which
+  this PR adds (30.0).
+- At F480M the i2d seed of the recipe (`RBSNRMIN` 100.0) equals the i2d seed of
+  the plain numbers (exemption floor 0, relaxed floor 100).  Without its 2 + 2
+  rows of the window it equals the i2d seed of the control arm (rows, columns and
+  values).
+- With the plain 30 for every band the F480M window admits the same 2 rows per
+  module as at 100 (the 2 candidates at ERR S/N ≥ 5 both pass 30 and 100), and
+  the i2d seeds equal those of the end-to-end run except `RBSNRMIN` (30.0).
+- The check runs the two seed builders.  It does not run the m7 fit, so it
+  establishes which rows the seeds hold and says nothing about the fitted
+  catalog.
 
 ## Scripts
 
@@ -943,6 +1023,12 @@ default stays 100, the value validated at F480M; a run on F212N passes
   and blended pairs (no data access).
 - `scripts/holeguard.py`: the masked blob near given positions.
 - `scripts/widthfig.py`: the cutout figure above.
+- Unit tests: `jwst_gc_pipeline/photometry/tests/test_seed_round_bright.py` (the
+  bright window, the floor of each band and the keyword `RBSNRMIN`),
+  `jwst_gc_pipeline/photometry/tests/test_band_option.py` (the parser of per-band
+  values, the resolution for one band, the `optparse` callback and the call
+  sites) and `jwst_gc_pipeline/photometry/tests/test_phase_seed_switches.py` (the
+  options that the m7 call passes to the seed builders).
 
 ## Caveats
 
@@ -966,4 +1052,7 @@ default stays 100, the value validated at F480M; a run on F212N passes
   the control run already subtracts through a saturated-star fit.  A second row at
   such a star is possible, and whether the post-fit dedup of the m7 fit resolves it
   was not checked.
-- The ERR S/N floor needs a per-band value (above).
+- The ERR S/N floor differs between the bands and the option takes a value per
+  band.  The recipe values (F212N 30, F480M 100) come from the five Brick tiles; a
+  band that no pair names keeps 100, which was validated at F480M only, and the
+  other NIRCam bands are unmeasured.
