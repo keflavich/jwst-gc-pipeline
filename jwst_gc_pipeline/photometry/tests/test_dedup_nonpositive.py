@@ -97,11 +97,11 @@ def test_positive_clusters_are_unchanged():
 # _dedup_nonpositive_cluster_rows
 # ---------------------------------------------------------------------------
 
-def _rows(xfit, yfit, flux, xinit, yinit, keep, owner):
+def _rows(xfit, yfit, flux, xinit, yinit, keep, owner, **kw):
     return C._dedup_nonpositive_cluster_rows(
         np.array(xfit, float), np.array(yfit, float), np.array(flux, float),
         np.array(xinit, float), np.array(yinit, float),
-        np.array(keep, bool), np.array(owner), min_sep_pix=1.0)
+        np.array(keep, bool), np.array(owner), min_sep_pix=1.0, **kw)
 
 
 def test_a_separate_neighbour_seed_is_rescued():
@@ -113,6 +113,90 @@ def test_a_separate_neighbour_seed_is_rescued():
                           keep=[True, False], owner=[0, 0])
     assert refit.tolist() == [True, True]
     assert rescue.tolist() == [False, True]
+
+
+def test_a_seed_inside_the_rescue_separation_is_not_rescued():
+    # o045 F212N nrcb4 exposure 2: the absorbed seed is 1.27 px from the
+    # survivor's, past the 1 px dedup separation but inside 0.75 FWHM (1.76 px
+    # at FWHM 2.34 px): one star, not two sources
+    args = dict(xfit=[10.0, 10.2], yfit=[10.0, 10.0], flux=[5.46e4, -1.04e4],
+                xinit=[10.0, 11.27], yinit=[10.0, 10.0],
+                keep=[True, False], owner=[0, 0])
+    refit, rescue = _rows(**args)
+    assert rescue.tolist() == [False, True]          # the default is unchanged
+    refit, rescue = _rows(rescue_min_sep_pix=1.76, **args)
+    assert refit.tolist() == [True, False]
+    assert rescue.tolist() == [False, False]
+
+
+def test_a_separate_seed_past_the_rescue_separation_is_rescued():
+    refit, rescue = _rows(xfit=[10.0, 10.2], yfit=[10.0, 10.0],
+                          flux=[5.46e4, -1.04e4],
+                          xinit=[10.1, 12.3], yinit=[10.0, 10.0],
+                          keep=[True, False], owner=[0, 0],
+                          rescue_min_sep_pix=1.76)
+    assert refit.tolist() == [True, True]
+    assert rescue.tolist() == [False, True]
+
+
+def _dups(xfit, yfit, flux, xinit, yinit, keep, owner, sep=1.76):
+    return C._dedup_nonpositive_duplicate_survivors(
+        np.array(xfit, float), np.array(yfit, float), np.array(flux, float),
+        np.array(xinit, float), np.array(yinit, float),
+        np.array(keep, bool), np.array(owner), sep)
+
+
+def test_a_cancelling_survivor_beside_a_stronger_row_is_a_duplicate():
+    # o045 F212N nrcb4 exposure 2: a 3.8e4 star (row 0) and a +1.07e5 / -1.06e5
+    # pair (rows 1 and 2) whose survivor's seed is 1.27 px from the star's
+    dup = _dups(xfit=[10.0, 11.0, 11.0], yfit=[10.0, 10.8, 11.0],
+                flux=[3.8e4, 1.07e5, -1.06e5],
+                xinit=[10.0, 10.84, 12.0], yinit=[10.0, 10.94, 12.0],
+                keep=[True, True, False], owner=[0, 1, 1])
+    assert dup.tolist() == [False, True, False]
+
+
+def test_a_survivor_with_a_net_flux_above_its_neighbour_is_kept():
+    dup = _dups(xfit=[10.0, 11.0, 11.0], yfit=[10.0, 10.8, 11.0],
+                flux=[3.8e3, 1.07e5, -1.0e4],
+                xinit=[10.0, 10.84, 12.0], yinit=[10.0, 10.94, 12.0],
+                keep=[True, True, False], owner=[0, 1, 1])
+    assert dup.tolist() == [False, False, False]
+
+
+def test_a_survivor_past_the_separation_is_kept():
+    dup = _dups(xfit=[10.0, 11.0, 11.0], yfit=[10.0, 10.8, 11.0],
+                flux=[3.8e4, 1.07e5, -1.06e5],
+                xinit=[10.0, 12.5, 12.0], yinit=[10.0, 10.94, 12.0],
+                keep=[True, True, False], owner=[0, 1, 1])
+    assert dup.tolist() == [False, False, False]
+
+
+def test_of_two_close_survivors_the_stronger_stays():
+    dup = _dups(xfit=[10.0, 10.0, 11.0, 11.0], yfit=[10.0, 10.0, 10.0, 10.0],
+                flux=[50.0, -10.0, 30.0, -10.0],
+                xinit=[10.0, 10.0, 11.0, 11.0], yinit=[10.0, 10.0, 10.0, 10.0],
+                keep=[True, False, True, False], owner=[0, 0, 2, 2])
+    assert dup.tolist() == [False, False, True, False]
+
+
+def test_non_finite_survivor_seeds_and_fluxes_are_not_judged():
+    # a NaN seed is not judged, a NaN-flux kept row is not a stronger row
+    dup = _dups(xfit=[10.0, 11.0, 11.0, 30.0, 31.0, 31.0],
+                yfit=[10.0, 10.8, 11.0, 30.0, 30.8, 31.0],
+                flux=[3.8e4, 1.07e5, -1.06e5, np.nan, 1.07e5, -1.06e5],
+                xinit=[10.0, np.nan, 12.0, 30.0, 30.84, 32.0],
+                yinit=[10.0, 10.94, 12.0, 30.0, 30.94, 32.0],
+                keep=[True, True, False, True, True, False],
+                owner=[0, 1, 1, 3, 4, 4])
+    assert dup.tolist() == [False, False, False, False, False, False]
+
+
+def test_a_survivor_without_a_non_positive_partner_is_not_judged():
+    dup = _dups(xfit=[10.0, 11.0], yfit=[10.0, 10.0], flux=[5.0e4, 1.0e4],
+                xinit=[10.0, 11.0], yinit=[10.0, 10.0],
+                keep=[True, True], owner=[0, 1])
+    assert dup.tolist() == [False, False]
 
 
 def test_a_duplicate_seed_is_not_rescued():
@@ -358,22 +442,24 @@ def _collapse(monkeypatch):
     monkeypatch.setattr(PSFPhotometry, '__call__', collapsed)
 
 
-def _run_pass():
-    seed = Table()
-    seed['x_init'] = [STAR_SEED[0], COMP_SEED[0]]
-    seed['y_init'] = [STAR_SEED[1], COMP_SEED[1]]
-    seed['flux_init'] = [F_STAR, F_COMP]
+def _run_pass(seed=None, frame=None, **kw):
+    if seed is None:
+        seed = Table()
+        seed['x_init'] = [STAR_SEED[0], COMP_SEED[0]]
+        seed['y_init'] = [STAR_SEED[1], COMP_SEED[1]]
+        seed['flux_init'] = [F_STAR, F_COMP]
     opts = types.SimpleNamespace(group=False, manual_group_fit=False,
                                  satstar_artifact_sigK=3.0,
                                  satstar_artifact_ratio=1.0)
     res, _, _ = C._manual_phot_pass(
-        data=_frame(), mask=np.zeros(SHAPE, bool), err=np.ones(SHAPE),
+        data=_frame() if frame is None else frame,
+        mask=np.zeros(SHAPE, bool), err=np.ones(SHAPE),
         bad=np.zeros(SHAPE, bool), dao_psf_model=_gaussian_grid_psf(),
         init_params=seed, aperture_radius_pix=2 * FWHM, localbkg_inner=6,
         localbkg_outer=10, grouper=SourceGrouper(2 * FWHM), options=opts,
         dq=np.zeros(SHAPE, np.uint32),
         satstar_model_subtracted=np.zeros(SHAPE), label='t',
-        near_sat_dist_pix=1.0, overshoot_ratio=1.05)
+        near_sat_dist_pix=1.0, overshoot_ratio=1.05, **kw)
     return res
 
 
@@ -448,6 +534,110 @@ def test_switch_is_a_no_op_without_a_non_positive_row(monkeypatch):
     assert len(on) == len(off)
     for col in ('x_fit', 'y_fit', 'flux_fit'):
         assert np.asarray(on[col]) == pytest.approx(np.asarray(off[col]))
+
+
+# ---------------------------------------------------------------------------
+# _manual_phot_pass with dedup_recovery_min_sep_pix (0.75 FWHM in the m7 pass)
+# ---------------------------------------------------------------------------
+
+RECOVERY_SEP = 0.75 * FWHM
+
+
+def test_recovery_separation_keeps_a_neighbour_seed_past_it(monkeypatch):
+    # the collapsed neighbour's seed is 2.51 px from the star's, past 1.875 px
+    monkeypatch.setenv('DAOPHOT_DEDUP_NONPOSITIVE', '1')
+    _collapse(monkeypatch)
+    res = _run_pass(dedup_recovery_min_sep_pix=RECOVERY_SEP)
+    assert len(res) == 2
+    comp = _row_at(res, COMP_SEED)
+    assert bool(comp['forced_refit'])
+    assert float(comp['flux_fit']) == pytest.approx(F_COMP, rel=0.35)
+
+
+def test_recovery_separation_drops_a_neighbour_seed_inside_it(monkeypatch):
+    # 3 px > the 2.51 px between the two seeds: one star, one row
+    monkeypatch.setenv('DAOPHOT_DEDUP_NONPOSITIVE', '1')
+    _collapse(monkeypatch)
+    res = _run_pass(dedup_recovery_min_sep_pix=3.0)
+    assert len(res) == 1
+    star = _row_at(res, STAR_NET)
+    assert bool(star['forced_refit'])
+    assert float(star['flux_fit']) == pytest.approx(F_STAR, rel=0.10)
+
+
+# a +3.0e4 / -2.9e4 pair of free fits 1.4 px (0.56 FWHM) from a 2.0e4 star
+# (the o045 F212N nrcb4 exposure-2 configuration): the pair's survivor has a
+# net flux of 1e3.  The seeds are the true positions of the star and of a
+# 6.0e3 source at the survivor's place, so that the refit of the survivor is
+# positive.
+A_SEED = (STAR[0] + 1.4, STAR[1] - 0.1)
+P_SEED = (A_SEED[0] + 0.5, A_SEED[1])
+F_A_TRUE = 6.0e3
+
+
+def _pair_beside_star(monkeypatch):
+    real_call = PSFPhotometry.__call__
+    fits = [(STAR[0], STAR[1], F_STAR, 0.007, 0),
+            (A_SEED[0], A_SEED[1], 3.0e4, 0.010, 0),
+            (A_SEED[0] + 0.2, A_SEED[1], -2.9e4, -0.025, 4)]
+
+    def fitted(self, data, **kwargs):
+        out = real_call(self, data, **kwargs)
+        res = self.results
+        for i, (x, y, f, q, flag) in enumerate(fits):
+            res['x_fit'][i], res['y_fit'][i] = x, y
+            res['flux_fit'][i] = f
+            res['qfit'][i] = q
+            res['flags'][i] = int(res['flags'][i]) | flag
+        return out
+
+    monkeypatch.setattr(PSFPhotometry, '__call__', fitted)
+
+
+def _pair_seed(protect_a=False):
+    seed = Table()
+    seed['x_init'] = [STAR[0], A_SEED[0], P_SEED[0]]
+    seed['y_init'] = [STAR[1], A_SEED[1], P_SEED[1]]
+    seed['flux_init'] = [F_STAR, 6.0e3, 5.0e3]
+    if protect_a:
+        seed['keep_in_fit'] = [False, True, False]
+    return seed
+
+
+def _pair_frame():
+    yy, xx = np.mgrid[:SHAPE[0], :SHAPE[1]]
+    sig = FWHM / 2.3548
+    return _frame() + F_A_TRUE * np.exp(
+        -((xx - A_SEED[0]) ** 2 + (yy - A_SEED[1]) ** 2)
+        / (2 * sig ** 2)) / (2 * np.pi * sig ** 2)
+
+
+def test_a_cancelling_pair_beside_a_star_is_refit_without_the_separation(monkeypatch):
+    # the rescue-era behaviour (None): the pair's survivor stays and is refit
+    monkeypatch.setenv('DAOPHOT_DEDUP_NONPOSITIVE', '1')
+    _pair_beside_star(monkeypatch)
+    res = _run_pass(seed=_pair_seed(), frame=_pair_frame())
+    assert len(res) == 2
+    assert bool(_row_at(res, A_SEED)['forced_refit'])
+
+
+def test_a_cancelling_pair_beside_a_star_is_dropped_with_the_separation(monkeypatch):
+    monkeypatch.setenv('DAOPHOT_DEDUP_NONPOSITIVE', '1')
+    _pair_beside_star(monkeypatch)
+    res = _run_pass(seed=_pair_seed(), frame=_pair_frame(),
+                    dedup_recovery_min_sep_pix=RECOVERY_SEP)
+    assert len(res) == 1
+    star = _row_at(res, STAR)
+    assert float(star['flux_fit']) == pytest.approx(F_STAR, rel=0.15)
+
+
+def test_a_keep_in_fit_survivor_is_not_dropped_as_a_duplicate(monkeypatch):
+    monkeypatch.setenv('DAOPHOT_DEDUP_NONPOSITIVE', '1')
+    _pair_beside_star(monkeypatch)
+    res = _run_pass(seed=_pair_seed(protect_a=True), frame=_pair_frame(),
+                    dedup_recovery_min_sep_pix=RECOVERY_SEP)
+    assert len(res) == 2
+    assert bool(_row_at(res, A_SEED)['keep_in_fit'])
 
 
 # ---------------------------------------------------------------------------

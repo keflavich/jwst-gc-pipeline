@@ -1498,8 +1498,12 @@ def _dedup_nonpositive_refit():
     refit's ``qfit`` and ``cfit``: the free fit's are those of a negative
     flux.  The
     refit exists only with ``overshoot_action='refit'``; with another action
-    only the winner rule applies.  Parsed like the hand-off switches: a
-    malformed value raises ``ValueError`` naming the variable.
+    only the winner rule applies.  The m7 pass passes 0.75 FWHM as
+    ``dedup_recovery_min_sep_pix`` of ``_manual_phot_pass``: two seeds closer
+    than that are one source to the fit, so such an absorbed row is not
+    rescued and a cancelling survivor beside a stronger row is dropped
+    (``_dedup_nonpositive_duplicate_survivors``).  Parsed like the hand-off
+    switches: a malformed value raises ``ValueError`` naming the variable.
 
     Validation scope: unit tests and one-frame replays of the gc-treasury
     10678 o130 F212N m7 fit (see the pull request); not yet validated on a
@@ -1509,7 +1513,7 @@ def _dedup_nonpositive_refit():
 
 
 def _dedup_nonpositive_cluster_rows(xfit, yfit, flux, xinit, yinit, keep, owner,
-                                    min_sep_pix=1.0):
+                                    min_sep_pix=1.0, rescue_min_sep_pix=None):
     """Rows of the post-fit dedup that a non-positive-flux fit touched.
 
     A seed a few px from a bright star can converge onto the star in the
@@ -1533,6 +1537,15 @@ def _dedup_nonpositive_cluster_rows(xfit, yfit, flux, xinit, yinit, keep, owner,
         the rows that stay in the table.
     min_sep_pix : float, optional
         The dedup separation.
+    rescue_min_sep_pix : float, optional
+        Separation from the survivor's seed that a rescued row's seed needs
+        (default ``min_sep_pix``; never below it).  Two seeds closer than
+        about a FWHM are not two sources to the fit: on a bright star the
+        grouped fit splits the one flux into a positive and a negative row,
+        and a rescue turns that split into two rows whose refits each take
+        the star's light (gc-treasury 10678 o045 F212N nrcb4 exposure 2:
+        seeds 1.27 px apart on a 4e4 star, rows of 3.5e4 + 1.7e4 where the
+        single fit gave 3.8e4).  The caller passes a fraction of the FWHM.
 
     Returns
     -------
@@ -1541,11 +1554,14 @@ def _dedup_nonpositive_cluster_rows(xfit, yfit, flux, xinit, yinit, keep, owner,
         and the rescued rows.  The overshoot refit solves these at their seed.
     rescue : ndarray of bool, shape (N,)
         Absorbed non-positive rows to keep as their own row: the seed is at
-        least ``min_sep_pix`` from the survivor's seed, from every kept row
-        (fit position or seed) and from the seed of each rescued row before
-        it, so the seed is not a duplicate.
+        least ``rescue_min_sep_pix`` from the survivor's seed and at least
+        ``min_sep_pix`` from every kept row (fit position or seed) and from
+        the seed of each rescued row before it, so the seed is not a
+        duplicate.
     """
     from scipy.spatial import cKDTree
+    rescue_sep = (min_sep_pix if rescue_min_sep_pix is None
+                  else max(float(rescue_min_sep_pix), min_sep_pix))
     keep = np.asarray(keep, dtype=bool)
     owner = np.asarray(owner, dtype=np.int64)
     flux = np.asarray(flux, dtype=float)
@@ -1562,7 +1578,7 @@ def _dedup_nonpositive_cluster_rows(xfit, yfit, flux, xinit, yinit, keep, owner,
     refit[owner[gone]] = True
     b = np.flatnonzero(gone)
     d_surv = np.hypot(xinit[b] - xinit[owner[b]], yinit[b] - yinit[owner[b]])
-    ok = np.isfinite(d_surv) & (d_surv >= min_sep_pix)
+    ok = np.isfinite(d_surv) & (d_surv >= rescue_sep)
     pos = np.vstack([np.column_stack([xfit[keep], yfit[keep]]),
                      np.column_stack([xinit[keep], yinit[keep]])])
     pos = pos[np.all(np.isfinite(pos), axis=1)]
@@ -1580,6 +1596,77 @@ def _dedup_nonpositive_cluster_rows(xfit, yfit, flux, xinit, yinit, keep, owner,
         rescue[np.asarray(taken, dtype=np.int64)] = True
     refit |= rescue
     return refit, rescue
+
+
+def _dedup_nonpositive_duplicate_survivors(xfit, yfit, flux, xinit, yinit,
+                                           keep, owner, sep_pix):
+    """Survivors of the non-positive dedup that lie on a stronger row.
+
+    A survivor whose absorbed partner has the opposite sign has a net flux of
+    about zero: the pair is a dipole that the data do not place
+    (:func:`_dedup_net_positions`).  Refit at its seed, the row takes light
+    from a kept row within about a FWHM and splits one star into two rows
+    (gc-treasury 10678 o045 F212N nrcb4 exposure 2: a +1.07e5 and a -1.06e5
+    fit 0.2 px apart, 1.27 px from a 3.8e4 star, give a refit row of 1.7e4
+    and cut the star to 3.5e4).  Without the non-positive dedup the dipole is
+    dropped and the star keeps its row; such a survivor is a duplicate of the
+    stronger row.
+
+    Parameters
+    ----------
+    xfit, yfit, flux : array, shape (N,)
+        Fitted position and flux of every row before the dedup.
+    xinit, yinit : array, shape (N,)
+        Seed position of every row.
+    keep, owner : array, shape (N,)
+        From ``_dedup_close_sources(..., return_owner=True)``.
+    sep_pix : float
+        Separation (px) from the survivor's seed to the fit or the seed of a
+        stronger kept row inside which the survivor is a duplicate.
+
+    Returns
+    -------
+    duplicate : ndarray of bool, shape (N,)
+        The survivors to drop.  The strength of a survivor is its net flux
+        (its own flux plus the non-positive fluxes it absorbed), that of any
+        other kept row its fitted flux.  Survivors are judged in order of
+        decreasing strength and a dropped survivor does not count as a
+        stronger row.
+    """
+    from scipy.spatial import cKDTree
+    keep = np.asarray(keep, dtype=bool)
+    owner = np.asarray(owner, dtype=np.int64)
+    flux = np.asarray(flux, dtype=float)
+    xfit = np.asarray(xfit, dtype=float)
+    yfit = np.asarray(yfit, dtype=float)
+    xinit = np.asarray(xinit, dtype=float)
+    yinit = np.asarray(yinit, dtype=float)
+    duplicate = np.zeros(keep.size, dtype=bool)
+    with np.errstate(invalid='ignore'):
+        gone = ~keep & np.isfinite(flux) & (flux <= 0) & (flux[owner] > 0)
+    if not np.any(gone):
+        return duplicate
+    strength = np.where(np.isfinite(flux), flux, -np.inf)
+    np.add.at(strength, owner[gone], flux[gone])
+    survivors = np.unique(owner[gone])
+    cand = np.flatnonzero(keep & (strength > 0))
+    pts = np.vstack([np.column_stack([xfit[cand], yfit[cand]]),
+                     np.column_stack([xinit[cand], yinit[cand]])])
+    who = np.concatenate([cand, cand])
+    finite = np.all(np.isfinite(pts), axis=1)
+    if not np.any(finite):
+        return duplicate
+    tree = cKDTree(pts[finite])
+    who = who[finite]
+    for s in survivors[np.argsort(-strength[survivors])]:
+        if not (np.isfinite(xinit[s]) and np.isfinite(yinit[s])):
+            continue
+        near = np.unique(who[tree.query_ball_point([xinit[s], yinit[s]],
+                                                   sep_pix)])
+        near = near[(near != s) & ~duplicate[near]]
+        if np.any(strength[near] >= strength[s]):
+            duplicate[s] = True
+    return duplicate
 
 
 def _dedup_net_positions(xfit, yfit, flux, keep, owner, survivors,
@@ -1786,7 +1873,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       frame_ww=None, protect_xy=None, protect_radius_pix=0.0,
                       handoff_xy=None, handoff_radius_pix=0.0,
                       companion_seed_xy=None, companion_seed_radius_pix=0.0,
-                      companion_restored_mask=None):
+                      companion_restored_mask=None,
+                      dedup_recovery_min_sep_pix=None):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -1801,6 +1889,15 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     ``companion_restored_mask`` likewise exempt seeded companions next to a
     handed-off star's restored footprint (``_seeded_companion_mask``, env
     ``SATPROX_SEEDED_COMPANION``); ``None`` leaves the chain unchanged.
+
+    ``dedup_recovery_min_sep_pix`` (px) acts only with the non-positive dedup
+    (``DAOPHOT_DEDUP_NONPOSITIVE``, see ``_dedup_nonpositive_refit``) and
+    ``overshoot_action='refit'``.  An absorbed non-positive row is rescued
+    only when its seed is at least this far from the survivor's seed, and a
+    survivor whose net flux is not above that of a kept row within this
+    distance is dropped (``_dedup_nonpositive_duplicate_survivors``; a
+    ``keep_in_fit`` survivor stays).  ``None`` leaves the rescue separation at
+    the 1.0 px of the dedup.
 
     ``init_params`` rows with ``keep_in_fit`` True (cross-epoch seeds, see
     ``_build_manual_seed``) stay in the fit through the post-fit dedup, the
@@ -1908,7 +2005,23 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                 # fit and is not an absorbed row to rescue
                 refit_np, rescue_np = _dedup_nonpositive_cluster_rows(
                     xfit, yfit, flux, res['x_init'], res['y_init'], keep_fit,
-                    owner, min_sep_pix=1.0)
+                    owner, min_sep_pix=1.0,
+                    rescue_min_sep_pix=dedup_recovery_min_sep_pix)
+                if dedup_recovery_min_sep_pix is not None:
+                    dup_np = _dedup_nonpositive_duplicate_survivors(
+                        xfit, yfit, flux, res['x_init'], res['y_init'],
+                        keep_fit, owner, dedup_recovery_min_sep_pix)
+                    if kif:
+                        # a keep_in_fit row stays in the fit
+                        dup_np = dup_np & ~prot
+                    if np.any(dup_np):
+                        keep_fit = keep_fit & ~dup_np
+                        refit_np = refit_np & ~dup_np
+                        rescue_np = rescue_np & ~dup_np
+                        print(f"[{label}] post-fit dedup: {int(np.sum(dup_np))} "
+                              f"survivor(s) of a cancelling non-positive-flux "
+                              f"pair within {dedup_recovery_min_sep_pix:.2f} px "
+                              f"of a stronger row dropped", flush=True)
                 if np.any(refit_np):
                     # A survivor is refit pinned at the flux-weighted position
                     # of its cluster (_dedup_net_positions), the position the
@@ -5720,6 +5833,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             frame_ww=ctx.ww, protect_xy=_protect_xy,
             protect_radius_pix=_protect_radius,
             handoff_xy=_handoff_xy, handoff_radius_pix=_handoff_radius,
+            dedup_recovery_min_sep_pix=0.75 * ctx.fwhm_pix,
             **_companion_kw)
 
     if manual_phase == 'm12':
