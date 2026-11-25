@@ -235,9 +235,23 @@ of `dnc`: rows of the production vetted catalog within 0.03″ of a row that
 disappeared are removed, and new rows with flux ≥ 0 are added.  No added row is
 vetted again, so a row that the vetting would drop stays in the catalog, and
 the counts below are the best case for the added rows.  Every arm is rendered
-with the same settings: the footprint mask with its ring zone (#1361, #1364),
-the DQ_SAT dilation of 4 px (#1372) and, in the second table, the edge band of
-8 px (#1373).  None of these PRs is merged.
+with the production options plus three render flags of #1360 (a draft PR that
+this branch does not contain): `SINGLE_EXPOSURE_EVENT_MASK=1` sets DO_NOT_USE
+on the pixels of a compact saturated core that one frame carries and the other
+covering frames do not, `NEGATIVE_PIXEL_MASK_NSIGMA=50` sets DO_NOT_USE on
+pixels with SCI below −50 × ERR, and `MERGE_ROW_RESID_SUPPORT_MIN=0.3`
+re-renders a row at a lower flux when the PSF fit to the merged-catalog
+residual of its frame has an amplitude below −0.7 × the flux of the row.  The
+residual image is scored with the same mask settings in every arm: the
+footprint mask (a disk of 1 × the radius of the saturated area plus 2 px around
+each row of the production consolidated saturated-star catalog, and a disk of
+at least 25 px radius around the rows with `flux_fit` ≥ 10⁶; #1361, #1364), the
+DQ_SAT dilation of 4 px (#1372) and, in the second table, the edge band of 8 px
+(#1373).  The masks were applied to the rendered residual images by emulation
+scripts; the PRs that add them state where the emulation was compared with
+their code.  None of these PRs is merged.  The counts of this section are those
+of the flagged render and are not comparable to the counts of the production
+render of o105 F212N.
 
 **Counts.**  Whole-star leftovers (residual peak ≥ N MJy/sr, at least 50, and
 more than 0.7 of the data peak at the star) and big craters (depth > 50 MJy/sr
