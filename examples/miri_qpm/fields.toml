@@ -1,0 +1,35 @@
+# Paths are relative to this configuration file, or absolute.
+output_dir = "/data/qpm/run-10678"
+roots = ["/data/jwst/cal", "/data/jwst/rate", "/data/jwst/uncal"]
+
+[qpm]
+n_proc = 4
+grid = "footprint"
+register = true
+anchor = "off"
+dataset_gain = "off"
+fill_bright_holes = true
+edge_mode = "flag"
+write_exposures = true
+quicklook = true
+# calibration_dir = "/data/qpm/calibration/bundle"
+
+[[fields]]
+name = "l0p020_o139"
+proposal = 10678
+observations = [139]
+# Supplying the imager reference bypasses Image3 for this field.
+reference = "/data/jwst/mosaics/l0p020_f770w_i2d.fits"
+
+# A field may contain several observations. Supply the complete observation list.
+# [[fields]]
+# name = "l0p190"
+# proposal = 10678
+# observations = [67, 68, 69, 70, 71, 72, 73]
+# reference = "/data/jwst/mosaics/l0p190_f770w_i2d.fits"
+
+# JWST steps accept normal stpipe parameters when a stage is required.
+# [image3.steps.tweakreg]
+# abs_refcat = "/data/catalogs/absolute_reference.ecsv"
+# fitgeometry = "shift"
+# abs_fitgeometry = "shift"

@@ -1,0 +1,182 @@
+{
+ "recipe": "R1",
+ "filter": "F770W",
+ "program_trained_on": "10678",
+ "description": "10678-only overlap flat (ALS) + badpix + affine (a, b) per pane",
+ "formula": "Q = (Y / FLAT - b) / a",
+ "Y": "rate [DN/s] x k, k = median(cal/rate) over the imager pixels of the same exposure (MJy/sr per DN/s)",
+ "units": {
+  "Q": "MJy/sr (the exposure's own cal level)",
+  "a": "dimensionless (pane throughput x flat normalisation)",
+  "b": "MJy/sr-equivalent in Y/FLAT units (b/a in sky MJy/sr)"
+ },
+ "mask": "drop BADPIX == 1 (static bad pixels); BADPIX == 2 (edge/line bands) is kept by R1",
+ "panes": {
+  "1": {
+   "a": 0.597459,
+   "b": 1.042792,
+   "a_sd": 0.000735,
+   "b_sd": 0.064991,
+   "a_ci68": [
+    0.59673,
+    0.598108
+   ],
+   "b_ci68": [
+    0.987194,
+    1.114852
+   ],
+   "corr_ab": -0.815487,
+   "b_over_a": 1.745378,
+   "mk_p5_p95": [
+    49.143095,
+    398.405602
+   ],
+   "n_blocks": 79542,
+   "n_used": 79307
+  },
+  "2": {
+   "a": 0.602438,
+   "b": 1.126051,
+   "a_sd": 0.001032,
+   "b_sd": 0.094506,
+   "a_ci68": [
+    0.60134,
+    0.603345
+   ],
+   "b_ci68": [
+    1.041875,
+    1.225711
+   ],
+   "corr_ab": -0.857276,
+   "b_over_a": 1.869156,
+   "mk_p5_p95": [
+    48.783548,
+    383.661173
+   ],
+   "n_blocks": 78672,
+   "n_used": 77261
+  },
+  "3": {
+   "a": 0.250064,
+   "b": 0.461483,
+   "a_sd": 0.000313,
+   "b_sd": 0.029146,
+   "a_ci68": [
+    0.249769,
+    0.250342
+   ],
+   "b_ci68": [
+    0.433307,
+    0.491706
+   ],
+   "corr_ab": -0.809114,
+   "b_over_a": 1.845459,
+   "mk_p5_p95": [
+    48.436541,
+    377.364867
+   ],
+   "n_blocks": 84419,
+   "n_used": 84061
+  }
+ },
+ "pane_names": {
+  "1": "CORON1065",
+  "2": "CORON1140",
+  "3": "CORON1550"
+ },
+ "flat_err_median": [
+  0.000841,
+  0.001003,
+  0.001123
+ ],
+ "training": {
+  "n_samples": 15042574,
+  "n_selfflat_rows": 396,
+  "sample_cut": "evalcore.clean (finite, not SATURATED, STAR < max(1, 1% MK), GRAD) + rate*NGROUPS*TGROUP < 40000 DN; reference fields 0-21",
+  "uncertainty": "400-draw cluster bootstrap over the 22 combined-mosaic fields, flat fixed"
+ },
+ "validity": {
+  "reference_mjysr": [
+   30.0,
+   450.0
+  ],
+  "ngroups": [
+   5,
+   8
+  ],
+  "training_mjd": [
+   61294.31,
+   61304.02
+  ],
+  "training_dates": [
+   "2026-09-11",
+   "2026-09-21"
+  ],
+  "readpatt": "FASTR1",
+  "pa_v3_deg": 90
+ },
+ "point_source_bias": {
+  "s_common": 0.942,
+  "s_common_sys": 0.019,
+  "s_pane": {
+   "1": 0.933,
+   "2": 0.928,
+   "3": 0.95
+  },
+  "adopted_full": {
+   "1": {
+    "s": 0.932799,
+    "sys": 0.00777528,
+    "stat": 0.00933985,
+    "range": [
+     0.925024,
+     0.940574
+    ]
+   },
+   "2": {
+    "s": 0.928163,
+    "sys": 0.0055512,
+    "stat": 0.0128187,
+    "range": [
+     0.922612,
+     0.933715
+    ]
+   },
+   "3": {
+    "s": 0.95006,
+    "sys": 0.0114144,
+    "stat": 0.00557903,
+    "range": [
+     0.938646,
+     0.961475
+    ]
+   },
+   "common": {
+    "s": 0.942044,
+    "sys": 0.0194313,
+    "range": [
+     0.922612,
+     0.961475
+    ]
+   },
+   "pane3_minus_mean12": {
+    "per_estimator": {
+     "MK_raw_r6": 0.027623,
+     "MK_raw_r10": 0.037657,
+     "MK_RL_r6": 0.027932,
+     "MK_ring18_r10": 0.02612,
+     "MK_core_r2.5": 0.0131995,
+     "MK_bright_1.2-2.5mJy_r6": 0.0311285,
+     "cal_RL_r6": 0.0161805,
+     "cal_RL_r10": 0.0077305
+    },
+    "range": [
+     0.0077305,
+     0.037657
+    ]
+   }
+  },
+  "meaning": "pane point-source flux / imager flux of the same source, R1 units, relative to extended emission (which R1 matches); NOT applied anywhere",
+  "source": "pointsrc track, adopted values (midpoint +- half range of 8 estimators; stars whose imager counterpart peaks below 40 kDN); cause unexplained"
+ }
+}
