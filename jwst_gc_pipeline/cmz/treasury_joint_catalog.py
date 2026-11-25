@@ -100,6 +100,14 @@ starts with ``cmd_default`` and ``n_filt_independent``, because after the forced
 fill nearly every row has finite flux in both bands and the band count above
 no longer separates a measured row from a forced-only one.
 
+Saturated-neighbour flag (``m8_dedup`` only): ``satnbr_sep_<band>`` (arcsec to
+the nearest other saturated source of the same tile, NaN beyond 5") and
+``forced_satnbr_<band>`` (forced-filled rows within 1" of one).  After the #1284
+neighbour-subtracted fill, a localised tail of forced rows within ~1" of a
+saturated star is raised rather than lowered (wing/spike residual that
+``near_saturated_*`` does not mark).  It is a flag, not a demotion: fluxes are
+untouched.
+
 Output: ``<out-dir>/<version-tag>/gctreasury10678_joint_nircam.{fits,parquet}``
 plus a ``.prov.json`` sidecar recording input sha1s, the pipeline tag, the
 per-tile ``roll_corrected`` flag, the overlap-gate results, the dedup
@@ -138,6 +146,7 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Table, vstack
+from scipy.spatial import cKDTree
 
 from jwst_gc_pipeline.cmz import catalog_assembly as CA
 from jwst_gc_pipeline.photometry.interframe_overlap import (
@@ -192,6 +201,93 @@ TILE_KINDS = (TILE_KIND_M7_OKSEP, TILE_KIND_M8_DEDUP)
 #: Columns the ``m8_dedup`` winner rule reads, ahead of the band count.
 CMD_DEFAULT_COL = 'cmd_default'
 N_INDEP_COL = 'n_filt_independent'
+
+#: Forced rows near a saturated source (``m8_dedup`` only).  After the #1284
+#: neighbour-subtracted m8 fill, forced-band flux falls to ~0.5x on average, but
+#: a localised tail within ~1" of a saturated star is raised instead: 70-162
+#: firm (S/N >= 5) forced F480M rows per tile got >1.5x BRIGHTER on o063, o041,
+#: o107, o118 and o139, none of them marked by ``near_saturated_*``.  They are
+#: saturated-star wing/spike residual, already bright in the pre-#1284 table, not
+#: new stars.  ``satnbr_sep_<band>`` is the distance (arcsec) to the nearest OTHER
+#: saturated source of the same tile (NaN beyond ``SATNBR_MAX_SEP_ARCSEC``) and
+#: ``forced_satnbr_<band>`` flags forced-filled rows within
+#: ``SATNBR_RADIUS_ARCSEC`` of one.  A flag, not a demotion: fluxes are untouched.
+SATNBR_RADIUS_ARCSEC = 1.0
+SATNBR_MAX_SEP_ARCSEC = 5.0
+
+
+def saturated_neighbour_sep_arcsec(ra_deg, dec_deg, saturated,
+                                   max_sep_arcsec=SATNBR_MAX_SEP_ARCSEC):
+    """Distance (arcsec) from every source to the nearest OTHER saturated source.
+
+    A saturated source never counts as its own neighbour (it is excluded by
+    index, not by distance, so a coincident duplicate row still counts).  NaN
+    where no other saturated source lies within ``max_sep_arcsec`` or the tile
+    has none.  Local tangent plane about the tile centroid; the cos(dec) error
+    is relative to the SEPARATION (~1e-3), not the offset from the centroid.
+    """
+    ra = np.asarray(ra_deg, dtype=float)
+    dec = np.asarray(dec_deg, dtype=float)
+    saturated = np.asarray(saturated, dtype=bool)
+    out = np.full(len(ra), np.nan)
+    sat_idx = np.flatnonzero(saturated & np.isfinite(ra) & np.isfinite(dec))
+    if sat_idx.size == 0:
+        return out
+    ok = np.isfinite(ra) & np.isfinite(dec)
+    ra0, dec0 = np.nanmedian(ra[ok]), np.nanmedian(dec[ok])
+    cosd = np.cos(np.deg2rad(dec0))
+    xy = np.column_stack([(ra - ra0) * cosd * 3600.0, (dec - dec0) * 3600.0])
+    tree = cKDTree(xy[sat_idx])
+    k = min(2, sat_idx.size)
+    dd, jj = tree.query(xy[ok], k=k, distance_upper_bound=max_sep_arcsec)
+    dd = dd.reshape(-1, k)
+    jj = jj.reshape(-1, k)
+    rows = np.flatnonzero(ok)
+    first_is_self = np.zeros(len(rows), dtype=bool)
+    has_first = jj[:, 0] < sat_idx.size
+    first_is_self[has_first] = sat_idx[jj[has_first, 0]] == rows[has_first]
+    sep = dd[:, 0].copy()
+    if k == 2:
+        sep = np.where(first_is_self, dd[:, 1], sep)
+    else:
+        sep = np.where(first_is_self, np.inf, sep)
+    out[rows] = np.where(np.isfinite(sep), sep, np.nan)
+    return out
+
+
+def forced_satnbr_columns(full, bands, radius_arcsec=SATNBR_RADIUS_ARCSEC,
+                          max_sep_arcsec=SATNBR_MAX_SEP_ARCSEC):
+    """``{column name: array}`` for one tile's FULL table (every row of the tile).
+
+    Only bands with a ``forced_filled_<band>`` column get columns.  Such a band
+    must also carry ``is_saturated_<band>`` and ``replaced_saturated_<band>``;
+    their absence is an incomplete table, so it raises rather than flagging
+    nothing.  Saturated = ``is_saturated | replaced_saturated``, the definition
+    the #1284 fleet check used.
+    """
+    ra = np.asarray(full['skycoord_ref'].ra.deg, dtype=float)
+    dec = np.asarray(full['skycoord_ref'].dec.deg, dtype=float)
+    cols = {}
+    for band in bands:
+        if f'forced_filled_{band}' not in full.colnames:
+            continue
+        missing = [c for c in (f'is_saturated_{band}', f'replaced_saturated_{band}')
+                   if c not in full.colnames]
+        if missing:
+            raise KeyError(
+                f'forced_filled_{band} is present but {missing} is not; the '
+                f'saturated-neighbour flag cannot be computed from this table')
+        sat = np.zeros(len(full), dtype=bool)
+        for c in (f'is_saturated_{band}', f'replaced_saturated_{band}'):
+            sat |= np.asarray(np.ma.filled(full[c], False), dtype=bool)
+        forced = np.asarray(np.ma.filled(full[f'forced_filled_{band}'], False),
+                            dtype=bool)
+        sep = saturated_neighbour_sep_arcsec(ra, dec, sat, max_sep_arcsec)
+        with np.errstate(invalid='ignore'):
+            near = forced & (sep < radius_arcsec)
+        cols[f'satnbr_sep_{band}'] = sep.astype(np.float32)
+        cols[f'forced_satnbr_{band}'] = near
+    return cols
 
 
 def _check_tile_kind(tile_kind):
@@ -556,12 +652,18 @@ def dedup_match_table(match_table, dedup_radius_arcsec=DEFAULT_DEDUP_RADIUS_ARCS
 # ---------------------------------------------------------------------------
 # Gather phase: pull the FULL rows of the survivors, tile by tile
 # ---------------------------------------------------------------------------
-def gather_survivor_rows(tile_paths, match_table, keep, also_in_tiles):
+def gather_survivor_rows(tile_paths, match_table, keep, also_in_tiles,
+                         satnbr_bands=None):
     """Re-read each tile's FULL table once, select only its surviving rows
     (by the ``tile_row`` indices recorded in ``match_table``), stamp
     ``also_in_tiles`` / ``joint_tile``, and vstack. Each tile's full table is
     read once and then dropped, so peak RAM never holds more than one tile's
     full columns plus the accumulating output.
+
+    ``satnbr_bands`` (bands, ``m8_dedup`` only) adds ``satnbr_sep_<band>`` and
+    ``forced_satnbr_<band>`` (see ``forced_satnbr_columns``), computed from each
+    tile's FULL table so a saturated source whose own row lost the cross-tile
+    dedup still counts as a neighbour.
     """
     obsid_arr = np.asarray(match_table['obsid'])
     tile_row_arr = np.asarray(match_table['tile_row'])
@@ -579,6 +681,9 @@ def gather_survivor_rows(tile_paths, match_table, keep, also_in_tiles):
         order = np.argsort(rows)
         full = Table.read(path)
         sel = full[rows[order]]
+        if satnbr_bands:
+            for name, arr in forced_satnbr_columns(full, satnbr_bands).items():
+                sel[name] = arr[rows[order]]
         sel['joint_tile'] = obsid
         sel['also_in_tiles'] = np.asarray(also_in_tiles)[m_keep][order].astype(str)
         out_chunks.append(sel)
@@ -631,8 +736,9 @@ def build_joint_catalog(input_dir, obsids=None,
         match_table, dedup_radius_arcsec=dedup_radius_arcsec)
     n_clusters = int(np.sum(np.asarray(also_in_tiles) != ''))
 
+    satnbr_bands = bands if tile_kind == TILE_KIND_M8_DEDUP else None
     combined, rows_in_out = gather_survivor_rows(
-        tile_paths, match_table, keep, also_in_tiles)
+        tile_paths, match_table, keep, also_in_tiles, satnbr_bands=satnbr_bands)
 
     prov = dict(
         pipeline_tag=get_pipeline_tag(),
@@ -673,6 +779,7 @@ def build_joint_catalog(input_dir, obsids=None,
             for o, p in tile_paths.items()
         },
         miri_crossmatch='OUT OF SCOPE -- see issue #956 and _miri_crossmatch_todo()',
+        forced_satnbr=_satnbr_provenance(combined, satnbr_bands),
     )
     combined.meta['CMZNFLD'] = len(tile_paths)
     combined.meta['CMZDEDR'] = float(dedup_radius_arcsec)
@@ -680,7 +787,25 @@ def build_joint_catalog(input_dir, obsids=None,
     combined.meta['GCTAG'] = prov['pipeline_tag']
     if tile_kind == TILE_KIND_M8_DEDUP:
         combined.meta['CMZTKIND'] = tile_kind
+        combined.meta['CMZSATNR'] = (SATNBR_RADIUS_ARCSEC
+                                     if prov['forced_satnbr']['bands'] else 0.0)
     return combined, prov
+
+
+def _satnbr_provenance(combined, satnbr_bands):
+    """Provenance block for the saturated-neighbour columns: the radius, the
+    definition, and how many forced rows each band flagged.  ``bands`` is empty
+    (not an error) for ``m7_oksep`` or for tiles with no ``forced_filled_*``."""
+    bands = {b: int(np.sum(combined[f'forced_satnbr_{b}']))
+             for b in (satnbr_bands or ())
+             if f'forced_satnbr_{b}' in combined.colnames}
+    return dict(
+        radius_arcsec=SATNBR_RADIUS_ARCSEC,
+        max_sep_arcsec=SATNBR_MAX_SEP_ARCSEC,
+        saturated_definition='is_saturated_<band> | replaced_saturated_<band>, same tile',
+        n_flagged=bands,
+        bands=sorted(bands),
+    )
 
 
 def _miri_crossmatch_todo():

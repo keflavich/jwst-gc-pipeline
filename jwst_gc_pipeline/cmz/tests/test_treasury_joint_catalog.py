@@ -507,3 +507,96 @@ def test_build_joint_catalog_default_kind_is_unchanged(tmp_path):
                                    'lowest_f212n_flux_err_jy',
                                    'lowest_row_index']
     assert 'CMZTKIND' not in table.meta
+
+
+# ---------------------------------------------------------------------------
+# saturated-neighbour flag (m8_dedup): forced rows within 1" of a saturated source
+# ---------------------------------------------------------------------------
+ARCSEC = 1.0 / 3600.0
+
+
+def test_saturated_neighbour_sep_excludes_self_and_respects_the_cap():
+    # row 0 is saturated; rows 1, 2 sit 0.5" and 2" north of it; row 3 is 30" away
+    ra = np.full(4, 266.30)
+    dec = -29.10 + np.array([0.0, 0.5, 2.0, 30.0]) * ARCSEC
+    sat = np.array([True, False, False, False])
+    sep = TJC.saturated_neighbour_sep_arcsec(ra, dec, sat, max_sep_arcsec=5.0)
+    assert np.isnan(sep[0])                      # never its own neighbour
+    assert sep[1] == pytest.approx(0.5, abs=1e-3)
+    assert sep[2] == pytest.approx(2.0, abs=1e-3)
+    assert np.isnan(sep[3])                      # beyond the 5" cap
+
+
+def test_saturated_neighbour_sep_two_saturated_sources_see_each_other():
+    ra = np.full(3, 266.30)
+    dec = -29.10 + np.array([0.0, 0.7, 40.0]) * ARCSEC
+    sat = np.array([True, True, False])
+    sep = TJC.saturated_neighbour_sep_arcsec(ra, dec, sat)
+    assert sep[0] == pytest.approx(0.7, abs=1e-3)
+    assert sep[1] == pytest.approx(0.7, abs=1e-3)
+
+
+def test_saturated_neighbour_sep_without_saturated_sources_is_all_nan():
+    sep = TJC.saturated_neighbour_sep_arcsec(
+        [266.3, 266.3], [-29.1, -29.1 + ARCSEC], [False, False])
+    assert np.isnan(sep).all()
+
+
+def _write_satnbr_tile(path, bands=('f480m',), with_sat_cols=True):
+    """One tile: S saturated; A forced 0.5" away; B forced 2" away; C NOT forced 0.5" away
+    (on the other side); D forced, isolated."""
+    dec = -29.10 + np.array([0.0, 0.5, 2.0, -0.5, 60.0]) * ARCSEC
+    ra = np.full(5, 266.30)
+    _write_m8_tile(path, ra, dec, [True] * 5, [2] * 5)
+    t = Table.read(path)
+    forced = np.array([False, True, True, False, True])
+    saturated = np.array([True, False, False, False, False])
+    for band in bands:
+        t[f'forced_filled_{band}'] = forced
+        if with_sat_cols:
+            t[f'is_saturated_{band}'] = saturated
+            t[f'replaced_saturated_{band}'] = np.zeros(5, dtype=bool)
+    t.write(path, overwrite=True)
+
+
+def test_forced_satnbr_columns_flag_only_forced_rows_within_radius(tmp_path):
+    p = tmp_path / f'{M8_STEM}_o040.fits'
+    _write_satnbr_tile(p)
+    cols = TJC.forced_satnbr_columns(Table.read(p), ['f212n', 'f480m'])
+    # f212n has no forced_filled column -> no columns for it
+    assert set(cols) == {'satnbr_sep_f480m', 'forced_satnbr_f480m'}
+    assert list(cols['forced_satnbr_f480m']) == [False, True, False, False, False]
+    assert cols['satnbr_sep_f480m'][3] == pytest.approx(0.5, abs=1e-2)  # not forced: sep kept, no flag
+    assert np.isnan(cols['satnbr_sep_f480m'][4])                        # isolated -> NaN
+    assert cols['satnbr_sep_f480m'].dtype == np.float32
+
+
+def test_forced_satnbr_columns_refuse_a_table_missing_the_saturation_columns(tmp_path):
+    p = tmp_path / f'{M8_STEM}_o040.fits'
+    _write_satnbr_tile(p, with_sat_cols=False)
+    with pytest.raises(KeyError, match='is_saturated_f480m'):
+        TJC.forced_satnbr_columns(Table.read(p), ['f480m'])
+
+
+def test_build_joint_catalog_m8_dedup_carries_satnbr_columns_and_provenance(tmp_path):
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    _write_satnbr_tile(in_dir / f'{M8_STEM}_o040.fits')
+    table, prov = TJC.build_joint_catalog(str(in_dir), tile_kind='m8_dedup')
+    assert 'forced_satnbr_f480m' in table.colnames and 'satnbr_sep_f480m' in table.colnames
+    assert int(np.sum(table['forced_satnbr_f480m'])) == 1
+    assert prov['forced_satnbr']['n_flagged'] == {'f480m': 1}
+    assert prov['forced_satnbr']['radius_arcsec'] == TJC.SATNBR_RADIUS_ARCSEC
+    assert table.meta['CMZSATNR'] == TJC.SATNBR_RADIUS_ARCSEC
+    # fluxes are untouched: a flag, not a demotion
+    assert np.all(np.asarray(table['flux_jy_f480m']) == 1.0)
+
+
+def test_build_joint_catalog_default_kind_has_no_satnbr_columns(tmp_path):
+    in_dir = tmp_path / 'tiles'
+    in_dir.mkdir()
+    ra0, dec0 = _grid_tile_coords(266.30, -29.10, nx=8, ny=8, step_arcsec=3.0)
+    _write_tile(in_dir / f'basic_merged_m7_o040{SUFFIX}.fits', ra0, dec0)
+    table, prov = TJC.build_joint_catalog(str(in_dir))
+    assert not [c for c in table.colnames if 'satnbr' in c]
+    assert prov['forced_satnbr']['bands'] == []
