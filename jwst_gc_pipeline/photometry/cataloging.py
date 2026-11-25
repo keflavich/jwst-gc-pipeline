@@ -4424,11 +4424,17 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
                                   pupil, resbg_path, satstar_label,
                                   satstar_flux_overrides=None,
-                                  satstar_flux_drops=None):
+                                  satstar_flux_drops=None,
+                                  adopt_satstar_products=False):
     """Load a frame and produce everything a manual pass needs: scaled
     aperture/annulus, filename tokens, data + error + mask, the (cutout-
     re-origined) PSF grid, the SourceGrouper, and the satstar-subtracted
     ``nan_replaced_data`` + ``satstar_model_subtracted``.
+
+    ``adopt_satstar_products`` (the m8 forced fill): use the ``satstar_label``
+    phase's satstar catalog and model as that phase fitted them, without the
+    PSF-core check or a forced refit (``load_or_make_satstar_catalog``'s
+    ``adopt_existing``).
 
     Reuses the legacy primitives (``_L.*``).  Input reads use the ORIGINAL
     ``basepath`` (PSF cache, satstar psfs); outputs go to ``out_basepath``
@@ -4866,7 +4872,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # forces a rebuild.  (Diagnosed on brick 2026-07: a full recovery re-run
         # left the m8 satstar mags byte-identical because the 07-25 caches were
         # reused.)
-        recovery_signature=_satstar_recovery_signature(options, filename))
+        recovery_signature=_satstar_recovery_signature(options, filename),
+        adopt_existing=adopt_satstar_products)
     satstar_rejected_path = filename.replace(
         '.fits', f'{satstar_file_suffix}_satstar_rejected.fits')
     # Satstar implied-peak-gate hand-off (#925), NIRCam, all targets: the gate
