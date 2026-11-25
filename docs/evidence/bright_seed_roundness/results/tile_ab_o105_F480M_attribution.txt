@@ -1,0 +1,73 @@
+################ control dncg -> sd1 (DQ_SAT dilation 3 px, no edge band)
+nrca added rows 14 4
+nrcb added rows 43 3
+added seed rows 64 {'exempt': 57, 'relaxed': 7}
+dq3mkrdncg -> dq3mkrsd1: 5 control leftovers >= 100.0 MJy/sr cleared (no treatment leftover within 3.0 px)
+   x     y   peak  class                  nearest added seed (origin, mod, sep arcsec, seed_origin)
+ 2524   987    373  NOT_IN_M7_CATALOG      relaxed  nrca 0.007" i2d
+ 5015  1437    367  NOT_IN_M7_CATALOG      relaxed  nrcb 0.016" i2d
+ 4812  1939    355  SATSTAR_NEAR           relaxed  nrcb 0.025" i2d
+  866   788    271  NOT_IN_M7_CATALOG      relaxed  nrca 0.035" i2d
+ 2353   647    127  NOT_IN_M7_CATALOG      relaxed  nrca 0.025" i2d
+attribution counts {'exempt': 0, 'relaxed': 5, 'none': 0}
+added seed rows that sit under a cleared leftover: 5 of 64
+
+################ rescue on in both arms: control dncgp -> sd1p
+nrca added rows 14 4
+nrcb added rows 43 3
+added seed rows 64 {'exempt': 57, 'relaxed': 7}
+dq3mkrdncgp -> dq3mkrsd1p: 5 control leftovers >= 100.0 MJy/sr cleared (no treatment leftover within 3.0 px)
+   x     y   peak  class                  nearest added seed (origin, mod, sep arcsec, seed_origin)
+ 2524   987    373  NOT_IN_M7_CATALOG      relaxed  nrca 0.007" i2d
+ 5015  1437    367  NOT_IN_M7_CATALOG      relaxed  nrcb 0.016" i2d
+ 4812  1939    355  SATSTAR_NEAR           relaxed  nrcb 0.025" i2d
+  866   788    271  NOT_IN_M7_CATALOG      relaxed  nrca 0.035" i2d
+ 2353   647    127  NOT_IN_M7_CATALOG      relaxed  nrca 0.025" i2d
+attribution counts {'exempt': 0, 'relaxed': 5, 'none': 0}
+added seed rows that sit under a cleared leftover: 5 of 64
+
+################ share of the control leftovers >= 100 MJy/sr that sd1 clears, by whether an added row lies within 0.035 arcsec (control dncg; DQ_SAT dilation 3 px)
+nrca added rows 14 4
+nrcb added rows 43 3
+added seed rows 64 {'exempt': 57, 'relaxed': 7}
+dq3mkrdncg -> dq3mkrsd1: 41 control leftovers >= 100.0 MJy/sr; added row within 0.035": 5; cleared in total 5
+  with an added row within radius: 5 leftovers, 5 cleared, 0 persist
+  without an added row within radius: 36 leftovers, 0 cleared, 36 persist
+  radius 0.035": 5 leftovers with an added row, 5 cleared
+  radius 0.1": 5 leftovers with an added row, 5 cleared
+  radius 0.3": 5 leftovers with an added row, 5 cleared
+  radius 1.0": 5 leftovers with an added row, 5 cleared
+
+################ the same with the edge band of 6 px
+nrca added rows 14 4
+nrcb added rows 43 3
+added seed rows 64 {'exempt': 57, 'relaxed': 7}
+ee6dq3mkrdncg -> ee6dq3mkrsd1: 36 control leftovers >= 100.0 MJy/sr; added row within 0.035": 5; cleared in total 5
+  with an added row within radius: 5 leftovers, 5 cleared, 0 persist
+  without an added row within radius: 31 leftovers, 0 cleared, 31 persist
+  radius 0.035": 5 leftovers with an added row, 5 cleared
+  radius 0.1": 5 leftovers with an added row, 5 cleared
+  radius 0.3": 5 leftovers with an added row, 5 cleared
+  radius 1.0": 5 leftovers with an added row, 5 cleared
+
+################ the leftovers that the #1365 rescue clears (dncgp against dncg), by whether an added row lies within 0.035 arcsec (DQ_SAT dilation 3 px)
+nrca added rows 14 4
+nrcb added rows 43 3
+added seed rows 64 {'exempt': 57, 'relaxed': 7}
+dq3mkrdncg -> dq3mkrdncgp: 41 control leftovers >= 100.0 MJy/sr; added row within 0.035": 5; cleared in total 0
+  with an added row within radius: 5 leftovers, 0 cleared, 5 persist
+  without an added row within radius: 36 leftovers, 0 cleared, 36 persist
+  persists under an added relaxed row (0.007"): (2524, 987) peak 373 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.016"): (5015, 1437) peak 367 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.025"): (4812, 1939) peak 355 SATSTAR_NEAR
+  persists under an added relaxed row (0.035"): (866, 788) peak 271 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.025"): (2353, 647) peak 127 NOT_IN_M7_CATALOG
+  radius 0.035": 5 leftovers with an added row, 0 cleared
+  radius 0.1": 5 leftovers with an added row, 0 cleared
+  radius 0.3": 5 leftovers with an added row, 0 cleared
+  radius 1.0": 5 leftovers with an added row, 0 cleared
+
+################ the leftovers that the #1365 rescue clears, with and without the added rows (dncgp against dncg, sd1p against sd1)
+dq3mkr: rescue clears 0 of the dncg leftovers >= 100 and 0 of the sd1 leftovers >= 100
+sd1p-cleared positions with a dncgp-cleared position within 3 px: 0 of 0
+dncgp-cleared positions with a sd1p-cleared position within 3 px: 0 of 0
