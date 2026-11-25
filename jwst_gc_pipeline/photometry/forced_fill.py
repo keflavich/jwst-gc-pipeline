@@ -146,7 +146,12 @@ def _frame_args_from_filename(filename, *, options, filt, field, basepath,
     parsed out of the exposure filename) so we prepare the frame identically.
 
     ``satstar_label`` selects which phase's satstar products to subtract; m8
-    has none of its own, so it reuses the final real phase (m7)."""
+    has none of its own, so it reuses the final real phase (m7).  They are
+    adopted as that phase fitted them (``adopt_satstar_products``), never
+    refitted: with ``--forced-fill-nbrsub`` the fill also subtracts that
+    phase's star-only model, which was fitted against its satstar model, so a
+    refit under a different ePSF core leaves their difference in every box
+    near a saturated star (#1284, #1379)."""
     # `get_filenames` returns FULL PATHS, so the tokens come from the basename.
     # Splitting the path shifted every index for a field directory with an
     # underscore -- gc2211_o023 read visit '211' and detector '00001' -- which is
@@ -161,6 +166,7 @@ def _frame_args_from_filename(filename, *, options, filt, field, basepath,
         resbg_path=resbg_path, satstar_label=satstar_label,
         satstar_flux_overrides=(satstar_overrides or {}).get((module, filt)),
         satstar_flux_drops=(satstar_drops or {}).get((module, filt)),
+        adopt_satstar_products=True,
     )
 
 

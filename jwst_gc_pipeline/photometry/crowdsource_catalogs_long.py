@@ -2087,7 +2087,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  deblend_with_zeroframe=False,
                                  partner_sky=None,
                                  sibling_sky=None,
-                                 recovery_signature=None):
+                                 recovery_signature=None,
+                                 adopt_existing=False):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
     the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
@@ -2096,17 +2097,31 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     counterparts) write to distinct files and do not race on the shared
     name when astropy's ``writeto(overwrite=True)`` tries to remove an
     existing file.
+
+    ``adopt_existing`` is for a caller that consumes another phase's products
+    rather than fitting its own: the m8 forced fill subtracts the m7 satstar
+    model together with the m7 star-only model, and the latter was fitted
+    against the former.  An existing catalog under ``file_suffix`` is then
+    used whatever ePSF core it was fitted with (``EPSFSHA``), and
+    ``overwrite`` / ``flux_overrides`` / ``flux_drops`` do not force a refit
+    (the products already carry the overrides of the phase that wrote them).
+    A refit under the current core would subtract a satstar model the earlier
+    phase never saw (#1284, #1379).  The recovery and fit-switch checks still
+    apply.
     """
+    if adopt_existing:
+        overwrite = False
+    elif flux_overrides or flux_drops:
+        # When flux_overrides are supplied (cross-frame out-of-field
+        # reconciliation), force a refit: the cached catalog predates the
+        # override and must be redone.
+        overwrite = True
     # Prefer the *_extended_satstar_catalog.fits produced by
     # ``force_union_satstar.py`` when present: it contains the original
     # per-frame DQ-based satstar fits PLUS forced fits at positions that
     # are saturated in OTHER frames of the same filter (so the same set
     # of saturated stars is consistently fit across the whole filter).
     # See project_force_union_satstar.md for the design rationale.
-    # When flux_overrides are supplied (cross-frame out-of-field reconciliation),
-    # force a refit: the cached catalog predates the override and must be redone.
-    if flux_overrides or flux_drops:
-        overwrite = True
 
     # The environment switches that change the fit (ZEROFRAME R-curve guard,
     # keep-finite, observed peak from the crf, local-qfit gate; issue #972)
@@ -2127,8 +2142,10 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     def _cache_ok(tbl):
         # The PSF check comes first: the legacy ``recovery_signature is None``
         # path below accepts every catalog, and must not accept one fitted with
-        # a different PSF.
-        if str(tbl.meta.get('EPSFSHA', '')) != psf_signature:
+        # a different PSF.  A consumer of the products (``adopt_existing``)
+        # takes them with the PSF they were fitted with.
+        if (not adopt_existing
+                and str(tbl.meta.get('EPSFSHA', '')) != psf_signature):
             return False
         # A cached satstar catalog is valid only if it was built with the SAME
         # saturated-core recovery config as this run.  --satstar-*-recover change
@@ -2163,6 +2180,12 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         The cache key carries no code version either, so a catalog written
         before #949 is also brought to the detector-frame column vintage
         here (idempotent; a current catalog passes through)."""
+        cached_psf = str(tbl.meta.get('EPSFSHA', ''))
+        if adopt_existing and cached_psf != psf_signature:
+            print(f"Adopting satstar catalog {os.path.basename(cache_name)} as "
+                  f"fitted (PSF core {cached_psf[:12]!r}; this run's core "
+                  f"{psf_signature[:12]!r}): its model is the one the phase "
+                  f"that wrote it subtracted", flush=True)
         tbl = finalize_satstar_columns(tbl)
         tbl, shift = refresh_satstar_skycoords(tbl, frame_path=filename,
                                                catalog_path=cache_name)
@@ -2199,6 +2222,10 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     # _crf SCI array, which no phase writes, so m3..m7 recompute m12's answer to
     # 0.000e+00.  Adopt those products rather than refit (opt-in, default OFF;
     # see photometry/satstar_cache.py).
+    if adopt_existing:
+        print(f"No adoptable satstar catalog under "
+              f"{file_suffix or '(no suffix)'} for {os.path.basename(filename)}; "
+              f"fitting one", flush=True)
     _content_key = None
     if _satstar_cache.cross_phase_cache_enabled():
         _content_key = _satstar_cache.satstar_content_key(
