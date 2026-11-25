@@ -291,14 +291,34 @@ def test_adopt_existing_is_not_forced_into_a_refit(tmp_path, cache_env, kw):
     assert calls['n'] == 0
 
 
-def test_adopt_existing_still_checks_the_recovery_config(tmp_path, cache_env):
+@pytest.mark.parametrize('kw', [
+    {'overwrite': True},
+    {'flux_overrides': {'a': 1.0}},
+    {'flux_drops': ['a']},
+])
+def test_overwrite_and_cross_frame_overrides_force_a_refit_by_default(
+        tmp_path, cache_env, kw):
+    """The fitting-phase twin of the test above: without adopt_existing an
+    otherwise valid cache is refitted."""
+    CL, calls, fn = cache_env
+    _cached(tmp_path)
+    CL.load_or_make_satstar_catalog(fn, path_prefix=str(tmp_path), recovery_signature='off',
+                                    **kw)
+    assert calls['n'] == 1
+
+
+def test_adopt_existing_still_checks_the_recovery_config(tmp_path, cache_env, capsys):
     """Only the PSF-core check is relaxed: a catalog built under another
-    saturated-core recovery config is a different fit and is rebuilt."""
+    saturated-core recovery config is a different fit and is rebuilt, with a
+    warning that the rebuild writes over the adopted phase's products."""
     CL, calls, fn = cache_env
     _cached(tmp_path, recov='zf1_ramp0_dil3')
     CL.load_or_make_satstar_catalog(fn, path_prefix=str(tmp_path), recovery_signature='off',
                                     adopt_existing=True)
     assert calls['n'] == 1
+    out = capsys.readouterr().out
+    assert 'WARNING: cannot adopt frame_satstar_catalog.fits' in out
+    assert 'No adoptable satstar catalog' not in out
 
 
 def test_adopt_existing_fits_when_there_is_nothing_to_adopt(tmp_path, cache_env, capsys):

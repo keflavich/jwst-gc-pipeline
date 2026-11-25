@@ -2199,6 +2199,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                 label=os.path.basename(cache_name))
         return tbl
 
+    rejected = []
     extended_filename = filename.replace(
         '.fits', f'{file_suffix}_extended_satstar_catalog.fits')
     if os.path.exists(extended_filename) and not overwrite:
@@ -2207,6 +2208,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             return _on_current_frame(_c, extended_filename)
         print(f"Rebuilding satstar catalog: {os.path.basename(extended_filename)} "
               f"{_config_mismatch(_c)}", flush=True)
+        rejected.append(os.path.basename(extended_filename))
         overwrite = True
     satstar_filename = filename.replace('.fits', f'{file_suffix}_satstar_catalog.fits')
     if os.path.exists(satstar_filename) and not overwrite:
@@ -2215,6 +2217,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
             return _on_current_frame(_c, satstar_filename)
         print(f"Rebuilding satstar catalog: {os.path.basename(satstar_filename)} "
               f"{_config_mismatch(_c)}", flush=True)
+        rejected.append(os.path.basename(satstar_filename))
         overwrite = True
 
     # No catalog under THIS phase's suffix.  Another phase may nonetheless have
@@ -2222,7 +2225,12 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     # _crf SCI array, which no phase writes, so m3..m7 recompute m12's answer to
     # 0.000e+00.  Adopt those products rather than refit (opt-in, default OFF;
     # see photometry/satstar_cache.py).
-    if adopt_existing:
+    if adopt_existing and rejected:
+        print(f"WARNING: cannot adopt {', '.join(rejected)}: its recovery config "
+              f"or fit switches differ from this run's (see above).  Refitting "
+              f"writes over the satstar products of the phase that wrote it "
+              f"(#1379)", flush=True)
+    elif adopt_existing:
         print(f"No adoptable satstar catalog under "
               f"{file_suffix or '(no suffix)'} for {os.path.basename(filename)}; "
               f"fitting one", flush=True)
