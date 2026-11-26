@@ -983,6 +983,41 @@ def test_replace_saturated_vetoed_satstar_keeps_split_rows(monkeypatch, tmp_path
     assert bool(cat['is_saturated'][0])
 
 
+def _one_satstar_one_row(monkeypatch, tmp_path, sep_arcsec, catflux=1000.0,
+                         fwhm=0.06):
+    """One satstar (flux 60000) and one daophot row (flux ``catflux``) at
+    ``sep_arcsec`` east of it; returns the catalog after replacement."""
+    ra0, dec0 = 266.5, -28.7
+    satstar = Table({
+        'skycoord_fit': SkyCoord([ra0] * u.deg, [dec0] * u.deg),
+        'flux_fit': [60000.0], 'flux_err': [10.0],
+        'x_fit': [81.0], 'y_fit': [81.0], 'x_err': [0.01], 'y_err': [0.01],
+        'xcentroid': [512.0], 'ycentroid': [300.0],
+    })
+    monkeypatch.setattr(MC, 'load_satstar_catalog', lambda *a, **k: satstar)
+
+    class _FakeSvo:
+        @staticmethod
+        def get_filter_list(_):
+            t = Table({'filterID': ['JWST/NIRCam.F182M'], 'ZeroPoint': [850.0]})
+            t.add_index('filterID')
+            return t
+    monkeypatch.setattr(MC, 'SvoFps', _FakeSvo)
+    (tmp_path / 'reduction').mkdir(exist_ok=True)
+    Table({'Filter': ['F182M'], 'PSF FWHM (arcsec)': [fwhm]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv', format='ascii.ecsv',
+        overwrite=True)
+    nbr = SkyCoord(ra0 * u.deg, dec0 * u.deg).spherical_offsets_by(
+        sep_arcsec * u.arcsec, 0 * u.arcsec)
+    cat = Table({
+        'skycoord': SkyCoord([nbr.ra.deg] * u.deg, [nbr.dec.deg] * u.deg),
+        'flux': [catflux], 'dflux': [5.0],
+        'x': [530.0], 'y': [300.0], 'dx': [0.01], 'dy': [0.01],
+    })
+    MC.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/')
+    return cat
+
+
 class TestSatstarReplaceRadius:
     """replace_saturated's mutual-nearest second pass pairs a satstar with
     the nearest daophot row within ``_satstar_replace_radius``.  A fixed
@@ -1000,37 +1035,8 @@ class TestSatstarReplaceRadius:
         monkeypatch.delenv('SATSTAR_REPLACE_RADIUS_FWHM', raising=False)
 
     def _run(self, monkeypatch, tmp_path, sep_arcsec):
-        """One satstar (flux 60000) and one daophot row (flux 1000) at
-        ``sep_arcsec`` east of it; returns the catalog after replacement."""
-        ra0, dec0 = 266.5, -28.7
-        satstar = Table({
-            'skycoord_fit': SkyCoord([ra0] * u.deg, [dec0] * u.deg),
-            'flux_fit': [60000.0], 'flux_err': [10.0],
-            'x_fit': [81.0], 'y_fit': [81.0], 'x_err': [0.01], 'y_err': [0.01],
-            'xcentroid': [512.0], 'ycentroid': [300.0],
-        })
-        monkeypatch.setattr(MC, 'load_satstar_catalog', lambda *a, **k: satstar)
-
-        class _FakeSvo:
-            @staticmethod
-            def get_filter_list(_):
-                t = Table({'filterID': ['JWST/NIRCam.F182M'], 'ZeroPoint': [850.0]})
-                t.add_index('filterID')
-                return t
-        monkeypatch.setattr(MC, 'SvoFps', _FakeSvo)
-        (tmp_path / 'reduction').mkdir(exist_ok=True)
-        Table({'Filter': ['F182M'], 'PSF FWHM (arcsec)': [self.FWHM]}).write(
-            tmp_path / 'reduction' / 'fwhm_table.ecsv', format='ascii.ecsv',
-            overwrite=True)
-        nbr = SkyCoord(ra0 * u.deg, dec0 * u.deg).spherical_offsets_by(
-            sep_arcsec * u.arcsec, 0 * u.arcsec)
-        cat = Table({
-            'skycoord': SkyCoord([nbr.ra.deg] * u.deg, [nbr.dec.deg] * u.deg),
-            'flux': [1000.0], 'dflux': [5.0],
-            'x': [530.0], 'y': [300.0], 'dx': [0.01], 'dy': [0.01],
-        })
-        MC.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/')
-        return cat
+        return _one_satstar_one_row(monkeypatch, tmp_path, sep_arcsec,
+                                    fwhm=self.FWHM)
 
     def test_neighbour_beyond_1p5_fwhm_is_not_overwritten(self, monkeypatch, tmp_path):
         # 2 FWHM: inside the old 0.5" radius, outside 1.5 FWHM
@@ -1082,6 +1088,96 @@ class TestSatstarReplaceRadius:
         monkeypatch.setenv('SATSTAR_REPLACE_RADIUS_FWHM', ' ')
         r = MC._satstar_replace_radius('f212n')
         assert abs(r.to_value(u.arcsec) - 1.5 * 0.072) < 1e-9
+
+
+class TestSecondPassNeighbourGuard:
+    """A second-pass pairing whose daophot row holds 0.2-0.8 of the satstar's
+    flux is a neighbouring star, not the satstar's clipped row (o105 F212N:
+    59 such pairs, the data light centroid at the flux-weighted blend of the
+    two).  The guard (``SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN``, off by
+    default) keeps the row and appends the satstar as its own row."""
+
+    FWHM = 0.06   # arcsec; 1 FWHM is past the 0.05" first-pass radius
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        for name in ('SATSTAR_REPLACE_RADIUS_ARCSEC',
+                     'SATSTAR_REPLACE_RADIUS_FWHM',
+                     'SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN',
+                     'SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MAX'):
+            monkeypatch.delenv(name, raising=False)
+
+    def _run(self, monkeypatch, tmp_path, catflux, sep=None):
+        return _one_satstar_one_row(monkeypatch, tmp_path,
+                                    self.FWHM if sep is None else sep,
+                                    catflux=catflux, fwhm=self.FWHM)
+
+    def test_default_off_overwrites_the_neighbour(self, monkeypatch, tmp_path):
+        cat = self._run(monkeypatch, tmp_path, catflux=20000.0)   # 0.33
+        assert len(cat) == 1
+        assert bool(cat['replaced_saturated'][0])
+        assert cat['flux'][0] == 60000.0
+
+    def test_guard_keeps_a_row_inside_the_window(self, monkeypatch, tmp_path):
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', '0.2')
+        cat = self._run(monkeypatch, tmp_path, catflux=20000.0)   # 0.33
+        assert len(cat) == 2
+        assert not bool(cat['replaced_saturated'][0])
+        assert cat['flux'][0] == 20000.0                          # row kept
+        assert bool(cat['replaced_saturated'][1])                 # satstar added
+        assert cat['flux'][1] == 60000.0
+
+    def test_guard_leaves_a_clipped_own_row_alone(self, monkeypatch, tmp_path):
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', '0.2')
+        cat = self._run(monkeypatch, tmp_path, catflux=6000.0)    # 0.10
+        assert len(cat) == 1
+        assert bool(cat['replaced_saturated'][0])
+        assert cat['flux'][0] == 60000.0
+
+    def test_guard_window_upper_bound(self, monkeypatch, tmp_path):
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', '0.2')
+        # 0.83: above the default MAX 0.8 and passes the faint-replacement
+        # guard (satstar >= 0.8 x daophot), so the row is overwritten
+        cat = self._run(monkeypatch, tmp_path, catflux=50000.0)
+        assert len(cat) == 1
+        assert bool(cat['replaced_saturated'][0])
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MAX', '0.9')
+        cat = self._run(monkeypatch, tmp_path, catflux=50000.0)
+        assert len(cat) == 2
+        assert cat['flux'][0] == 50000.0
+
+    def test_guard_does_not_touch_the_first_pass(self, monkeypatch, tmp_path):
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', '0.2')
+        cat = self._run(monkeypatch, tmp_path, catflux=20000.0, sep=0.03)
+        assert len(cat) == 1
+        assert bool(cat['replaced_saturated'][0])
+        assert cat['flux'][0] == 60000.0
+
+    def test_window_settings(self, monkeypatch):
+        assert MC._second_pass_neighbour_window() is None
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', ' ')
+        assert MC._second_pass_neighbour_window() is None
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', '0')
+        assert MC._second_pass_neighbour_window() is None
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', '0.25')
+        assert MC._second_pass_neighbour_window() == (0.25, 0.8)
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MAX', '0.6')
+        assert MC._second_pass_neighbour_window() == (0.25, 0.6)
+
+    @pytest.mark.parametrize('lo, hi', [('abc', ''), ('-0.1', ''), ('nan', ''),
+                                        ('0.2', 'abc'), ('0.2', '0.2'),
+                                        ('0.5', '0.3'), ('0.2', 'inf')])
+    def test_bad_window_raises(self, monkeypatch, lo, hi):
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN', lo)
+        monkeypatch.setenv('SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MAX', hi)
+        with pytest.raises(ValueError, match='SATSTAR_SECOND_PASS_NEIGHBOUR'):
+            MC._second_pass_neighbour_window()
+
+    def test_veto_helper(self):
+        cat = np.array([20000.0, 6000.0, 50000.0, np.nan, 20000.0, 20000.0])
+        sat = np.array([60000.0, 60000.0, 60000.0, 60000.0, 0.0, np.nan])
+        got = MC._second_pass_neighbour_veto(cat, sat, 0.2, 0.8)
+        assert got.tolist() == [True, False, False, False, False, False]
 
 
 # ---------------------------------------------------------------------------
