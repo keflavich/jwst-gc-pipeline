@@ -1,6 +1,8 @@
 """Tests for build_treasury_pm.py's own code (dedup, adaptive tie_magcut) --
 the commit that added them (ac4bf1e4) shipped with none, per PR #140 review.
 """
+import json
+
 import numpy as np
 import pytest
 from astropy.table import Table
@@ -523,5 +525,333 @@ def test_cli_rejects_a_negative_rescue_threshold(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['x', '--src', 's.fits', '--src-epoch', '2024.7', '--ref', 'r.fits',
                                       '--ref-epoch', '2026.7', '--filter', 'f212n', '--out', 'o.fits',
                                       '--rescue-inflated-err', '-1'])
+    with pytest.raises(SystemExit):
+        btp.main()
+
+
+# --- cross-tile duplicate averaging (average_ref_duplicates) ---------------------------------
+
+def _ref_dict(rows):
+    """A ref dict as load_and_tie_ref_catalogs returns it, from dicts with ``obs``, ``dx``, ``dy``
+    (mas from CENTER) and optional ``flux``, ``ex``/``ey`` (mas), ``frames``, ``sat``, ``resc``."""
+    n = len(rows)
+    ra = CENTER.ra.deg + np.array([r['dx'] for r in rows]) / 1e3 / 3600 / np.cos(CENTER.dec.rad)
+    dec = CENTER.dec.deg + np.array([r['dy'] for r in rows]) / 1e3 / 3600
+    sc = SkyCoord(ra * u.deg, dec * u.deg)
+    flux = np.array([r.get('flux', 1e-4) for r in rows])
+    return dict(sc=sc, sc_raw=sc, flux=flux, mag=-2.5 * np.log10(flux),
+                flux_noise=np.array([r.get('noise', 0.0) for r in rows]),
+                ex=np.array([r.get('ex', 3.0) for r in rows]) / 1e3,
+                ey=np.array([r.get('ey', r.get('ex', 3.0)) for r in rows]) / 1e3,
+                sat=np.array([r.get('sat', False) for r in rows]),
+                err_rescued=np.array([r.get('resc', False) for r in rows]),
+                n_frames=np.array([r.get('frames', 2.0) for r in rows]),
+                obs_index=np.array([r['obs'] for r in rows]), row=100 + np.arange(n),
+                epoch=2026.7, n=n)
+
+
+def _offset_mas(ref, i, j):
+    dlon, dlat = ref['sc'][i].spherical_offsets_to(ref['sc'][j])
+    return dlon.to_value(u.mas), dlat.to_value(u.mas)
+
+
+def test_average_ref_duplicates_merges_a_pair_with_frame_weights():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, frames=2, ex=3.0, ey=4.0, flux=1.0e-4, noise=1e-6),
+                     dict(obs=1, dx=6, dy=-3, frames=4, ex=2.0, ey=1.0, flux=1.2e-4, noise=2e-6),
+                     dict(obs=1, dx=900, dy=0)])
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert out['n'] == len(out['sc']) == 2 and info['n_groups'] == 1
+    assert info['groups_by_size'] == {2: 1} and info['n_rows_in'] == 3 and info['n_rows_out'] == 2
+    assert out['n_merged'].tolist() == [2, 1]
+    # primary = the copy with most frames: its observation, catalogue row and untied position
+    assert out['obs_index'].tolist() == [1, 1] and out['row'].tolist() == [101, 102]
+    assert out['sc_raw'][0].separation(ref['sc_raw'][1]).mas < 1e-6
+    # position = frame-weighted mean of the tied positions: 4/6 of the way from the 2-frame copy
+    # to the 4-frame one
+    dlon, dlat = ref['sc'][0].spherical_offsets_to(out['sc'][0])
+    np.testing.assert_allclose([dlon.to_value(u.mas), dlat.to_value(u.mas)], [4.0, -2.0], atol=1e-4)
+    # propagated error of the mean, in the unaveraged rows' own currency
+    np.testing.assert_allclose(out['ex'][0] * 1e3, np.hypot(2 / 6 * 3.0, 4 / 6 * 2.0), rtol=1e-12)
+    np.testing.assert_allclose(out['ey'][0] * 1e3, np.hypot(2 / 6 * 4.0, 4 / 6 * 1.0), rtol=1e-12)
+    np.testing.assert_allclose(out['flux'][0], (2 * 1.0e-4 + 4 * 1.2e-4) / 6, rtol=1e-12)
+    np.testing.assert_allclose(out['mag'][0], -2.5 * np.log10(out['flux'][0]), rtol=1e-12)
+    np.testing.assert_allclose(out['flux_noise'][0], np.hypot(2 / 6 * 1e-6, 4 / 6 * 2e-6), rtol=1e-12)
+    assert out['n_frames'].tolist() == [6.0, 2.0]
+    # the input dict is not modified
+    assert ref['n'] == 3 and len(ref['sc']) == 3 and ref['ex'][0] == 3.0e-3
+
+
+def test_average_ref_duplicates_never_merges_two_rows_of_one_observation():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=0, dx=5, dy=0)])
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert out['n'] == 2 and info['n_groups'] == 0 and out['n_merged'].tolist() == [1, 1]
+
+
+def test_average_ref_duplicates_radius_and_flux_gates():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=25, dy=0)])
+    assert average_ref_duplicates(ref, 0.020)[0]['n'] == 2
+    assert average_ref_duplicates(ref, 0.030)[0]['n'] == 1
+    # a blend of two stars in one tile: three times the flux of the other tile's row
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, flux=3e-4), dict(obs=1, dx=5, dy=0, flux=1e-4)])
+    assert average_ref_duplicates(ref, 0.020)[0]['n'] == 2
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, flux=1.05e-4), dict(obs=1, dx=5, dy=0, flux=1e-4)])
+    assert average_ref_duplicates(ref, 0.020)[0]['n'] == 1
+
+
+def test_average_ref_duplicates_pairs_only_mutual_nearest_rows():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=5, dy=0), dict(obs=1, dx=-9, dy=0)])
+    out, info = average_ref_duplicates(ref, 0.020)
+    # the nearer copy joins the star; the other row of that observation stays as it is
+    assert out['n'] == 2 and out['n_merged'].tolist() == [2, 1]
+    np.testing.assert_allclose(_offset_mas(ref, 2, 0)[0], 9.0, atol=1e-3)
+    # equal frames: the lower observation is the primary
+    assert out['row'].tolist() == [100, 102] and out['obs_index'].tolist() == [0, 1]
+    assert out['sc'][1].separation(ref['sc'][2]).mas < 1e-6
+    # and the other way round: two rows of observation 0 near one row of observation 1
+    ref = _ref_dict([dict(obs=0, dx=-9, dy=0), dict(obs=0, dx=0, dy=0), dict(obs=1, dx=5, dy=0)])
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert out['n'] == 2 and out['n_merged'].tolist() == [1, 2] and out['row'].tolist() == [100, 101]
+    assert out['sc'][0].separation(ref['sc'][0]).mas < 1e-6
+
+
+def test_nearest_per_key_keeps_the_smallest_separation_of_each_key():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import _nearest_per_key
+    rng = np.random.default_rng(3)
+    key = rng.integers(0, 40, 300)
+    sep = rng.permutation(300).astype(float)
+    mask = _nearest_per_key(key, sep)
+    expected = np.zeros(300, bool)
+    for k in np.unique(key):
+        at = np.flatnonzero(key == k)
+        expected[at[np.argmin(sep[at])]] = True
+    np.testing.assert_array_equal(mask, expected)
+    assert _nearest_per_key(np.zeros(0, np.int64), np.zeros(0)).shape == (0,)
+
+
+def test_average_ref_duplicates_recovers_every_star_seen_by_several_observations():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    rng = np.random.default_rng(11)
+    n_star = 400
+    pos = rng.uniform(-60_000, 60_000, (n_star, 2))                  # mas; stars are >> 20 mas apart
+    seen = rng.random((n_star, 3)) < 0.6
+    rows, star_of = [], []
+    for s in range(n_star):
+        for obs in np.flatnonzero(seen[s]):
+            jitter = rng.normal(0, 2.0, 2)
+            rows.append(dict(obs=int(obs), dx=pos[s, 0] + jitter[0], dy=pos[s, 1] + jitter[1], frames=1 + (s + obs) % 5))
+            star_of.append(s)
+    perm = rng.permutation(len(rows))                                # row order independent of star and tile
+    rows, star_of = [rows[k] for k in perm], np.asarray(star_of)[perm]
+    ref = _ref_dict(rows)
+    out, info = average_ref_duplicates(ref, 0.020)
+    n_seen = seen.sum(axis=1)
+    assert out['n'] == (n_seen > 0).sum() and info['n_components_multi'] == info['n_groups'] == (n_seen > 1).sum()
+    primary_star = star_of[out['row'] - 100]
+    assert len(np.unique(primary_star)) == out['n']                  # every star once
+    np.testing.assert_array_equal(out['n_merged'], n_seen[primary_star])
+    np.testing.assert_array_equal(out['n_frames'], [sum(ref['n_frames'][star_of == s]) for s in primary_star])
+
+
+def test_average_ref_duplicates_merges_three_observations():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, frames=1), dict(obs=1, dx=6, dy=0, frames=2),
+                     dict(obs=2, dx=-3, dy=4, frames=3)])
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert out['n'] == 1 and out['n_merged'].tolist() == [3] and info['groups_by_size'] == {3: 1}
+    assert out['obs_index'].tolist() == [2] and out['n_frames'].tolist() == [6.0]
+    dlon, dlat = ref['sc'][0].spherical_offsets_to(out['sc'][0])
+    np.testing.assert_allclose([dlon.to_value(u.mas), dlat.to_value(u.mas)],
+                               [(2 * 6 + 3 * -3) / 6, (3 * 4) / 6], atol=1e-4)
+
+
+def test_average_ref_duplicates_leaves_ambiguous_clusters_alone():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    # a chain A(0)-B(1)-C(2)-A'(0): two rows of observation 0 in one cluster
+    chain = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=6, dy=0),
+                       dict(obs=2, dx=12, dy=0), dict(obs=0, dx=18, dy=0)])
+    out, info = average_ref_duplicates(chain, 0.020)
+    assert out['n'] == 4 and info['n_groups'] == 0 and info['n_components_multi'] == 1
+    # B and C, 24 mas apart, both close to A: the cluster's ends are not themselves a pair
+    ends = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=-12, dy=0), dict(obs=2, dx=12, dy=0)])
+    out, info = average_ref_duplicates(ends, 0.020)
+    assert out['n'] == 3 and out['n_merged'].tolist() == [1, 1, 1] and info['n_components_multi'] == 1
+
+
+def test_average_ref_duplicates_flags_saturation_and_rescue_like_the_copies():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, sat=True), dict(obs=1, dx=4, dy=0, sat=False)])
+    assert average_ref_duplicates(ref, 0.020)[0]['sat'].tolist() == [True]
+    # a rescued copy beside a healthy one is absorbed with no weight, however many frames it has
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, frames=2, resc=False), dict(obs=1, dx=8, dy=0, frames=9, resc=True)])
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert out['n'] == 1 and out['n_merged'].tolist() == [2] and info['n_rescued_absorbed'] == 1
+    assert out['err_rescued'].tolist() == [False] and out['obs_index'].tolist() == [0]
+    assert out['sc'][0].separation(ref['sc'][0]).mas < 1e-6 and out['n_frames'].tolist() == [2.0]
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, sat=False), dict(obs=1, dx=8, dy=0, sat=True, resc=True)])
+    assert average_ref_duplicates(ref, 0.020)[0]['sat'].tolist() == [False]   # the absorbed copy does not count
+    # two rescued copies average like any two, and the row stays rescued
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, resc=True), dict(obs=1, dx=8, dy=0, resc=True)])
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert out['err_rescued'].tolist() == [True] and info['n_rescued_absorbed'] == 0
+    np.testing.assert_allclose(_offset_mas(ref, 0, 1)[0] / 2, 4.0, atol=1e-3)
+
+
+def test_average_ref_duplicates_without_frame_counts_weights_the_copies_equally():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=10, dy=0)])
+    del ref['n_frames']
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert 'n_frames' not in out
+    dlon, dlat = ref['sc'][0].spherical_offsets_to(out['sc'][0])
+    np.testing.assert_allclose(dlon.to_value(u.mas), 5.0, atol=1e-4)
+    # NaN or sub-1 counts (a catalogue without the column) weigh as one frame
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0, frames=np.nan), dict(obs=1, dx=10, dy=0, frames=0)])
+    dlon, dlat = ref['sc'][0].spherical_offsets_to(average_ref_duplicates(ref, 0.020)[0]['sc'][0])
+    np.testing.assert_allclose(dlon.to_value(u.mas), 5.0, atol=1e-4)
+
+
+def test_average_ref_duplicates_leaves_every_other_row_bit_identical():
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates
+    rng = np.random.default_rng(7)
+    rows = [dict(obs=k % 3, dx=x, dy=y, flux=10 ** rng.uniform(-5, -4), ex=rng.uniform(1, 5),
+                 frames=int(rng.integers(1, 5)))
+            for k, (x, y) in enumerate(rng.uniform(-30_000, 30_000, (300, 2)))]
+    rows[3]['frames'] = 3     # row 3 is the primary of the pair it forms with the extra row below
+    rows.append(dict(obs=1, dx=rows[3]['dx'] + 4, dy=rows[3]['dy'], flux=rows[3]['flux'], frames=2))
+    ref = _ref_dict(rows)
+    out, info = average_ref_duplicates(ref, 0.020)
+    assert info['n_groups'] == 1 and out['n'] == 300
+    others = np.ones(300, bool)
+    others[3] = False   # the merged row sits at its primary's slot
+    for k in ('ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index', 'row', 'err_rescued', 'n_frames'):
+        np.testing.assert_array_equal(out[k][others], ref[k][:300][others], err_msg=k)
+    np.testing.assert_array_equal(out['sc'].ra.deg[others], ref['sc'].ra.deg[:300][others])
+    np.testing.assert_array_equal(out['sc'].dec.deg[others], ref['sc'].dec.deg[:300][others])
+    assert out['n_merged'][others].tolist() == [1] * 299 and out['n_merged'][3] == 2
+    assert out['row'][3] == 103 and out['n_frames'][3] == 5.0
+
+
+def test_load_one_reads_the_frame_counts_when_the_catalog_has_them(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import _load_one
+    path = tmp_path / 'cat.fits'
+    _write_rescue_fits(path, np.random.default_rng(21))
+    assert np.isnan(_load_one(str(path), 'f212n', 2024.7, 5.0, 0)['n_frames']).all()
+    t = Table.read(path)
+    t = t[np.random.default_rng(1).permutation(len(t))]            # usable rows are not a prefix
+    t['nmatch_good_f212n'] = np.arange(len(t)) % 5 + 1
+    t.write(path, overwrite=True)
+    cat = _load_one(str(path), 'f212n', 2024.7, 5.0, 0)
+    assert 0 < cat['n'] < len(t) and cat['row'].max() >= cat['n']
+    np.testing.assert_array_equal(cat['n_frames'], cat['row'] % 5 + 1)
+
+
+def test_load_and_tie_ref_catalogs_carries_the_frame_counts_of_every_tile(tmp_path):
+    rng = np.random.default_rng(5)
+    n = 500
+    dra, ddec = rng.uniform(-60, 60, n), rng.uniform(-60, 60, n)
+    flux = rng.uniform(1e-8, 1e-6, n)
+    src = dict(sc=SkyCoord((CENTER.ra.deg + dra / 3600) * u.deg, (CENTER.dec.deg + ddec / 3600) * u.deg),
+               mag=-2.5 * np.log10(flux), n=n)
+    paths, counts = [], []
+    for k in range(2):
+        sc = SkyCoord((CENTER.ra.deg + (dra + rng.normal(0, 0.005, n)) / 3600) * u.deg,
+                      (CENTER.dec.deg + (ddec + rng.normal(0, 0.005, n)) / 3600) * u.deg)
+        _write_ref_fits(tmp_path / f'ref{k}.fits', sc, flux * (1.0 + rng.normal(0, 0.01, n)))
+        t = Table.read(tmp_path / f'ref{k}.fits')
+        counts.append(rng.integers(1, 7, n))
+        t['nmatch_good_f212n'] = counts[-1]
+        t.write(tmp_path / f'ref{k}.fits', overwrite=True)
+        paths.append(str(tmp_path / f'ref{k}.fits'))
+    ref, diags = load_and_tie_ref_catalogs(paths, 'f212n', 2026.0, src, tie_magcut=None,
+                                           tie_bright_percentile=20.0)
+    assert len(ref['n_frames']) == ref['n'] == len(ref['sc'])
+    for k in range(2):
+        rows = ref['row'][ref['obs_index'] == k]
+        np.testing.assert_array_equal(ref['n_frames'][ref['obs_index'] == k], counts[k][rows])
+
+
+def _two_tile_field(tmp_path, rng):
+    """src plus two ref 'tiles', each seeing a random part of the stars (independent few-mas noise,
+    shuffled rows).  Returns src, the two ref paths and ``member[tile][star]``; a star's number is
+    its row in the src file."""
+    src, ref_all, n_all, n_comp = _synthetic_two_epoch_field(tmp_path, rng)
+    t = Table.read(ref_all)
+    sc, flux = t['skycoord'], np.asarray(t['flux'])
+    member = [rng.random(n_all) < 0.9, rng.random(n_all) < 0.5]
+    paths = []
+    for k, m in enumerate(member):
+        stars = rng.permutation(np.flatnonzero(m))
+        extra = 0.003 * k                                             # the second tile is 3 mas noisier
+        s = sc[stars]
+        _write_ref_fits(tmp_path / f'tile{k}.fits',
+                        SkyCoord(s.ra + rng.normal(0, extra, len(stars)) * u.arcsec / np.cos(s.dec.rad),
+                                 s.dec + rng.normal(0, extra, len(stars)) * u.arcsec),
+                        flux[stars] * (1.0 + rng.normal(0, 0.01 * k, len(stars))))
+        paths.append(str(tmp_path / f'tile{k}.fits'))
+    return src, paths, member, n_all
+
+
+def test_build_averages_cross_tile_duplicates_only_when_asked(tmp_path):
+    pytest.importorskip('flystar')
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    src, refs, member, n_all = _two_tile_field(tmp_path, np.random.default_rng(43))
+    n_both = int((member[0] & member[1]).sum())
+    kw = dict(verbose=False, emit_rows=True)
+    plain = btp.build([src], refs, 'f212n', 2024.7, 2026.7, str(tmp_path / 'plain.fits'), **kw)
+    assert 'ref_n_merged' not in plain.colnames and 'ref_dup_avg_json' not in plain.meta
+    avg = btp.build([src], refs, 'f212n', 2024.7, 2026.7, str(tmp_path / 'avg.fits'),
+                    ref_average_duplicates=0.030, **kw)
+    assert avg.meta['ref_average_duplicates'] == 0.030
+    info = json.loads(avg.meta['ref_dup_avg_json'])
+    assert info['radius_arcsec'] == 0.030
+    assert info['n_groups'] > 0.9 * n_both and info['n_rows_out'] == info['n_rows_in'] - info['n_groups']
+    # a pair's ref row stands for as many catalogue rows as the tiles hold that star
+    expected = member[0][avg['src_row']].astype(int) + member[1][avg['src_row']]
+    assert (np.asarray(avg['ref_n_merged']) == expected).mean() > 0.97
+    assert (expected == 2).sum() > 0.8 * n_both
+    # ... and names a real row of the first tile that has it (the primary: equal frames, lowest observation)
+    first = np.where(member[0][avg['src_row']], 0, 1)
+    assert (np.asarray(avg['ref_obs_index']) == first).mean() > 0.97
+    assert Table.read(tmp_path / 'avg.fits')['ref_n_merged'].tolist() == avg['ref_n_merged'].tolist()
+    # a merged pair's PM error loses the ref half of its variance: ex/sqrt(2) (std columns: 1e-6 deg)
+    both = np.intersect1d(plain['src_row'], avg['src_row'])
+    p = plain[np.isin(plain['src_row'], both)]
+    a = avg[np.isin(avg['src_row'], both)]
+    p, a = p[np.argsort(p['src_row'])], a[np.argsort(a['src_row'])]
+    merged = np.asarray(a['ref_n_merged']) == 2
+    assert merged.sum() > 0.8 * n_both
+    dt = 2026.7 - 2024.7
+    np.testing.assert_allclose(np.asarray(p['pm_ra_err'])[merged] ** 2 - np.asarray(a['pm_ra_err'])[merged] ** 2,
+                               (3.6 / dt) ** 2 / 2, rtol=0.01)
+    assert (np.asarray(p['pm_ra_err'])[~merged] == np.asarray(a['pm_ra_err'])[~merged]).mean() > 0.97
+
+
+def test_build_rejects_a_bad_duplicate_radius_before_reading_anything():
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    for bad in (0.0, -0.01, float('nan'), float('inf')):
+        with pytest.raises(ValueError, match='ref_average_duplicates'):
+            btp.build(['no_such_src.fits'], ['no_such_ref.fits'], 'f212n', 2024.7, 2026.7, 'o.fits',
+                      ref_average_duplicates=bad)
+
+
+def test_cli_ref_average_duplicates_flag(monkeypatch):
+    import sys
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    seen = {}
+    monkeypatch.setattr(btp, 'build', lambda *a, **k: seen.update(k) or None)
+    base = ['x', '--src', 's.fits', '--src-epoch', '2024.7', '--ref', 'r.fits', '--ref-epoch', '2026.7',
+            '--filter', 'f212n', '--out', 'o.fits']
+    monkeypatch.setattr(sys, 'argv', base)
+    btp.main()
+    assert seen['ref_average_duplicates'] is None
+    monkeypatch.setattr(sys, 'argv', base + ['--ref-average-duplicates', '0.02'])
+    btp.main()
+    assert seen['ref_average_duplicates'] == 0.02
+    monkeypatch.setattr(btp, 'build', lambda *a, **k: pytest.fail('build must not run'))
+    monkeypatch.setattr(sys, 'argv', base + ['--ref-average-duplicates', '0'])
     with pytest.raises(SystemExit):
         btp.main()

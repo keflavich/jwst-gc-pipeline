@@ -32,6 +32,13 @@ Only positions change: the pm_*_err columns are computed as without the hook, an
 is the build without the hook.  --emit-rows (implied by either option) adds the catalog row of every pair to the
 output; with a hook the output also carries the uncorrected positions (ra_ref/dec_ref, ra_src_cat/dec_src_cat).
 
+Optional duplicate averaging (--ref-average-duplicates ARCSEC, default off): a star in the overlap of two --ref
+tiles is a row in each tile's catalog, and a --src star pairs with only one of them.  With the option the rows of
+one star (tied positions within ARCSEC, mutual nearest across tiles, consistent flux) are replaced by one
+frame-count-weighted row before the src-ref pairing, and the output gains ref_n_merged.  See
+average_ref_duplicates for what is and is not reduced (independent per-frame noise yes; errors the tiles share no).
+Without the option the build is the build without it.
+
 Example:
     python -m jwst_gc_pipeline.astrometry.build_treasury_pm \\
         --src /orange/.../sgrb2/catalogs/f212n_..._vetted.fits --src-epoch 2024.684 \\
@@ -98,8 +105,18 @@ def _sat_flags(t, filt):
     return np.asarray(v, bool)
 
 
+def _frame_counts(t, filt):
+    """``nmatch_good`` (bare or ``_{filt}``): the number of frames behind each row's position,
+    as float, NaN where the catalog has no such column."""
+    try:
+        c = _col(t, 'nmatch_good', filt)
+    except KeyError:
+        return np.full(len(t), np.nan)
+    return np.asarray(np.ma.filled(np.ma.asarray(t[c]).astype(float), np.nan), float)
+
+
 def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None, poscorr=None):
-    """One catalog's usable rows as a dict (sc, ex, ey, flux, mag, sat, flux_noise, ...).
+    """One catalog's usable rows as a dict (sc, ex, ey, flux, mag, sat, flux_noise, n_frames, ...).
 
     A row is usable when ``flux / flux_err > sn_cut``.  With ``rescue_k`` it is
     also usable when ``flux >= rescue_k * flux_noise`` -- ``flux_noise`` being
@@ -146,6 +163,7 @@ def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None, poscorr=None)
                ey=np.where(np.isfinite(ey[ok]), ey[ok], 0.005),
                flux=flux[ok], mag=-2.5 * np.log10(flux[ok]), sat=sat[ok],
                flux_noise=flux_noise[ok], row=np.nonzero(ok)[0],
+               n_frames=_frame_counts(t, filt)[ok],
                epoch=epoch, n=int(ok.sum()), obs_index=obs_index)
     if rescue_k is not None:
         cat['err_rescued'] = rescued[ok]
@@ -158,7 +176,7 @@ def _load_one(path, filt, epoch, sn_cut, obs_index, rescue_k=None, poscorr=None)
 def _stack(cats, keep=None):
     """Concatenate the per-row arrays the PM builder reads from several ``_load_one``
     dicts (``err_rescued`` only when every dict has it), then apply ``keep``."""
-    keys = ['ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index', 'row']
+    keys = ['ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index', 'row', 'n_frames']
     if all('err_rescued' in c for c in cats):
         keys.append('err_rescued')
     out = {}
@@ -437,6 +455,184 @@ def load_and_tie_ref_catalogs(ref_paths, filt, ref_epoch, src, sn_cut=5.0,
     return ref, diags
 
 
+#: Gates of the cross-tile duplicate averaging: the flux gate is the one the src-ref pairing uses
+#: (ln-flux chi2 below ``ASSIGN_FLUX_GATE_CHI2`` with the ``ASSIGN_FLUX_FLOOR`` systematic floor).
+REF_AVG_FLUX_FLOOR = M.ASSIGN_FLUX_FLOOR
+REF_AVG_FLUX_GATE_CHI2 = M.ASSIGN_FLUX_GATE_CHI2
+#: Per-row arrays of a ref dict that ``average_ref_duplicates`` carries over (the sky coordinates are
+#: SkyCoords); the rest of the dict (epoch, poscorr_meta, unverified_paths, ...) is not per row.
+_REF_COORD_KEYS = ('sc', 'sc_raw', 'sc_cat')
+_REF_ARRAY_KEYS = ('ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index', 'row', 'err_rescued',
+                   'n_frames')
+
+
+def _nearest_per_key(key, sep):
+    """Boolean mask over edges: True for the smallest-``sep`` edge of each distinct ``key``."""
+    if not len(key):
+        return np.zeros(0, bool)
+    order = np.lexsort((sep, key))
+    first = np.concatenate(([True], key[order][1:] != key[order][:-1]))
+    mask = np.zeros(len(key), bool)
+    mask[order[first]] = True
+    return mask
+
+
+def ref_duplicate_groups(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
+                         flux_gate_chi2=REF_AVG_FLUX_GATE_CHI2):
+    """Group the rows of ``ref`` (as returned by ``load_and_tie_ref_catalogs``) that are one star
+    seen by two or more of the reference observations.
+
+    An edge joins a row of one observation to a row of another when they lie within
+    ``radius_arcsec`` of each other (tied positions), are each other's nearest row of that
+    observation, and have consistent fluxes (``ln(F_j/F_i)**2 / (flux_floor**2 + (noise_i/F_i)**2 +
+    (noise_j/F_j)**2) < flux_gate_chi2``).  Rows of the SAME observation are never joined: two rows
+    of one catalogue within the radius are two detections of a blend, not two looks at one star.
+
+    A connected component of edges is a group when every pair of its rows is an edge (so it holds
+    at most one row per observation); anything else (two rows of one observation in the
+    component, or a chain whose ends are not themselves matched) is ambiguous and is left alone.
+
+    Returns ``(label, is_group, n_edges)``: ``label`` the component of every row (rows without an
+    edge are alone in theirs), ``is_group`` per component, and the number of edges kept.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    sc = ref['sc']
+    n = len(sc)
+    obs = np.asarray(ref['obs_index'], np.int64)
+    i, j, sep, _ = search_around_sky(sc, sc, radius_arcsec * u.arcsec)
+    cross = obs[i] < obs[j]
+    i, j, sep = i[cross], j[cross], sep.to_value(u.arcsec)[cross]
+    flux = np.asarray(ref['flux'], float)
+    noise = M._flux_noise(ref)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        chi_f = np.log(flux[j] / flux[i]) ** 2 / (flux_floor ** 2 + (noise[i] / flux[i]) ** 2
+                                                  + (noise[j] / flux[j]) ** 2)
+    ok = chi_f < flux_gate_chi2
+    i, j, sep = i[ok], j[ok], sep[ok]
+    n_obs = int(obs.max()) + 1 if n else 1
+    mutual = (_nearest_per_key(i.astype(np.int64) * n_obs + obs[j], sep)
+              & _nearest_per_key(j.astype(np.int64) * n_obs + obs[i], sep))
+    i, j = i[mutual], j[mutual]
+    n_comp, label = connected_components(coo_matrix((np.ones(len(i)), (i, j)), shape=(n, n)),
+                                         directed=False)
+    size = np.bincount(label, minlength=n_comp)
+    n_edges = np.bincount(label[i], minlength=n_comp)
+    # every edge joins two observations, so a component with all size*(size-1)/2 pairs joined
+    # holds one row per observation
+    is_group = (size > 1) & (n_edges == size * (size - 1) // 2)
+    return label, is_group, int(len(i))
+
+
+def average_ref_duplicates(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
+                           flux_gate_chi2=REF_AVG_FLUX_GATE_CHI2):
+    """Replace the rows of every star that several reference observations detect by one averaged
+    row (groups as in :func:`ref_duplicate_groups`).
+
+    A star in the overlap of two Treasury tiles is a row in each tile's catalogue; each tile is
+    tied to src on its own, so the concatenation holds the star twice, and a src star pairs with
+    only one of the copies.  The averaged row has
+
+    * ``sc``: the weighted mean of the copies' tied positions (offsets from the primary copy in the
+      tangent plane).  The weight of a copy is its number of frames (``n_frames``, the catalogue's
+      ``nmatch_good``; 1 when the catalogue has none), i.e. the mean over the union of the copies'
+      frames.  Weights from the per-star scatter (``ex``/``ey``) are NOT used: it is estimated from
+      1-3 frames, falls with fewer frames while the real position error rises, and in held-out
+      tests predicts a third copy worse than equal weights do.  The tied tile frames are averaged
+      as they are; the median offset between two tiles' tied positions (about 1-2 mas) is not
+      removed, so an averaged star sits between its tiles' frames;
+    * ``ex``, ``ey``: the propagated error of that mean, ``sqrt(sum((w/sum(w))**2 * ex**2))``,
+      from the copies' own errors, i.e. in the currency of the unaveraged rows (two equal copies
+      give ``ex/sqrt(2)``).  The copies' per-frame errors are independent, but errors the tiles
+      share (the PSF model, the tie to src) are not reduced by averaging and are not in this number;
+    * ``flux``, ``flux_noise``, ``mag``: the same weighted mean, and its propagated noise;
+    * ``sat``: True when a contributing copy is saturated; ``err_rescued``: True only when every
+      copy is rescued.  A rescued copy of a star with a healthy copy is absorbed with weight 0, so
+      it neither enters the mean nor survives as a second row;
+    * ``n_frames``: the contributing frames in total, ``n_merged`` (new): the rows collapsed.
+
+    The row bookkeeping (``obs_index``, ``row``, ``sc_raw``, ``sc_cat``) is the primary copy's: the
+    contributing copy with most frames, then the lowest observation index, so ``ref_row`` and
+    ``ref_obs_index`` of a pair name a real catalogue row.
+
+    Returns ``(averaged ref dict, info)``; ``info`` holds JSON-ready counts.
+    """
+    label, is_group, n_edges = ref_duplicate_groups(ref, radius_arcsec, flux_floor, flux_gate_chi2)
+    sc = ref['sc']
+    n = len(sc)
+    n_comp = len(is_group)
+    obs = np.asarray(ref['obs_index'], np.int64)
+    info = dict(radius_arcsec=float(radius_arcsec), n_rows_in=int(n), n_edges=n_edges,
+                n_components_multi=int((np.bincount(label, minlength=n_comp) > 1).sum()),
+                n_groups=int(is_group.sum()))
+    out = {k: v for k, v in ref.items() if k not in _REF_COORD_KEYS + _REF_ARRAY_KEYS}
+    out.update({k: np.array(ref[k]) for k in _REF_ARRAY_KEYS if k in ref})
+    out.update({k: ref[k] for k in _REF_COORD_KEYS if k in ref})
+    out['n_merged'] = np.ones(n, np.int16)
+    if not is_group.any():
+        info.update(n_rows_out=int(n), groups_by_size={}, n_rescued_absorbed=0)
+        return out, info
+
+    rows = np.flatnonzero(is_group[label])
+    lab = label[rows]
+    frames = np.asarray(ref['n_frames'], float)[rows] if 'n_frames' in ref else np.full(len(rows), np.nan)
+    frames = np.where(frames >= 1, frames, 1.0)
+    resc = (np.asarray(ref['err_rescued'], bool)[rows] if 'err_rescued' in ref
+            else np.zeros(len(rows), bool))
+    healthy_in_group = np.bincount(lab, weights=~resc, minlength=n_comp) > 0
+    w = np.where(resc & healthy_in_group[lab], 0.0, frames)
+    # primary copy first within each group: most frames, then lowest observation, then lowest row
+    order = np.lexsort((rows, obs[rows], -w, lab))
+    rows, lab, w, frames, resc = rows[order], lab[order], w[order], frames[order], resc[order]
+    is_primary = np.concatenate(([True], lab[1:] != lab[:-1]))
+    prim_of = np.full(n_comp, -1, np.int64)
+    prim_of[lab[is_primary]] = rows[is_primary]
+    wn = w / np.bincount(lab, weights=w, minlength=n_comp)[lab]
+
+    def _mean(v):
+        return np.bincount(lab, weights=wn * v, minlength=n_comp)
+
+    def _quad(v):
+        return np.sqrt(np.bincount(lab, weights=(wn * v) ** 2, minlength=n_comp))
+
+    glab = np.flatnonzero(is_group)
+    prims = prim_of[glab]
+    dlon, dlat = sc[prim_of[lab]].spherical_offsets_to(sc[rows])
+    moved = sc[prims].spherical_offsets_by(_mean(dlon.to_value(u.arcsec))[glab] * u.arcsec,
+                                           _mean(dlat.to_value(u.arcsec))[glab] * u.arcsec)
+    ra, dec = sc.ra.deg.copy(), sc.dec.deg.copy()
+    ra[prims], dec[prims] = moved.ra.deg, moved.dec.deg
+    flux = _mean(np.asarray(ref['flux'], float)[rows])[glab]
+    out['ex'][prims] = _quad(np.asarray(ref['ex'], float)[rows])[glab]
+    out['ey'][prims] = _quad(np.asarray(ref['ey'], float)[rows])[glab]
+    out['flux'][prims] = flux
+    out['mag'][prims] = -2.5 * np.log10(flux)
+    out['flux_noise'][prims] = _quad(M._flux_noise(ref)[rows])[glab]
+    out['sat'][prims] = np.bincount(lab, weights=np.asarray(ref['sat'], bool)[rows] & (w > 0),
+                                    minlength=n_comp)[glab] > 0
+    if 'err_rescued' in ref:
+        out['err_rescued'][prims] = np.bincount(lab, weights=~resc, minlength=n_comp)[glab] == 0
+    if 'n_frames' in ref:
+        out['n_frames'][prims] = np.bincount(lab, weights=frames * (w > 0), minlength=n_comp)[glab]
+    size = np.bincount(lab, minlength=n_comp)
+    out['n_merged'][prims] = size[glab]
+    survive = np.ones(n, bool)
+    survive[rows[~is_primary]] = False
+    out['sc'] = SkyCoord(ra * u.deg, dec * u.deg, frame=sc.frame.replicate_without_data())[survive]
+    for k in ('sc_raw', 'sc_cat'):
+        if k in ref:
+            out[k] = ref[k][survive]
+    for k in _REF_ARRAY_KEYS + ('n_merged',):
+        if k in out:
+            out[k] = out[k][survive]
+    out['n'] = int(survive.sum())
+    sizes, counts = np.unique(size[glab], return_counts=True)
+    info.update(n_rows_out=out['n'], groups_by_size={int(s): int(c) for s, c in zip(sizes, counts)},
+                n_rescued_absorbed=int((w == 0).sum()))
+    return out, info
+
+
 #: |median PM(saturated) - median PM(unsaturated)| (mas/yr, either axis)
 #: above which saturation_pm_offset reports the saturated population as
 #: offset, if it is also SAT_PM_OFFSET_NSIGMA times its standard error.
@@ -571,12 +767,15 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
          demote_offset_saturated=True, src_isolation='flux', assign=DEFAULT_ASSIGN,
          rescue_k=DEFAULT_RESCUE_K, rescued_trustworthy=False, skip_unverified_refs=False,
          flux_ratio_cap=DEFAULT_FLUX_RATIO_CAP, src_poscorr=None, ref_poscorr=None,
-         emit_rows=False):
+         emit_rows=False, ref_average_duplicates=None):
     # Same convention as --rescue-inflated-err: 0 (or None) = rescue off.  Passed on as 0, the
     # threshold is 0 x local noise: every positive-flux row that fails the S/N cut is rescued.
     if rescue_k is not None and not rescue_k >= 0:
         raise ValueError(f'rescue_k must be >= 0 (0 or None turns the rescue off), got {rescue_k!r}')
     rescue_k = rescue_k or None
+    if ref_average_duplicates is not None and not 0 < ref_average_duplicates < np.inf:
+        raise ValueError('ref_average_duplicates (arcsec) must be positive and finite or None, '
+                         f'got {ref_average_duplicates!r}')
     src = load_filter_catalog(src_paths, filt, src_epoch, rescue_k=rescue_k,
                               poscorr_paths=src_poscorr)
     if verbose:
@@ -589,6 +788,14 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
                                            rescue_k=rescue_k,
                                            skip_unverified=skip_unverified_refs,
                                            poscorr_paths=ref_poscorr)
+    dup_info = None
+    if ref_average_duplicates is not None:
+        ref, dup_info = average_ref_duplicates(ref, ref_average_duplicates)
+        if verbose:
+            print(f'  ref duplicates averaged within {ref_average_duplicates * 1e3:g} mas: '
+                  f'{dup_info["n_groups"]:,} groups (rows per group: {dup_info["groups_by_size"]}), '
+                  f'{dup_info["n_rows_in"]:,} -> {dup_info["n_rows_out"]:,} rows, '
+                  f'{dup_info["n_components_multi"] - dup_info["n_groups"]:,} ambiguous clusters left alone')
     if verbose:
         print(f'  ref ({filt}, epoch {ref_epoch:.3f}) usable: {ref["n"]:,} '
               f'(from {len(diags)} independently-tied observations)')
@@ -626,6 +833,9 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     # if needed.
     pm.meta['tie_diag_json'] = json.dumps(diags)
     pm.meta['ref_paths_json'] = json.dumps([os.path.basename(q) for q in ref_paths])
+    if dup_info is not None:
+        pm.meta['ref_average_duplicates'] = float(ref_average_duplicates)
+        pm.meta['ref_dup_avg_json'] = json.dumps(dup_info)
     pm.meta['src_paths_json'] = json.dumps([os.path.basename(q) for q in src_paths])
     for which, tables, cat in (('src', src_poscorr, src), ('ref', ref_poscorr, ref)):
         if tables is not None:
@@ -746,19 +956,27 @@ def main():
     ap.add_argument('--rescued-trustworthy', action='store_true',
                     help='let pairs with a rescued row be trustworthy (default: '
                          'they are matched but not trustworthy)')
+    ap.add_argument('--ref-average-duplicates', type=float, default=None, metavar='ARCSEC',
+                    help='average the rows of a star that two or more --ref catalogs both detect '
+                         '(tied positions within ARCSEC, mutual nearest, flux consistent) into one '
+                         'row before the src-ref pairing; adds ref_n_merged to the output. '
+                         'Default: off (every row of every --ref catalog is kept)')
     ap.add_argument('--skip-unverified-refs', action='store_true',
                     help='drop a --ref catalog whose tie to --src cannot be verified '
                          '(e.g. a tile with no overlap) instead of aborting')
     args = ap.parse_args()
     if args.rescue_inflated_err < 0:
         ap.error('--rescue-inflated-err must be >= 0 (0 turns the rescue off)')
+    if args.ref_average_duplicates is not None and not 0 < args.ref_average_duplicates < np.inf:
+        ap.error('--ref-average-duplicates must be a positive radius in arcsec')
     build(args.src, args.ref, args.filter, args.src_epoch, args.ref_epoch, args.out,
          match_radius=args.match_radius, isolation_radius=args.isolation_radius,
          demote_offset_saturated=not args.keep_offset_saturated,
          src_isolation=args.src_isolation, assign=args.assign,
          rescue_k=args.rescue_inflated_err or None, rescued_trustworthy=args.rescued_trustworthy,
          skip_unverified_refs=args.skip_unverified_refs, flux_ratio_cap=args.flux_ratio_cap,
-         src_poscorr=args.src_poscorr, ref_poscorr=args.ref_poscorr, emit_rows=args.emit_rows)
+         src_poscorr=args.src_poscorr, ref_poscorr=args.ref_poscorr, emit_rows=args.emit_rows,
+         ref_average_duplicates=args.ref_average_duplicates)
 
 
 if __name__ == '__main__':

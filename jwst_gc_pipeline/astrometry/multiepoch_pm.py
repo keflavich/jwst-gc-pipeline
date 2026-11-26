@@ -833,6 +833,10 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
     ``ref_err_rescued``, and a pair with either set is not ``trustworthy``
     unless ``rescued_trustworthy`` is True.
 
+    A ``ref`` that carries ``n_merged`` (``build_treasury_pm.average_ref_duplicates``: the rows of one
+    star seen by several reference observations, averaged into one) adds ``ref_n_merged``, the number
+    of rows each pair's ref row stands for.
+
     ``emit_rows`` adds ``src_row`` / ``src_obs_index`` / ``ref_row`` (the pair's row in its catalog
     file and which --src / --ref file it came from), so a pair can be keyed back to the catalogs and
     compared between two builds.  When ``src`` / ``ref`` carry ``sc_cat`` (the catalogue positions
@@ -902,6 +906,8 @@ def build_pm_catalog_2epoch(src, ref, match_radius=0.15, err_cap_mas=3.0,
             out['dec_ref'] = raw.dec.deg
         if 'obs_index' in ref:
             out['ref_obs_index'] = np.asarray(ref['obs_index'])[idx][selidx]
+    if 'n_merged' in ref:
+        out['ref_n_merged'] = np.asarray(ref['n_merged'], np.int16)[idx][selidx]
     if 'sc_cat' in src:
         out['ra_src_cat'] = src['sc_cat'][selidx].ra.deg
         out['dec_src_cat'] = src['sc_cat'][selidx].dec.deg
