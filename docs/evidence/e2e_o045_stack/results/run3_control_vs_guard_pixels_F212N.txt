@@ -1,0 +1,6 @@
+# Residual i2d of the guard arm of run 3 against the control arm, pixel comparison (F212N): pixels that are NaN in only one render and the largest |A - B| over pixels finite in both (A = control, B = guard).
+# unmasked = opt3cnm / opt3gnm; K4 = opt3cfin / opt3gfin (render of the finalize with the K=4 footprint mask); K3 = opt3ck3 / opt3gk3; K2 = opt3ck2 / opt3gk2.  Job 52933649.
+opt3cnm-vs-opt3gnm-F212N-unmasked: NaN only in A 0, NaN only in B 0, NaN in both 2363545, finite in both 51827735; max |A-B| 1.95e+04, px with |A-B| > 1e-3: 20991
+opt3cfin-vs-opt3gfin-F212N-K4: NaN only in A 0, NaN only in B 0, NaN in both 10482658, finite in both 43708622; max |A-B| 8.62, px with |A-B| > 1e-3: 1139
+opt3ck3-vs-opt3gk3-F212N-K3: NaN only in A 0, NaN only in B 0, NaN in both 7729614, finite in both 46461666; max |A-B| 21.6, px with |A-B| > 1e-3: 4720
+opt3ck2-vs-opt3gk2-F212N-K2: NaN only in A 0, NaN only in B 0, NaN in both 5739615, finite in both 48451665; max |A-B| 68.2, px with |A-B| > 1e-3: 10797

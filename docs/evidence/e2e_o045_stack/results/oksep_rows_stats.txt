@@ -1,0 +1,222 @@
+# Investigation of the 48 F212N added rows of run 1 that fail oksep_pass (97 added rows with a cross-band m7 row; group A = far-companion exemption of #1377, group B = relaxed bright window of #1376; the catalogs are those of the opt arm of run 1).
+F212N added rows of the o045 end-to-end run 1 (opt arm): 97 rows; A = far-companion exemption (#1377), B = relaxed bright seeds (#1376)
+catalog sizes: m7 cross-band rows 587759, quality + oksep file rows 190354; oksep_pass column true in 190354 rows, rule recomputed from sep columns true in 190354; cmd_default true in 115411
+
+counts by group and oksep outcome
+group  passf
+A      fail     47
+       pass      6
+B      fail      1
+       pass     43
+rule vs column disagreements: 0; in the quality + oksep file: pass 49, fail 0
+cmd_default true: fail 0, pass 35
+
+why the failing rows fail (rule: more than one non-wide band with a separation below 0.1 arcsec between its position and the cross-band position)
+  fail rows 48: sep_f480m blank (no F480M row joined to the cross-band row) 0; sep_f480m finite and >= 0.1 arcsec 48; sep_f212n >= 0.1 0; n_bands_within_0p1 values {1: 48}; reference band {'f212n': 48}
+  pass rows 49: sep_f480m_as median 0.0000 arcsec, max 0.0787; F480M row to F212N row distance median 0.0133
+  shows: the failing rows lack an F480M row at the cross-band position (or have one beyond 0.1 arcsec); does not show why the F480M catalog lacks it (blend, non-detection, or mutual-match rule)
+
+--- F212N flux (m7 cross-band catalog, catalog units)
+  A-fail  n=47 med  1.54e+03 [16%,84%] [ 1.22e+03,  2.16e+03]
+  A-pass  n= 6 med  1.27e+03 [16%,84%] [      984,  2.79e+03]
+  B-fail  n= 1 med  1.58e+03 [16%,84%] [ 1.58e+03,  1.58e+03]
+  B-pass  n=43 med  1.46e+03 [16%,84%] [ 1.09e+03,  2.16e+03]
+  all fail n=48 med  1.54e+03 [16%,84%] [ 1.22e+03,  2.16e+03]
+  all pass n=49 med  1.45e+03 [16%,84%] [ 1.06e+03,  2.23e+03]
+  Mann-Whitney fail vs pass: n=48,49 p=0.354
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.45
+  shows: brightness scale of the rows; does not show reality (a PSF-residual absorber can carry flux)
+--- F212N S/N = flux / flux_err
+  A-fail  n=47 med      55.2 [16%,84%] [     50.9,      70.6]
+  A-pass  n= 6 med      55.4 [16%,84%] [     47.1,      74.3]
+  B-fail  n= 1 med      64.8 [16%,84%] [     64.8,      64.8]
+  B-pass  n=43 med      62.6 [16%,84%] [     52.2,      77.6]
+  all fail n=48 med      55.6 [16%,84%] [     50.9,      70.5]
+  all pass n=49 med      62.2 [16%,84%] [     50.5,      77.6]
+  Mann-Whitney fail vs pass: n=48,49 p=0.0879
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.632
+  shows: formal significance of the F212N fit (flux_err is the fit error; correlated with the neighbour light is not included); does not show the same for a blended pair
+--- F212N qfit
+  A-fail  n=47 med     0.251 [16%,84%] [    0.116,     0.367]
+  A-pass  n= 6 med     0.238 [16%,84%] [    0.203,     0.278]
+  B-fail  n= 1 med     0.196 [16%,84%] [    0.196,     0.196]
+  B-pass  n=43 med     0.322 [16%,84%] [    0.226,     0.382]
+  all fail n=48 med     0.246 [16%,84%] [    0.117,     0.365]
+  all pass n=49 med      0.31 [16%,84%] [    0.216,     0.377]
+  Mann-Whitney fail vs pass: n=48,49 p=0.0129
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.945
+  shows: PSF-fit quality of the stacked row (lower is better); does not show whether the PSF model is right for a pair 1-3 FWHM apart
+--- F212N AB magnitude
+  A-fail  n=47 med        20 [16%,84%] [     19.7,      20.3]
+  A-pass  n= 6 med      20.3 [16%,84%] [     19.4,      20.5]
+  B-fail  n= 1 med        20 [16%,84%] [       20,        20]
+  B-pass  n=43 med      20.1 [16%,84%] [     19.7,      20.4]
+  all fail n=48 med        20 [16%,84%] [     19.7,      20.3]
+  all pass n=49 med      20.1 [16%,84%] [     19.6,      20.5]
+  Mann-Whitney fail vs pass: n=48,49 p=0.354
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.45
+--- separation to the nearest brighter F212N row (F212N FWHM; 1 FWHM = 0.0733 arcsec)
+  A-fail  n=47 med      2.24 [16%,84%] [     2.03,      2.44]
+  A-pass  n= 6 med      2.17 [16%,84%] [     1.16,      2.36]
+  B-fail  n= 1 med      4.99 [16%,84%] [     4.99,      4.99]
+  B-pass  n=43 med      6.41 [16%,84%] [        2,      10.4]
+  all fail n=48 med      2.24 [16%,84%] [     2.03,      2.45]
+  all pass n=49 med      6.01 [16%,84%] [     1.84,      10.2]
+  Mann-Whitney fail vs pass: n=48,49 p=9.91e-05
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.251
+  shows: how close the row is to a brighter star; does not show whether the star is the cause (a real companion sits at any separation)
+--- flux ratio of that brighter row to the added row
+  A-fail  n=47 med      13.9 [16%,84%] [     10.5,      20.4]
+  A-pass  n= 6 med      11.3 [16%,84%] [     6.18,      37.3]
+  B-fail  n= 1 med       3.3 [16%,84%] [      3.3,       3.3]
+  B-pass  n=43 med      1.82 [16%,84%] [      1.1,      11.2]
+  all fail n=48 med      13.7 [16%,84%] [     10.4,      20.1]
+  all pass n=49 med      1.87 [16%,84%] [     1.11,      13.9]
+  Mann-Whitney fail vs pass: n=48,49 p=2.84e-07
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.632
+  shows: how much the neighbour dominates; does not show the neighbour flux accuracy (saturated neighbours carry model flux)
+--- log10 flux ratio
+  A-fail  n=47 med      1.14 [16%,84%] [     1.02,      1.31]
+  A-pass  n= 6 med      1.05 [16%,84%] [    0.713,      1.57]
+  B-fail  n= 1 med     0.518 [16%,84%] [    0.518,     0.518]
+  B-pass  n=43 med      0.26 [16%,84%] [   0.0402,      1.05]
+  all fail n=48 med      1.14 [16%,84%] [     1.02,       1.3]
+  all pass n=49 med     0.271 [16%,84%] [   0.0468,      1.13]
+  Mann-Whitney fail vs pass: n=48,49 p=2.84e-07
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.632
+--- number of F212N rows within 1 arcsec (crowding)
+  A-fail  n=47 med        29 [16%,84%] [       25,      37.6]
+  A-pass  n= 6 med      37.5 [16%,84%] [       27,      40.2]
+  B-fail  n= 1 med        37 [16%,84%] [       37,        37]
+  B-pass  n=43 med        38 [16%,84%] [     33.7,        43]
+  all fail n=48 med      29.5 [16%,84%] [       25,      37.5]
+  all pass n=49 med        38 [16%,84%] [       33,        43]
+  Mann-Whitney fail vs pass: n=48,49 p=8.16e-07
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.182
+--- number of brighter F212N rows within 3 FWHM
+  A-fail  n=47 med         1 [16%,84%] [        1,         1]
+  A-pass  n= 6 med         1 [16%,84%] [        1,         2]
+  B-fail  n= 1 med         0 [16%,84%] [        0,         0]
+  B-pass  n=43 med         0 [16%,84%] [        0,         1]
+  all fail n=48 med         1 [16%,84%] [        1,         1]
+  all pass n=49 med         0 [16%,84%] [        0,         1]
+  Mann-Whitney fail vs pass: n=48,49 p=1.43e-08
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=0.0376
+--- distance from the F212N row to its joined F480M row (arcsec; blank when none)
+  A-fail  n=0
+  A-pass  n= 5 med    0.0304 [16%,84%] [   0.0149,    0.0389]
+  B-fail  n=0
+  B-pass  n=37 med    0.0126 [16%,84%] [  0.00649,    0.0265]
+  all fail n=0
+  all pass n=42 med    0.0133 [16%,84%] [  0.00648,    0.0314]
+--- distance from the F212N row to the nearest F480M row of the whole m7 table (arcsec)
+  A-fail  n=47 med     0.158 [16%,84%] [    0.142,     0.175]
+  A-pass  n= 6 med    0.0334 [16%,84%] [   0.0178,    0.0503]
+  B-fail  n= 1 med     0.367 [16%,84%] [    0.367,     0.367]
+  B-pass  n=43 med    0.0138 [16%,84%] [   0.0067,    0.0422]
+  all fail n=48 med     0.159 [16%,84%] [    0.142,     0.176]
+  all pass n=49 med    0.0169 [16%,84%] [  0.00669,    0.0454]
+  Mann-Whitney fail vs pass: n=48,49 p=2.22e-17
+  Mann-Whitney A-fail vs A-pass: n=47,6 p=8.71e-08
+--- nearest F480M row of the whole m7 table: is it the row itself, the neighbour's row, or another row?
+  A-fail  n=47: own row  0, neighbour row 45, other  2
+  A-pass  n= 6: own row  5, neighbour row  1, other  0
+  B-fail  n= 1: own row  0, neighbour row  1, other  0
+  B-pass  n=43: own row 37, neighbour row  5, other  1
+  shows: whether the F480M catalog holds a source at the F212N position and which cross-band row owns it; does not show which star the F480M source belongs to when two stars are blended
+
+--- the brighter neighbour
+  A-fail  n=47: neighbour saturated or replaced  2, satstar_gate_rejected 20, satstar_dao_restored  0, near_saturated 12, has F480M row 47, neighbour passes oksep 45, no brighter row within 3 arcsec  0
+  A-pass  n= 6: neighbour saturated or replaced  0, satstar_gate_rejected  1, satstar_dao_restored  0, near_saturated  2, has F480M row  6, neighbour passes oksep  6, no brighter row within 3 arcsec  0
+  B-fail  n= 1: neighbour saturated or replaced  0, satstar_gate_rejected  0, satstar_dao_restored  0, near_saturated  0, has F480M row  1, neighbour passes oksep  1, no brighter row within 3 arcsec  0
+  B-pass  n=43: neighbour saturated or replaced  9, satstar_gate_rejected  1, satstar_dao_restored  0, near_saturated 10, has F480M row 43, neighbour passes oksep 42, no brighter row within 3 arcsec  0
+  shows: whether the neighbour is a saturated star with model flux; does not show a flux error of that model
+
+--- bands detected and colors
+  A-fail  n=47: independently detected F212N 47, F480M 16; n_filt_independent>=2 16; F480M flux in m7  0; m8 F480M flux finite 46 (forced-filled 46); m8 upper limit  0; cmd_default  0
+  A-pass  n= 6: independently detected F212N  3, F480M  5; n_filt_independent>=2  2; F480M flux in m7  5; m8 F480M flux finite  6 (forced-filled  1); m8 upper limit  0; cmd_default  2
+  B-fail  n= 1: independently detected F212N  1, F480M  0; n_filt_independent>=2  0; F480M flux in m7  0; m8 F480M flux finite  1 (forced-filled  1); m8 upper limit  0; cmd_default  0
+  B-pass  n=43: independently detected F212N 40, F480M 35; n_filt_independent>=2 33; F480M flux in m7 37; m8 F480M flux finite 43 (forced-filled  6); m8 upper limit  0; cmd_default 33
+--- F212N - F480M AB color from the m7 detections (both bands measured by their own detection)
+  A-fail  n=0
+  A-pass  n= 5 med    -0.557 [16%,84%] [   -0.699,      -0.2]
+  B-fail  n=0
+  B-pass  n=37 med   -0.0427 [16%,84%] [   -0.335,     0.319]
+  all fail n=0
+  all pass n=42 med   -0.0454 [16%,84%] [   -0.406,      0.29]
+--- F212N - F480M AB color from the m8 table (forced F480M photometry included)
+  A-fail  n=46 med      1.03 [16%,84%] [    0.722,      1.31]
+  A-pass  n= 6 med    -0.503 [16%,84%] [   -0.669,     0.592]
+  B-fail  n= 1 med     0.271 [16%,84%] [    0.271,     0.271]
+  B-pass  n=43 med    0.0359 [16%,84%] [   -0.286,     0.365]
+  all fail n=47 med      1.02 [16%,84%] [    0.697,      1.31]
+  all pass n=49 med    0.0295 [16%,84%] [   -0.369,     0.365]
+  Mann-Whitney fail vs pass: n=47,49 p=3.31e-14
+  Mann-Whitney A-fail vs A-pass: n=46,6 p=0.00627
+--- m8 F480M S/N (flux / flux_err) of forced-filled rows
+  A-fail  n=0
+  A-pass  n= 5 med      40.2 [16%,84%] [     26.7,      69.9]
+  B-fail  n=0
+  B-pass  n=36 med       128 [16%,84%] [     71.6,       169]
+  all fail n=0
+  all pass n=41 med       119 [16%,84%] [     47.8,       159]
+  shows: colors exist only for rows with an F480M measurement; does not show that a forced F480M flux at a blended position belongs to the added row
+
+--- blend factor: (F480M flux at the row / F480M flux of the neighbour) divided by (F212N flux of the row / F212N flux of the neighbour); 1 = the row has the same ratio in both bands
+  A-fail  n=45 med      3.44 [16%,84%] [     2.69,      4.81]   (r212 n=45 med    0.0721 [16%,84%] [    0.048,    0.0939]; r480 n=45 med     0.242 [16%,84%] [    0.191,     0.317])
+  A-pass  n= 5 med     0.811 [16%,84%] [    0.641,      2.84]   (r212 n= 5 med    0.0867 [16%,84%] [   0.0263,     0.107]; r480 n= 5 med    0.0338 [16%,84%] [   0.0234,     0.349])
+  B-fail  n= 1 med      1.82 [16%,84%] [     1.82,      1.82]   (r212 n= 1 med     0.303 [16%,84%] [    0.303,     0.303]; r480 n= 1 med     0.552 [16%,84%] [    0.552,     0.552])
+  B-pass  n=41 med      1.25 [16%,84%] [    0.956,      1.83]   (r212 n=41 med     0.545 [16%,84%] [   0.0889,     0.902]; r480 n=41 med     0.625 [16%,84%] [    0.147,      1.18])
+  shows: rows whose F480M flux fraction of the neighbour is far above their F212N fraction carry mostly neighbour light in F480M; does not show the true F480M flux of the companion (needs a two-star fit)
+
+--- F212N - F480M color of the added rows relative to the oksep rows of the same F212N magnitude (AB; median of the catalog in +-0.5 mag)
+  A-fail  det: n=0 | m8: n=46 med      1.31 [16%,84%] [     1.01,       1.6]
+  A-pass  det: n= 5 med    -0.271 [16%,84%] [   -0.424,    0.0736] | m8: n= 6 med    -0.221 [16%,84%] [   -0.399,     0.863]
+  B-fail  det: n=0 | m8: n= 1 med     0.561 [16%,84%] [    0.561,     0.561]
+  B-pass  det: n=37 med     0.248 [16%,84%] [  -0.0512,     0.598] | m8: n=43 med     0.324 [16%,84%] [   0.0025,     0.655]
+  shows: whether the color of the added row sits within the spread of the catalog at that magnitude; does not show a physical color (extinction varies across the field)
+
+--- fraction failing by separation to the nearest brighter F212N row (F212N FWHM)
+  group A:
+              n  fail  med_ratio   med_snr  sat
+    sepbin                                         
+    [0.0, 1.5)    2     0     4.3146  58.61065    0
+    [1.75, 2.0)   5     5    15.7595  51.09690    0
+    [2.0, 2.25)  21    20    12.8457  54.87010    1
+    [2.25, 2.5)  25    22    13.8750  56.74250    1
+  group B:
+                      n  fail  med_ratio   med_snr  sat
+    sepbin                                                 
+    [0.0, 1.5)            4     0   1.175725  65.17655    0
+    [1.5, 1.75)           2     0   1.200415  57.39105    0
+    [1.75, 2.0)           1     0   1.272750  61.02130    0
+    [2.0, 2.25)           2     0   1.759625  60.27745    0
+    [2.25, 2.5)           2     0   3.472560  59.68890    0
+    [2.5, 3.0)            1     0   4.883980  80.10580    0
+    [3.0, 5.0)            3     1   1.617620  49.40250    0
+    [5.0, 1000000000.0)  29     0   2.585220  63.12830    9
+  shows: the failing fraction as a function of neighbour distance; does not show a causal threshold (bins hold 2-20 rows)
+
+--- F480M FWHM / F212N FWHM = 0.163 / 0.0733 = 2.2: a F212N separation of x FWHM is x / 2.2 FWHM of F480M
+
+--- residual evidence (5x5 px box maxima around the row, MJy/sr)
+  data i2d                 A-fail n=47 med       208 [16%,84%] [      128,       502]
+                           B-pass n=43 med       124 [16%,84%] [      102,       182]
+  ctl residual             A-fail n=47 med       143 [16%,84%] [     92.9,       188]
+                           B-pass n=43 med       122 [16%,84%] [     97.3,       178]
+  opt unmasked residual    A-fail n=47 med      27.1 [16%,84%] [     15.2,        37]
+                           B-pass n=43 med        58 [16%,84%] [     39.5,      90.3]
+  opt masked residual      A-fail n=39 med      28.6 [16%,84%] [     15.2,      36.9]
+                           B-pass n=43 med        58 [16%,84%] [     39.5,      90.3]
+--- ctl leftover at the row (leftover = resid_over_data > 0.7, peak >= 50 MJy/sr, within 0.1 arcsec of the row)
+  A-fail  n=47: ctl leftover >= 50 29 (>= 100 25); cleared in opt unmasked 29, in opt masked 29; attribution "added" cleared (>=100, unmasked) 25; peak n=29 med       140 [16%,84%] [      103,       215]
+  A-pass  n= 6: ctl leftover >= 50  2 (>= 100  2); cleared in opt unmasked  2, in opt masked  2; attribution "added" cleared (>=100, unmasked)  2; peak n= 2 med       206 [16%,84%] [      143,       269]
+  B-fail  n= 1: ctl leftover >= 50  1 (>= 100  1); cleared in opt unmasked  1, in opt masked  1; attribution "added" cleared (>=100, unmasked)  1; peak n= 1 med       131 [16%,84%] [      131,       131]
+  B-pass  n=43: ctl leftover >= 50 43 (>= 100 27); cleared in opt unmasked 39, in opt masked 39; attribution "added" cleared (>=100, unmasked) 24; peak n=43 med       114 [16%,84%] [     90.6,       169]
+  attribution reproduction (leftovers >= 100 with an added row within 0.1 arcsec): {'n': 55, 'cleared_optnm': 52, 'persisting_optnm': 3, 'cleared_optfin': 52, 'persisting_optfin': 3}  (README: 52 cleared + 3 persisting for unmasked and masked)
+  shows: where the added rows coincide with the leftovers of the ctl residual and how many of them the opt render clears; does not show that the cleared light is a separate star (a model with a free-floating component clears a PSF residual too)
+
+--- what the oksep catalog holds at the flux of the failing rows
+  quality + oksep file: 190354 rows, 189834 with an F212N flux; failing rows F212N flux 10-90 % range [1.15e+03, 3e+03]: file rows in that range 32742; failing rows in that range 38 (0.116 % of the file rows in the range)
+  all 97 added rows relative to the file: 49 pass = 0.0257 % of the file rows; 48 fail = 0.0252 %
+  shows: the count scale of the loss; does not show the loss of completeness near bright stars, where the oksep catalog is sparse for the same reason

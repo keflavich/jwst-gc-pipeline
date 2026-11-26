@@ -1,0 +1,119 @@
+# Merged-catalog differences (rows matched on the sky within 0.01 arcsec): the control arm against the run 2 catalogs, then the guard arm against the control arm.
+# The run 2 catalogs are those of the opt arm of run 2 (tag opt2); the control arm is a finalize-only re-run of the same per-frame tables with the same environment.
+# Per row: flux and qfit of the merged row, replaced_saturated flag, satstar match separation and the flux of the daophot row it overwrote (nan when none), nmatch (frames), gate_rej (satstar gate rejected), and the nearest row of the other catalog.
+
+################ F212N unvetted: control arm (opt3c) against run 2 (opt2)
+F212N unvetted merged catalogs: opt2 661264 rows, opt3c 661264 rows
+rows only in opt2: 0; only in opt3c: 0 (no row of the other within 0.01 arcsec)
+--- rows only in opt2: 0 rows (showing up to 40, brightest first)
+--- rows only in opt3c: 0 rows (showing up to 40, brightest first)
+rows in both: 661264; flux or replaced_saturated differ in 0
+
+################ F480M unvetted: control arm (opt3c) against run 2 (opt2)
+F480M unvetted merged catalogs: opt2 161066 rows, opt3c 161066 rows
+rows only in opt2: 0; only in opt3c: 0 (no row of the other within 0.01 arcsec)
+--- rows only in opt2: 0 rows (showing up to 40, brightest first)
+--- rows only in opt3c: 0 rows (showing up to 40, brightest first)
+rows in both: 161066; flux or replaced_saturated differ in 0
+
+################ F212N unvetted: guard arm (opt3g) against control arm (opt3c)
+F212N unvetted merged catalogs: opt3c 661264 rows, opt3g 661306 rows
+rows only in opt3c: 0; only in opt3g: 42 (no row of the other within 0.01 arcsec)
+--- rows only in opt3c: 0 rows (showing up to 40, brightest first)
+--- rows only in opt3g: 42 rows (showing up to 40, brightest first)
+   266.214664 -29.106507 flux  1.963e+05 qfit  0.0693 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.103" flux 2.459e+05 repl 1
+   266.208592 -29.037659 flux  1.163e+05 qfit  0.0113 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.087" flux 3.022e+05 repl 1
+   266.236821 -29.040097 flux  5.382e+04 qfit  0.0174 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.082" flux 7.989e+04 repl 1
+   266.236579 -29.061958 flux  5.082e+04 qfit  0.0114 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.090" flux 7.608e+04 repl 1
+   266.226665 -29.080758 flux  4.591e+04 qfit  0.0159 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.099" flux 1.011e+05 repl 1
+   266.199391 -29.089360 flux  4.484e+04 qfit  0.0173 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.090" flux  1.32e+05 repl 1
+   266.207042 -29.081076 flux  4.471e+04 qfit  0.0133 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.059" flux 1.803e+05 repl 1
+   266.203175 -29.051735 flux  3.935e+04 qfit  0.0153 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.077" flux 5.615e+04 repl 1
+   266.214629 -29.033883 flux  2.843e+04 qfit 0.00946 repl 0 msep    nan prior       nan nmatch 3 gate_rej 1 | nearest other row  0.067" flux 3.758e+04 repl 1
+   266.198460 -29.076796 flux  2.627e+04 qfit  0.0212 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.080" flux 4.839e+04 repl 1
+   266.202981 -29.053111 flux  2.322e+04 qfit  0.0155 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.077" flux 5.614e+04 repl 1
+   266.201219 -29.010944 flux  2.194e+04 qfit  0.0214 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.082" flux 3.187e+04 repl 1
+   266.231875 -29.072315 flux  2.189e+04 qfit  0.0182 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.107" flux 3.045e+04 repl 1
+   266.227774 -29.056195 flux  2.168e+04 qfit  0.0123 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.100" flux 4.376e+04 repl 1
+   266.213291 -29.055943 flux  2.141e+04 qfit  0.0159 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.085" flux 3.179e+04 repl 1
+   266.198134 -29.025071 flux  2.114e+04 qfit  0.0128 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.088" flux 2.969e+04 repl 1
+   266.192783 -29.101177 flux  1.962e+04 qfit  0.0424 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.075" flux 4.656e+04 repl 1
+   266.206920 -29.068799 flux  1.769e+04 qfit  0.0189 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.069" flux 2.436e+04 repl 1
+   266.212531 -29.061128 flux  1.665e+04 qfit  0.0244 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.101" flux 2.762e+04 repl 1
+   266.206618 -29.035108 flux   1.66e+04 qfit  0.0215 repl 0 msep    nan prior       nan nmatch 5 gate_rej 0 | nearest other row  0.076" flux 6.036e+04 repl 1
+   266.192455 -29.093624 flux  1.622e+04 qfit  0.0121 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.074" flux  7.73e+04 repl 1
+   266.229443 -29.105861 flux  1.584e+04 qfit  0.0195 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.080" flux 2.602e+04 repl 1
+   266.228108 -29.048918 flux  1.575e+04 qfit 0.00522 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.074" flux 7.247e+04 repl 1
+   266.214880 -29.072653 flux  1.566e+04 qfit  0.0176 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.080" flux 3.673e+04 repl 1
+   266.233527 -29.087357 flux  1.504e+04 qfit 0.00689 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.073" flux 6.261e+04 repl 1
+   266.214049 -29.037156 flux   1.41e+04 qfit 0.00726 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.073" flux 6.761e+04 repl 1
+   266.230467 -29.098857 flux  1.364e+04 qfit  0.0179 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.080" flux 3.383e+04 repl 1
+   266.236566 -29.075026 flux  1.165e+04 qfit  0.0237 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.081" flux 4.671e+04 repl 1
+   266.220582 -29.096576 flux  1.158e+04 qfit  0.0198 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.081" flux  3.32e+04 repl 1
+   266.220779 -29.060892 flux       9455 qfit  0.0233 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.083" flux 2.364e+04 repl 1
+   266.197581 -29.056246 flux       8933 qfit   0.019 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.104" flux 3.091e+04 repl 1
+   266.231688 -29.069835 flux       8511 qfit   0.027 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.097" flux 3.395e+04 repl 1
+   266.233246 -29.046045 flux       7002 qfit  0.0321 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.106" flux 3.457e+04 repl 1
+   266.223155 -29.017163 flux       6157 qfit   0.118 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.105" flux 2.843e+04 repl 1
+   266.216133 -29.016139 flux       5855 qfit 0.00472 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.073" flux 2.263e+04 repl 1
+   266.196489 -29.010075 flux       5824 qfit  0.0136 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.099" flux 2.425e+04 repl 1
+   266.215768 -29.101942 flux       4940 qfit  0.0393 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.068" flux 1.704e+04 repl 1
+   266.200765 -29.049804 flux       4562 qfit  0.0182 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.082" flux 1.965e+04 repl 1
+   266.236814 -29.078580 flux       4076 qfit  0.0305 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.094" flux 1.967e+04 repl 1
+   266.212334 -29.094706 flux       3953 qfit  0.0285 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.092" flux 1.133e+04 repl 1
+rows in both: 661264; flux or replaced_saturated differ in 0
+
+################ F480M unvetted: guard arm (opt3g) against control arm (opt3c)
+F480M unvetted merged catalogs: opt3c 161066 rows, opt3g 161067 rows
+rows only in opt3c: 0; only in opt3g: 1 (no row of the other within 0.01 arcsec)
+--- rows only in opt3c: 0 rows (showing up to 40, brightest first)
+--- rows only in opt3g: 1 rows (showing up to 40, brightest first)
+   266.224642 -29.011486 flux       1338 qfit  0.0391 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.151" flux      4028 repl 1
+rows in both: 161066; flux or replaced_saturated differ in 0
+
+################ F212N vetted: guard arm (opt3g) against control arm (opt3c)
+F212N vetted merged catalogs: opt3c 584365 rows, opt3g 584407 rows
+rows only in opt3c: 0; only in opt3g: 42 (no row of the other within 0.01 arcsec)
+--- rows only in opt3c: 0 rows (showing up to 40, brightest first)
+--- rows only in opt3g: 42 rows (showing up to 40, brightest first)
+   266.214664 -29.106507 flux  1.963e+05 qfit  0.0693 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.103" flux 2.459e+05 repl 1
+   266.208592 -29.037659 flux  1.163e+05 qfit  0.0113 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.087" flux 3.022e+05 repl 1
+   266.236821 -29.040097 flux  5.382e+04 qfit  0.0174 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.082" flux 7.989e+04 repl 1
+   266.236579 -29.061958 flux  5.082e+04 qfit  0.0114 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.090" flux 7.608e+04 repl 1
+   266.226665 -29.080758 flux  4.591e+04 qfit  0.0159 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.099" flux 1.011e+05 repl 1
+   266.199391 -29.089360 flux  4.484e+04 qfit  0.0173 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.090" flux  1.32e+05 repl 1
+   266.207042 -29.081076 flux  4.471e+04 qfit  0.0133 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.059" flux 1.803e+05 repl 1
+   266.203175 -29.051735 flux  3.935e+04 qfit  0.0153 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.077" flux 5.615e+04 repl 1
+   266.214629 -29.033883 flux  2.843e+04 qfit 0.00946 repl 0 msep    nan prior       nan nmatch 3 gate_rej 1 | nearest other row  0.067" flux 3.758e+04 repl 1
+   266.198460 -29.076796 flux  2.627e+04 qfit  0.0212 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.080" flux 4.839e+04 repl 1
+   266.202981 -29.053111 flux  2.322e+04 qfit  0.0155 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.077" flux 5.614e+04 repl 1
+   266.201219 -29.010944 flux  2.194e+04 qfit  0.0214 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.082" flux 3.187e+04 repl 1
+   266.231875 -29.072315 flux  2.189e+04 qfit  0.0182 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.107" flux 3.045e+04 repl 1
+   266.227774 -29.056195 flux  2.168e+04 qfit  0.0123 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.100" flux 4.376e+04 repl 1
+   266.213291 -29.055943 flux  2.141e+04 qfit  0.0159 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.085" flux 3.179e+04 repl 1
+   266.198134 -29.025071 flux  2.114e+04 qfit  0.0128 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.088" flux 2.969e+04 repl 1
+   266.192783 -29.101177 flux  1.962e+04 qfit  0.0424 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.075" flux 4.656e+04 repl 1
+   266.206920 -29.068799 flux  1.769e+04 qfit  0.0189 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.069" flux 2.436e+04 repl 1
+   266.212531 -29.061128 flux  1.665e+04 qfit  0.0244 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.101" flux 2.762e+04 repl 1
+   266.206618 -29.035108 flux   1.66e+04 qfit  0.0215 repl 0 msep    nan prior       nan nmatch 5 gate_rej 0 | nearest other row  0.076" flux 6.036e+04 repl 1
+   266.192455 -29.093624 flux  1.622e+04 qfit  0.0121 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.074" flux  7.73e+04 repl 1
+   266.229443 -29.105861 flux  1.584e+04 qfit  0.0195 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.080" flux 2.602e+04 repl 1
+   266.228108 -29.048918 flux  1.575e+04 qfit 0.00522 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.074" flux 7.247e+04 repl 1
+   266.214880 -29.072653 flux  1.566e+04 qfit  0.0176 repl 0 msep    nan prior       nan nmatch 6 gate_rej 0 | nearest other row  0.080" flux 3.673e+04 repl 1
+   266.233527 -29.087357 flux  1.504e+04 qfit 0.00689 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.073" flux 6.261e+04 repl 1
+   266.214049 -29.037156 flux   1.41e+04 qfit 0.00726 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.073" flux 6.761e+04 repl 1
+   266.230467 -29.098857 flux  1.364e+04 qfit  0.0179 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.080" flux 3.383e+04 repl 1
+   266.236566 -29.075026 flux  1.165e+04 qfit  0.0237 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.081" flux 4.671e+04 repl 1
+   266.220582 -29.096576 flux  1.158e+04 qfit  0.0198 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.081" flux  3.32e+04 repl 1
+   266.220779 -29.060892 flux       9455 qfit  0.0233 repl 0 msep    nan prior       nan nmatch 2 gate_rej 0 | nearest other row  0.083" flux 2.364e+04 repl 1
+   266.197581 -29.056246 flux       8933 qfit   0.019 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.104" flux 3.091e+04 repl 1
+   266.231688 -29.069835 flux       8511 qfit   0.027 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.097" flux 3.395e+04 repl 1
+   266.233246 -29.046045 flux       7002 qfit  0.0321 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.106" flux 3.457e+04 repl 1
+   266.223155 -29.017163 flux       6157 qfit   0.118 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.105" flux 2.843e+04 repl 1
+   266.216133 -29.016139 flux       5855 qfit 0.00472 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.073" flux 2.263e+04 repl 1
+   266.196489 -29.010075 flux       5824 qfit  0.0136 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.099" flux 2.425e+04 repl 1
+   266.215768 -29.101942 flux       4940 qfit  0.0393 repl 0 msep    nan prior       nan nmatch 1 gate_rej 0 | nearest other row  0.068" flux 1.704e+04 repl 1
+   266.200765 -29.049804 flux       4562 qfit  0.0182 repl 0 msep    nan prior       nan nmatch 4 gate_rej 0 | nearest other row  0.082" flux 1.965e+04 repl 1
+   266.236814 -29.078580 flux       4076 qfit  0.0305 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.094" flux 1.967e+04 repl 1
+   266.212334 -29.094706 flux       3953 qfit  0.0285 repl 0 msep    nan prior       nan nmatch 3 gate_rej 0 | nearest other row  0.092" flux 1.133e+04 repl 1
+rows in both: 584365; flux or replaced_saturated differ in 0

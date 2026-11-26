@@ -1,0 +1,6 @@
+# Residual i2d of the control arm of run 3 against the render of run 2: pixels that are NaN in only one render and the largest |A - B| over pixels finite in both (F212N; A = run 2, B = run 3 control).
+# opt2nm and opt3cnm: unmasked renders; opt2fin and opt3cfin: renders of the finalize with the K=4 footprint mask.
+opt2nm-vs-opt3cnm-F212N: A (4737, 11440) B (4737, 11440); same grid keywords: True
+opt2nm-vs-opt3cnm-F212N: NaN only in A 0, NaN only in B 0, NaN in both 2363545, finite in both 51827735; max |A-B| 0, px with |A-B| > 1e-3: 0
+opt2fin-vs-opt3cfin-F212N: A (4737, 11440) B (4737, 11440); same grid keywords: True
+opt2fin-vs-opt3cfin-F212N: NaN only in A 0, NaN only in B 0, NaN in both 10482658, finite in both 43708622; max |A-B| 0, px with |A-B| > 1e-3: 0

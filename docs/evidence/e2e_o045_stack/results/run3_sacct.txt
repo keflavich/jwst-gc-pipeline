@@ -1,0 +1,35 @@
+# Slurm accounting of the jobs of run 3 (copies of the run 2 tree, finalize, scoring and unmasked render, mask-size renders; the first finalize pair 52893568 and 52893569 failed); sacct -P, job lines and batch steps.
+JobID|JobName|Partition|QOS|State|ExitCode|Start|End|Elapsed|MaxRSS|AllocCPUS
+52893568|e3f-fin-opt3c|hpg-dev|astronomy-dept-b|FAILED|1:0|2026-11-26T07:27:03|2026-11-26T07:30:53|00:03:50||4
+52893568.batch|batch|||FAILED|1:0|2026-11-26T07:27:03|2026-11-26T07:30:53|00:03:50|5M|4
+52893569|e3f-fin-opt3g|hpg-dev|astronomy-dept-b|FAILED|1:0|2026-11-26T07:27:03|2026-11-26T07:30:53|00:03:50||4
+52893569.batch|batch|||FAILED|1:0|2026-11-26T07:27:03|2026-11-26T07:30:53|00:03:50|4.50M|4
+52894425|e3copy-opt3c|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T07:36:02|2026-11-26T07:36:19|00:00:17||2
+52894425.batch|batch|||COMPLETED|0:0|2026-11-26T07:36:02|2026-11-26T07:36:19|00:00:17|3080K|2
+52894426|e3f-fin-opt3c|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T07:36:20|2026-11-26T11:40:43|04:04:23||4
+52894426.batch|batch|||COMPLETED|0:0|2026-11-26T07:36:20|2026-11-26T11:40:43|04:04:23|18443724K|4
+52894427|e3copy-opt3g|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T07:36:02|2026-11-26T07:36:19|00:00:17||2
+52894427.batch|batch|||COMPLETED|0:0|2026-11-26T07:36:02|2026-11-26T07:36:19|00:00:17|3136K|2
+52894428|e3f-fin-opt3g|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T07:36:20|2026-11-26T11:33:13|03:56:53||4
+52894428.batch|batch|||COMPLETED|0:0|2026-11-26T07:36:20|2026-11-26T11:33:13|03:56:53|18116936K|4
+52894447|e3post-opt3c|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T11:40:46|2026-11-26T12:59:23|01:18:37||5
+52894447.batch|batch|||COMPLETED|0:0|2026-11-26T11:40:46|2026-11-26T12:59:23|01:18:37|14903272K|5
+52894448|e3post-opt3g|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T11:33:16|2026-11-26T13:02:28|01:29:12||5
+52894448.batch|batch|||COMPLETED|0:0|2026-11-26T11:33:16|2026-11-26T13:02:28|01:29:12|13868356K|5
+52929150|e3kvar-opt3g-k3|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:14|00:09:48||5
+52929150.batch|batch|||COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:14|00:09:48|15752136K|5
+52929151|e3kvar-opt3g-k2|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:33|00:10:07||5
+52929151.batch|batch|||COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:33|00:10:07|15783952K|5
+52929153|e3kvar-opt3c-k3|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:20|00:09:54||5
+52929153.batch|batch|||COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:20|00:09:54|15710928K|5
+52929154|e3kvar-opt3c-k2|hpg-dev|astronomy-dept-b|COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:20|00:09:54||5
+52929154.batch|batch|||COMPLETED|0:0|2026-11-26T13:08:26|2026-11-26T13:18:20|00:09:54|15711896K|5
+# first attempt (same columns): copy jobs 52893216 and 52893218 (F212N and the shared directories; exit code 3 at their verification step, which compared apparent byte totals; the copies were complete), finalize jobs 52893217 and 52893219 and post jobs 52893599 and 52893600 (cancelled by the user of the session before they started)
+52893216|e3copy-opt3c|hpg-dev|astronomy-dept-b|FAILED|3:0|2026-11-26T07:24:43|2026-11-26T07:26:06|00:01:23||2
+52893216.batch|batch|||FAILED|3:0|2026-11-26T07:24:43|2026-11-26T07:26:06|00:01:23|5M|2
+52893217|e3f-fin-opt3c|hpg-dev|astronomy-dept-b|CANCELLED by 3663|0:0|None|2026-11-26T07:26:59|00:00:00||0
+52893218|e3copy-opt3g|hpg-dev|astronomy-dept-b|FAILED|3:0|2026-11-26T07:24:43|2026-11-26T07:26:06|00:01:23||2
+52893218.batch|batch|||FAILED|3:0|2026-11-26T07:24:43|2026-11-26T07:26:06|00:01:23|5M|2
+52893219|e3f-fin-opt3g|hpg-dev|astronomy-dept-b|CANCELLED by 3663|0:0|None|2026-11-26T07:26:59|00:00:00||0
+52893599|e3post-opt3c|hpg-dev|astronomy-dept-b|CANCELLED by 3663|0:0|None|2026-11-26T07:35:19|00:00:00||0
+52893600|e3post-opt3g|hpg-dev|astronomy-dept-b|CANCELLED by 3663|0:0|None|2026-11-26T07:35:19|00:00:00||0

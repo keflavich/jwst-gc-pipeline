@@ -1,0 +1,69 @@
+# Investigation of the 48 F212N added rows of run 1 that fail oksep_pass (97 added rows with a cross-band m7 row; group A = far-companion exemption of #1377, group B = relaxed bright window of #1376; the catalogs are those of the opt arm of run 1).
+F480M tables: m6 vetted 303215 rows; i2d seed 43802 rows; m7 raw 163435 rows; m7 vetted 147856 rows
+  modules merged/nrca/nrcb; i2d seed rows per module [21794, 11494, 10514] with match radius [81.0, 81.0, 81.0] mas; m6 vetted rows per module [150252, 76185, 76778]
+
+check: flag recomputed from the m6 vetted (30 mas) and i2d seed (own DEDUPMAS) tables of the three modules equals f480m_indep for 90 of 97 rows (7 differ)
+
+A. hit type of the independently_detected_f480m flag, by group and oksep result (97 added rows)
+  group  oksep   n   m6 within 30 mas   i2d seed within 81 mas only   no hit
+  A      fail   47         16                  0                        31
+  A      pass    6          2                  2                         2
+  B      fail    1          0                  0                         1
+  B      pass   43         31                  0                        12
+
+B. nearest F480M row of each table to the failing group A rows (n = 47), separation in mas
+  table        median   16th-84th percentile   rows within 30 mas   within 50 mas   within 100 mas
+  m6 vetted     144.7     15.7- 172.6            16                  19            19
+  i2d seed      645.9    453.4-1074.0             0                   0             0
+  m7 raw        160.9    143.0- 174.9             0                   0             0
+  m7 vetted     160.9    143.0- 174.9             0                   0             0
+
+   same for the passing group A rows (n = 6) and the passing group B rows (n = 43)
+  A pass m6 vetted   median   42.7 mas; within 30 mas 2, 50 mas 4, 100 mas 5
+  A pass i2d seed    median   61.8 mas; within 30 mas 2, 50 mas 3, 100 mas 4
+  A pass m7 raw      median   33.4 mas; within 30 mas 2, 50 mas 5, 100 mas 6
+  A pass m7 vetted   median   33.4 mas; within 30 mas 2, 50 mas 5, 100 mas 6
+  B pass m6 vetted   median   13.0 mas; within 30 mas 31, 50 mas 35, 100 mas 43
+  B pass i2d seed    median  588.5 mas; within 30 mas 0, 50 mas 0, 100 mas 1
+  B pass m7 raw      median   13.4 mas; within 30 mas 31, 50 mas 36, 100 mas 43
+  B pass m7 vetted   median   13.4 mas; within 30 mas 31, 50 mas 36, 100 mas 43
+
+C. failing group A rows: F480M m7 raw row within 50 mas and the vetting
+  m7 raw row within 50 mas: 0 of 47; m7 vetted row within 50 mas: 0; raw row within 50 mas that the vetting removed: 0
+  m7 raw row within 100 mas: 0; m7 vetted row within 100 mas: 0
+
+D. false-position control: 53 group A rows, 200 random position angles each at the same radius around the neighbour
+  false positions: F480M m6 row within 30 mas 2.4 % (rows 0.0-11.0 %); i2d seed row within its radius 1.0 % (rows 0.0-16.5 %); either 3.3 % (rows 0.0-16.5 %)
+  false positions: m7 raw row within 50 mas 1.4 %; m7 vetted row within 50 mas 1.4 %
+  observed group A rows: m6 within 30 mas 34.0 % (18 of 53); i2d seed 7.5 % (4 of 53); either 37.7 % (20 of 53)
+  expected number of group A rows with the flag if every row were a false position: 1.7 +- 1.3 (Poisson-binomial sigma); observed 20; excess 14.5 sigma
+  same for the m6 test alone: expected 1.3 +- 1.1; observed 18; excess 15.2 sigma
+
+E. pairs as in the pairs analysis: 3565; flag recomputed equals the table flag for 3291 of 3565 rows
+  1.75-2.5 FWHM zone, rows of flux 1e3-3.5e3 near a >= 10x brighter unsaturated star of flux 1e4-5.5e4
+  population         n    m6 within 30 mas   i2d only   no hit    oksep pass: m6 / i2d only / no hit
+  added rows       40         12              1       27      1/12  1/1  1/27
+  ordinary rows    28         14              0       14      10/14  0/0  1/14
+  m6 within 30 mas: added 12/40 (30.0 %, 95 %% interval 18.1-45.4); ordinary 14/28 (50.0 %, 32.6-67.4); Fisher p = 0.129
+  either test: added 13/40 (32.5 %, 95 %% interval 20.1-48.0); ordinary 14/28 (50.0 %, 32.6-67.4); Fisher p = 0.208
+  with the flag, added: oksep pass 2 of 13
+  with the flag, ordinary: oksep pass 10 of 14
+  oksep pass among rows with the flag, added against ordinary: Fisher p = 0.0063
+
+F. catalogue-wide counts (m7 table, 587759 rows, 584249 with an F212N flux)
+  oksep fail: 397405; of these with F212N flux 394415; with independent detection in both bands 22751; with F480M flag only 24947
+  same restricted to F212N flux 1e3-3.5e3: oksep fail 9342; both bands independent 1581
+  pairs 1.75-2.5 FWHM zone, added: rows 40; oksep fail 37; fail with an independent F480M detection 11 recomputed (m6 11, i2d only 0), 11 by the table flag
+  pairs 1.75-2.5 FWHM zone, ordinary: rows 28; oksep fail 17; fail with an independent F480M detection 4 recomputed (m6 4, i2d only 0), 4 by the table flag
+  pairs < 6 FWHM, added: rows 41; oksep fail 38; fail with an independent F480M detection 12 recomputed (m6 12, i2d only 0), 12 by the table flag
+  pairs < 6 FWHM, ordinary: rows 1216; oksep fail 668; fail with an independent F480M detection 175 recomputed (m6 115, i2d only 60), 175 by the table flag
+
+G. F480M m7 seed list (crossband + own_m6 + i2d rows, merged module): seeds within 30 mas of an added row, by origin
+  population          n   any seed   own_m6   crossband   i2d   | m7 raw row within 100 mas
+  A fail       47        0        0          0      0   | 0
+  A pass        6        2        0          0      2   | 6
+  B pass       43       31       31          0      0   | 43
+  B fail        1        0        0          0      0   | 0
+  failing A rows with a seed within 30 mas: 0 of 47; of these with an m6 vetted row within 30 mas 0; with an m7 raw row within 100 mas 0
+
+shows: which F480M test sets the flag for the added rows, how often random positions at the same radius around the same stars set it, and where the F480M m7 fit of a flagged row goes; does not show that a flagged row is a real star (a daofind peak in the F480M residual within 81 mas of a position 0.13-0.18 arcsec from a bright star can be a PSF-mismatch residual), nor why the m7 fit has no row

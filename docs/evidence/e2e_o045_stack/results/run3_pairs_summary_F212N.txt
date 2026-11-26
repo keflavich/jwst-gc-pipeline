@@ -1,0 +1,10 @@
+# Summary of the 40 second-pass pairs of run3_pairs_F212N.csv (rows of the control vetted F212N catalog with replaced_saturated true, satstar_match_sep above 0.05 arcsec and satstar_dao_flux / flux from 0.2 to below 0.8); control = unmasked render of the control arm, guard = unmasked render of the guard arm.
+pairs: 40; flux ratio daophot / satstar 0.203 to 0.798; match separation 0.059 to 0.107 arcsec
+control box maximum (MJy/sr): minimum over the pairs 358, median 1694, maximum 21633
+box maximum lower with the guard: 40 of 40; median of guard / control 0.075; pairs with a guard box maximum above 200: 12 (control 40)
+annulus mean |residual| (4 <= r < 10 px) lower with the guard: 39 of 39 pairs with an annulus value; median of guard / control 0.462
+box minimum deeper with the guard: 38 of 40; median change of |minimum| +17 %
+boxes with a minimum below -1000 MJy/sr: control 10, guard 16
+boxes with a minimum below -200 MJy/sr: control 34, guard 35
+pair (2946, 1533): box maximum control 8781.5 guard 8712.04; box minimum control 16.2649 guard -1120.93
+second-pass pairs of the control vetted catalog: 313 of 584365 rows have replaced_saturated true and a satstar match separation above 0.05 arcsec (line of the job log: "40 vetoable second-pass pairs of 313 second-pass pairs in the vetted catalog (584365 rows)"); 40 of the 313 have a ratio from 0.2 to below 0.8
