@@ -1,0 +1,7 @@
+Rows within 6 px of the star in the per-frame m7 table (lblmerged file) of F212N, detector nrcb1, exposure 4 of o045, in run 1 and run 2: fitted position and flux, and the columns x_init, y_init and flux_init.
+In the row with flux_init 24491 (C) x_init and y_init are the seed of the rescued row; in the row with flux_init 6503.1 (A) they are the position at which the survivor was refit (the net position of A and the absorbed row C).
+
+run 1 (opt): 2 rows
+  fit (595.32, 2.45) flux_fit 1748 | init (595.316, 2.447) flux_init 24491
+  fit (593.26, 2.85) flux_fit 1.404e+04 | init (593.261, 2.852) flux_init 6503.1
+run 2 (opt2): 0 rows

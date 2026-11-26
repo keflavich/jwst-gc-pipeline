@@ -1,0 +1,17 @@
+Test run of the file of tests of #1366 at the head 459ad0aa (Slurm, QOS astronomy-dept-b, partition hpg-dev).
+
+sacct -X -P -o JobID,JobName,Partition,QOS,Start,End,Elapsed,State,ExitCode,WorkDir,SubmitLine
+JobID|JobName|Partition|QOS|Start|End|Elapsed|State|ExitCode|WorkDir|SubmitLine
+52831770|lg_test_dedup_nonpositive|hpg-dev|astronomy-dept-b|2026-11-25T19:30:40|2026-11-25T19:31:27|00:00:47|COMPLETED|0:0|<scratch>/wt_lostgain3|sbatch --parsable --job-name=lg_test_dedup_nonpositive --export=ALL,CRDS_READONLY_CACHE=1 <scratch>/pytest_one.sbatch <scratch>/wt_lostgain3 jwst_gc_pipeline/photometry/tests/test_dedup_nonpositive.py
+
+commits of #1366 after 38873cf8 (git log --format='%h %cI %s' 38873cf8..459ad0aa, oldest first):
+69a647b9 2026-11-25T19:02:11-05:00 Count only the fitted position of a stronger row in the duplicate-survivor rule
+459ad0aa 2026-11-25T19:30:37-05:00 Describe the fitted-position rule of the duplicate-survivor drop in the manual
+
+head of the worktree of the job (git rev-parse --short=8 HEAD):
+459ad0aa
+
+log of the job (the file of tests: jwst_gc_pipeline/photometry/tests/test_dedup_nonpositive.py):
+...................................................                      [100%]
+51 passed in 33.88s
+pytest rc 0

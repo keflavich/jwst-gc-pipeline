@@ -1,0 +1,18 @@
+frame nrcb1_o045_visit001_vgroup02101_exp00004 F212N; rows within 6 px of (593.3,2.9)
+== stored ctl: 54187 rows, 0 near
+== stored opt: 54238 rows, 2 near
+   d=0.06 x_fit=593.26 y_fit=2.8522 flux_fit=14037 flux_init=6503.1 qfit=0.0037443 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=1.7546
+   d=2.07 x_fit=595.32 y_fit=2.4465 flux_fit=1748.2 flux_init=24491 qfit=0.12207 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=2.5046
+== stored opt2: 54234 rows, 0 near
+== replay lgActl: 54187 rows, 0 near
+== replay lgAno1366: 54189 rows, 0 near
+== replay lgAearly: 54238 rows, 2 near
+   d=0.06 x_fit=593.26 y_fit=2.8522 flux_fit=14037 flux_init=6503.1 qfit=0.0037443 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=1.7546
+   d=2.07 x_fit=595.32 y_fit=2.4465 flux_fit=1748.2 flux_init=24491 qfit=0.12207 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=2.5046
+== replay lgAfixed: 54234 rows, 0 near
+-- stored ctl vs stored opt2: rows only here 3, only in opt2 50, matched with flux change > 1 %: 7
+-- stored opt vs stored opt2: rows only here 4, only in opt2 0, matched with flux change > 1 %: 1
+-- replay lgActl vs stored opt2: rows only here 3, only in opt2 50, matched with flux change > 1 %: 7
+-- replay lgAno1366 vs stored opt2: rows only here 3, only in opt2 48, matched with flux change > 1 %: 6
+-- replay lgAearly vs stored opt2: rows only here 4, only in opt2 0, matched with flux change > 1 %: 1
+-- replay lgAfixed vs stored opt2: rows only here 0, only in opt2 0, matched with flux change > 1 %: 0

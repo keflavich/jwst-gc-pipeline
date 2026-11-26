@@ -1,0 +1,15 @@
+Frames of the stop rule over 11 frames: label, tile, band, detector, exposure and the frame pixels of the target positions that the comparison prints.
+Arms of the comparison: C control, O #1366 at cf5a29d2, P #1366 at 38873cf8, V variant V3 of the duplicate-survivor rule (the update). All arms were replayed with the production seeds; DAOPHOT_DEDUP_NONPOSITIVE is the only switch.
+
+label | tile | band | detector | exposure | target stars (frame pixels)
+o130 nrca2 exp4 | o130 | F212N | nrca2 | 4 | (315.0, 725.8)
+o130 nrca2 exp5 | o130 | F212N | nrca2 | 5 | (323.6, 376.4)
+o130 nrca1 exp5 | o130 | F212N | nrca1 | 5 | none
+o130 nrcb1 exp1 | o130 | F212N | nrcb1 | 1 | none
+o130 nrca3 exp3 | o130 | F212N | nrca3 | 3 | none
+o130 nrca4 exp2 | o130 | F212N | nrca4 | 2 | none
+o105 nrcb1 exp2 | o105 | F212N | nrcb1 | 2 | (1638.9, 237.6)
+o045 nrca1 exp3 | o045 | F212N | nrca1 | 3 | (468.2, 116.2)
+o045 nrca4 exp1 | o045 | F212N | nrca4 | 1 | (1364.3, 1865.7)
+o138 nrcblong exp4 | o138 | F480M | nrcblong | 4 | (181.0, 1337.0)
+o138 nrcblong exp5 | o138 | F480M | nrcblong | 5 | (185.0, 1166.0)
