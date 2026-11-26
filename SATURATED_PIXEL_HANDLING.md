@@ -914,6 +914,72 @@ these flag sets would remove the footgun of setting them individually.)*
     pixels left and 1 minimum below -500 MJy/sr and 3 maxima above +500 MJy/sr at
     6-16 pixels.  An azimuthally averaged profile correction therefore removes about
     two thirds of the deep pits and a third of the ring excess, and adds ring dips.
+  - `SINGLE_EXPOSURE_EVENT_RAMP=1` (`single_exposure_events.find_ramp_events`; off
+    unless set).  Sets DO_NOT_USE, in the same two places as the event mask, on the
+    pixels where one integration of an exposure holds counts that the other
+    integration does not.  An exposure has 2 integrations of 4 groups and the crf's
+    sibling `_ramp.fits` holds the groups of each.  The rate of an integration is the
+    least-squares slope of its groups (DN per group); a star has the same rate in both
+    integrations and a cosmic-ray hit adds counts to one.  A pixel disagrees when the
+    3x3 box sum of the rate of the strongest integration exceeds that of the weakest
+    (the lower median for three or more integrations) by 10 x 1.4826 x the median
+    absolute deviation, over the frame, of the difference between the box sums of the
+    first two integrations (9.4-14.6 DN per group over the 192 frames of the four tiles
+    below), and the weakest box sum is at most half of the strongest.  The mosaic is built
+    from the crf, in which the jump step has already removed most hits, so a disagreeing
+    pixel is an event pixel only where the crf holds the extra counts: the crf exceeds
+    the prediction of the weakest integration alone (calibration x its rate, with a
+    negative rate set to zero) by 50 MJy/sr and by 10 % of the prediction.  The
+    calibration is the frame's median crf per DN per group over the pixels with at least
+    400 DN per group in every integration, integrations within 10 % of the brightest and
+    neither SATURATED nor DO_NOT_USE (1.75-2.02 MJy/sr per DN per group over the same 192
+    frames); a frame with fewer than 20 such pixels is not tested.  An 8-connected set of
+    event pixels is an event when its pixel of largest crf excess over the prediction
+    reaches 200 MJy/sr; the footprint is the set dilated by 1 pixel, and sets of more than
+    5000 pixels are left alone.  The cross-frame test above needs a second exposure over
+    the position and a SATURATED core; this one needs neither, so it also finds unsaturated
+    hits and events where a single exposure covers the position.  A frame with no sibling
+    ramp, one integration, or a ramp that is not on the frame's pixel grid
+    (`--cutout-region` crops) is not tested, and the mosaic builders print how many; all
+    192 frames below were tested.
+    Result on F212N (chain logs `chainr_rmf*`): 128, 97, 125 and 90 events in 43, 42, 45
+    and 41 of the 48 frames of o045, o118, o130 and o138, setting 3098, 2714, 3146 and
+    2707 pixels to DO_NOT_USE.  The event with the smallest excess over its prediction has
+    202-207 MJy/sr in the four tiles, the median event 11400-12800 MJy/sr; the median
+    event set has 6-8 pixels and the largest 171.  Two earlier versions found more.  Asking
+    only that the brightest crf pixel of the set lie 200 MJy/sr above the median of the
+    8-20 pixel annulus around it, with the integrations compared by their group-mean
+    level, gave 1728, 688, 579 and 996 events.  Comparing the rates and requiring the crf to
+    hold the extra counts, with no zero for a negative rate, gave 320, 290, 312 and 307
+    events (5007, 4618, 4982 and 4801 pixels): a pixel whose weakest integration has a
+    negative rate has a negative prediction, and the crf of such a pixel exceeds it by
+    hundreds of MJy/sr.
+    The whole-star leftovers of the best-stack render (tag `mkrdblfs3`: deblend rows +
+    pair-rescue rows, footprint mask and ring on) that lie within 4 pixels of an event in
+    a covering exposure, leftovers above 500 MJy/sr: o045 2 of 12, o118 3 of 7, o130 3 of
+    9, o138 2 of 15; above 2000 MJy/sr: 1 of 2, 2 of 2, 3 of 6, 2 of 5.  The ten lie at
+    mosaic pixel x, y o045 (6296,2636), (10825,1405); o118 (163,2127), (5457,2808),
+    (8399,3256); o130 (11316,4440), (423,2053), (4934,195); o138 (1311,4560), (6391,2609).
+    The rates of the strongest and weakest integration at the event's brightest pixel are
+    7400 and 29 DN per group at o045 (6296,2636) (frame 02101_00004_nrcb3) and 7548 and 1
+    at o130 (11316,4440) (frame 02101_00001_nrcb1).  Rendered with the ramp events masked
+    (tag `mkrrmfdblfs3`) the leftovers above 500 MJy/sr number 10, 4, 6 and 13 for o045,
+    o118, o130 and o138 (12, 7, 9 and 15 for `mkrdblfs3`), those above 2000 MJy/sr 1, 0, 3
+    and 3 (2, 2, 6 and 5), and the craters deeper than 50 MJy/sr 25, 43, 30 and 35 (27,
+    45, 32 and 37).  The leftovers above 2000 MJy/sr
+    with no event within 4 pixels are o045 (14,2277); o130 (501,2193), (349,2907),
+    (3091,4576); o138 (3204,4577), (9,880), (3207,4569); the test flags none of them.
+    The first version flagged o138 (20,889) and (24,888) (leftovers of 908 and 585
+    MJy/sr); no event of this version lies within 4 pixels of them.  The events have not
+    been compared with the m7 catalog, so a real star with a hit in one integration is
+    masked with the hit: that star keeps its pixels only where another exposure covers
+    it.  An event mask leaves a hole in the mosaic where a single exposure covers the
+    position; listing the events instead keeps the pixels.  `python -m
+    jwst_gc_pipeline.photometry.single_exposure_events OUT.fits crf.fits ...` lists them:
+    it runs this test on the crf files given (one filter of one tile) and writes one row
+    per event (frame, pixel, RA, Dec, crf peak, the prediction of the weakest integration,
+    the excess over it, set and footprint sizes, the rates of the strongest and weakest
+    integration), without masking or changing anything.
   - Caveat for every replay row above: each is the production m7 catalog with rows
     appended or changed; `replace_saturated`, the dedup and the vetting have not been
     rerun, so a restored row that vetting would remove is counted as kept.

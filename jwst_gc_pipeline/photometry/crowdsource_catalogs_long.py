@@ -3187,39 +3187,57 @@ _EVENT_MASK_CACHE = {}
 def single_exposure_event_masks(files):
     """``{path: bool mask}`` of the pixels to drop from per-frame images before
     they are resampled into one mosaic: the single-exposure transients of
-    ``single_exposure_events`` (env ``SINGLE_EXPOSURE_EVENT_MASK``) and the
-    extreme negative pixels (env ``NEGATIVE_PIXEL_MASK_NSIGMA``).
+    ``single_exposure_events`` (env ``SINGLE_EXPOSURE_EVENT_MASK``, told from a
+    star by the other frames; env ``SINGLE_EXPOSURE_EVENT_RAMP``, told from a
+    star by the integrations of the exposure) and the extreme negative pixels
+    (env ``NEGATIVE_PIXEL_MASK_NSIGMA``).
 
-    Empty unless one of the two is on.  ``files`` are all the per-frame images
+    Empty unless one of the three is on.  ``files`` are all the per-frame images
     of ONE filter that the mosaic is built from (the original frames, or the
-    ``--cutout-region`` crops).  An event is told from a star by the other
-    frames at its sky position, so a partial list tests against fewer frames
-    (and one file cannot be tested at all); a negative pixel is judged in its
-    own frame.  Only the frames that carry a masked pixel are keys.  The answer
-    is kept per (file, size, mtime) list and switch state, so the data and the
-    residual mosaic of one run share one detection.
+    ``--cutout-region`` crops).  The cross-frame test compares with the other
+    frames at the sky position, so a partial list tests against fewer frames
+    (and one file cannot be tested at all); the ramp test reads the sibling
+    ``_ramp.fits`` of each frame and skips the frames that have none on their
+    own pixel grid (a ``--cutout-region`` crop); a negative pixel is judged in
+    its own frame.  Only the frames that carry a masked pixel are keys.  The
+    answer is kept per (file, size, mtime) list and switch state, so the data
+    and the residual mosaic of one run share one detection.
     """
     events_on = _single_exposure_events.event_mask_enabled()
+    ramp_on = _single_exposure_events.ramp_event_enabled()
     nsigma = _single_exposure_events.negative_pixel_nsigma()
-    if not (events_on or nsigma):
+    if not (events_on or ramp_on or nsigma):
         return {}
     files = sorted({os.fspath(f) for f in files})
     key = (tuple((f, os.stat(f).st_size, os.stat(f).st_mtime_ns) for f in files),
-           events_on, nsigma)
+           events_on, ramp_on, nsigma)
     hit = _EVENT_MASK_CACHE.get(key)
     if hit is not None:
         return hit
     masks = {}
-    if events_on and len(files) >= 2:
-        t0 = time.time()
+    cross_on = events_on and len(files) >= 2
+    if cross_on or ramp_on:
         frames = [_single_exposure_events.CrfFrame(f) for f in files]
-        events = _single_exposure_events.find_events(frames)
-        by_name = _single_exposure_events.event_masks(
-            events, {fr.name: fr.shape for fr in frames})
+        shapes = {fr.name: fr.shape for fr in frames}
         path_of = {fr.name: fr.path for fr in frames}
+    if cross_on:
+        t0 = time.time()
+        events = _single_exposure_events.find_events(frames)
+        by_name = _single_exposure_events.event_masks(events, shapes)
         masks = {path_of[name]: mask for name, mask in by_name.items()}
         print(f"single-exposure events: {len(events)} in {len(masks)} of "
               f"{len(files)} frames, {sum(int(m.sum()) for m in masks.values())} "
+              f"px set to DO_NOT_USE ({time.time() - t0:.0f} s)", flush=True)
+    if ramp_on:
+        t0 = time.time()
+        events, n_tested = _single_exposure_events.find_ramp_events(frames)
+        by_name = _single_exposure_events.event_masks(events, shapes)
+        for name, mask in by_name.items():
+            path = path_of[name]
+            masks[path] = masks[path] | mask if path in masks else mask
+        print(f"single-exposure ramp events: {len(events)} in {len(by_name)} of "
+              f"{n_tested} frames tested ({len(files) - n_tested} of {len(files)} "
+              f"without a usable ramp), {sum(int(m.sum()) for m in by_name.values())} "
               f"px set to DO_NOT_USE ({time.time() - t0:.0f} s)", flush=True)
     if nsigma:
         n_px = 0
@@ -4521,8 +4539,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     import threading as _threading
     _save_lock = _threading.Lock()
     # Single-exposure transients (env SINGLE_EXPOSURE_EVENT_MASK, off by default):
-    # the pixels of each frame's fitter input that only that frame sees, and the
-    # extreme negative pixels (env NEGATIVE_PIXEL_MASK_NSIGMA, off by default).
+    # the pixels of each frame's fitter input that only that frame sees, the counts
+    # that only one integration of a frame holds (env SINGLE_EXPOSURE_EVENT_RAMP,
+    # off by default), and the extreme negative pixels (env NEGATIVE_PIXEL_MASK_NSIGMA,
+    # off by default).
     # They are written into the per-frame residual's DQ as DO_NOT_USE, so the
     # residual mosaic does not carry them (see single_exposure_events).
     _event_bad = _event_masks_by_frame(overlapping_frames, pipeline_dir, options)
