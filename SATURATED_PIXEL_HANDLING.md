@@ -746,10 +746,36 @@ these flag sets would remove the footgun of setting them individually.)*
     120 -> 127, deeper than 500 MJy/sr 21 -> 23.  Appending every reconstructed row
     whatever its flux ratio gives 26 leftovers above 500 MJy/sr and 149 / 27 craters
     (shrink 0.3), so the window drops no leftover the unrestricted set clears and
-    adds 9 fewer craters deeper than 50 MJy/sr.  Caveat: the replay appends rows to
-    the vetted catalog; `replace_saturated` and the dedup and vetting after it
-    have not been rerun with the guard on, so a restored row that vetting would
-    remove is counted as kept here.
+    adds 9 fewer craters deeper than 50 MJy/sr.
+    The replay appends rows to the vetted catalog and does not rerun
+    `replace_saturated`, the dedup or the vetting.  An end-to-end run on o045
+    F212N does: the finalize step (merge, dedup, vetting, residual render)
+    rerun with the guard on at `_MIN` 0.2 and `_MAX` 0.8, on the per-frame
+    tables of an end-to-end run of the stacked PRs with their opt-in switches
+    on.  The control arm (guard off) reproduces that run: no catalog row and no
+    residual pixel differs.  The guard keeps 42 of 356 daophot rows of the
+    combined F212N merge.  All 42 pass the vetting (584365 -> 584407 vetted
+    rows), and the F480M merge gains 1 row (161066 -> 161067; its residual was
+    not scored).  Unmasked F212N render, control -> guard: leftovers above 100
+    MJy/sr 195 -> 164, above 200 77 -> 46, above 500 46 -> 22, above 1000
+    34 -> 14; craters deeper than 50 MJy/sr 129 -> 128, deeper than 500 MJy/sr
+    15 -> 14.  In the 3 px matching of the 195 control leftovers above 100
+    MJy/sr, 32 are cleared (all with a consolidated satstar fit within 1.0"),
+    163 are unchanged, none is reduced or worse, and one leftover of the guard
+    render is listed as new: 102 MJy/sr at x, y = 634, 80, 5 px from a control
+    leftover.  The 13 x 13 pixel box at the star at (8385, 2328) has a maximum
+    of 2663 MJy/sr in the control render and 73 MJy/sr in the guard render.  At
+    the 42 added rows the box minimum is deeper in the guard render at 40, and
+    the boxes with a minimum below -1000 MJy/sr go from 10 to 16, so part of
+    the removed leftover light shows up as pits.  With the footprint mask of
+    the stack (disk radius 4 times the radius of equal saturated area) the two
+    arms have equal counts (leftovers above 100 MJy/sr 78, craters deeper than
+    50 MJy/sr 10) and 1139 of 43.7 million pixels differ, by at most 8.6
+    MJy/sr.  The replay on o105 above raised the
+    crater count (132 -> 140) and the end-to-end run on o045 lowers it
+    (129 -> 128); tile, stack and method differ, and the contributions were
+    not separated.  One tile and one band.  Counts, tables and file list are in
+    PR #1383.
   - What the guards leave (o105 F212N, stack + neighbour guard + shrink 0.8: 28
     leftovers above 500 MJy/sr, 23 craters deeper than 500 MJy/sr).  The craters
     classify (a row within 40 mas counts as at the crater) as 16
