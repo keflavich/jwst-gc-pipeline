@@ -1900,10 +1900,11 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     (``DAOPHOT_DEDUP_NONPOSITIVE``, see ``_dedup_nonpositive_refit``) and
     ``overshoot_action='refit'``.  An absorbed non-positive row is rescued
     only when its seed is at least this far from the survivor's seed, and a
-    survivor whose net flux is not above that of a kept row within this
-    distance is dropped (``_dedup_nonpositive_duplicate_survivors``; a
-    ``keep_in_fit`` survivor stays).  ``None`` leaves the rescue separation at
-    the 1.0 px of the dedup.
+    survivor whose net flux is not above that of a kept row fitted within
+    this distance of the survivor's seed is dropped
+    (``_dedup_nonpositive_duplicate_survivors``; the seed of the stronger row
+    does not count, and a ``keep_in_fit`` survivor stays).  ``None`` leaves
+    the rescue separation at the 1.0 px of the dedup.
 
     ``init_params`` rows with ``keep_in_fit`` True (cross-epoch seeds, see
     ``_build_manual_seed``) stay in the fit through the post-fit dedup, the
