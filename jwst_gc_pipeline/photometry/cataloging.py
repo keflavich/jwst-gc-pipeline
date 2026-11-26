@@ -1612,6 +1612,14 @@ def _dedup_nonpositive_duplicate_survivors(xfit, yfit, flux, xinit, yinit,
     dropped and the star keeps its row; such a survivor is a duplicate of the
     stronger row.
 
+    Only the fitted position of the stronger row counts: the seed of a row
+    that the grouped fit moved does not mark where its light lies.  In
+    gc-treasury 10678 o045 F212N nrcb1 exposure 4 the seed of a 3.2e4 row lay
+    1.3 px from the seed of a survivor with a net flux of 1.4e4 (a 2.6e4 fit
+    that had absorbed a -1.2e4 row), but the grouped fit had put that row 4 px
+    from the survivor's seed.  Counting the seed made the survivor a duplicate
+    and the star was left without a row in the frame.
+
     Parameters
     ----------
     xfit, yfit, flux : array, shape (N,)
@@ -1621,8 +1629,8 @@ def _dedup_nonpositive_duplicate_survivors(xfit, yfit, flux, xinit, yinit,
     keep, owner : array, shape (N,)
         From ``_dedup_close_sources(..., return_owner=True)``.
     sep_pix : float
-        Separation (px) from the survivor's seed to the fit or the seed of a
-        stronger kept row inside which the survivor is a duplicate.
+        Separation (px) from the survivor's seed to the fit of a stronger
+        kept row inside which the survivor is a duplicate.
 
     Returns
     -------
@@ -1650,14 +1658,12 @@ def _dedup_nonpositive_duplicate_survivors(xfit, yfit, flux, xinit, yinit,
     np.add.at(strength, owner[gone], flux[gone])
     survivors = np.unique(owner[gone])
     cand = np.flatnonzero(keep & (strength > 0))
-    pts = np.vstack([np.column_stack([xfit[cand], yfit[cand]]),
-                     np.column_stack([xinit[cand], yinit[cand]])])
-    who = np.concatenate([cand, cand])
+    pts = np.column_stack([xfit[cand], yfit[cand]])
     finite = np.all(np.isfinite(pts), axis=1)
     if not np.any(finite):
         return duplicate
     tree = cKDTree(pts[finite])
-    who = who[finite]
+    who = cand[finite]
     for s in survivors[np.argsort(-strength[survivors])]:
         if not (np.isfinite(xinit[s]) and np.isfinite(yinit[s])):
             continue

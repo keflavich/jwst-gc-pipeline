@@ -172,6 +172,28 @@ def test_a_survivor_past_the_separation_is_kept():
     assert dup.tolist() == [False, False, False]
 
 
+def test_a_stronger_row_fitted_beyond_the_separation_is_no_neighbour():
+    # o045 F212N nrcb1 exposure 4: row 0 is a 3.2e4 row whose seed lies 1.3 px from
+    # the seed of row 1 and whose fit, moved by the grouped fit, lies 4 px from it;
+    # rows 1 and 2 are a 2.6e4 fit and the -1.2e4 row that it absorbed (net flux
+    # 0.53 of its own)
+    dup = _dups(xfit=[589.72, 593.66, 594.12], yfit=[1.68, 2.55, 2.22],
+                flux=[3.169e4, 2.6e4, -1.225e4],
+                xinit=[593.0, 593.5, 595.3], yinit=[1.973, 3.14, 2.447],
+                keep=[True, True, False], owner=[0, 1, 1])
+    assert dup.tolist() == [False, False, False]
+
+
+def test_a_stronger_row_fitted_within_the_separation_is_a_neighbour_of_a_far_seed():
+    # the seed of the stronger row (row 0) lies 1.9 px from the seed of the
+    # survivor (row 1) and its fit 1.3 px
+    dup = _dups(xfit=[10.0, 11.0, 11.0], yfit=[10.0, 10.8, 11.0],
+                flux=[3.8e4, 1.07e5, -1.06e5],
+                xinit=[12.5, 10.84, 12.0], yinit=[10.0, 10.94, 12.0],
+                keep=[True, True, False], owner=[0, 1, 1])
+    assert dup.tolist() == [False, True, False]
+
+
 def test_of_two_close_survivors_the_stronger_stays():
     dup = _dups(xfit=[10.0, 10.0, 11.0, 11.0], yfit=[10.0, 10.0, 10.0, 10.0],
                 flux=[50.0, -10.0, 30.0, -10.0],
