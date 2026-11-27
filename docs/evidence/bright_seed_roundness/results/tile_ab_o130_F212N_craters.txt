@@ -1,0 +1,38 @@
+# Big craters of o130 F212N residual tags matched by position (3 px) against a control tag (same definitions as the counts file).
+# The four render levels are the DQ_SAT dilation (dq4mkr), the edge band (ee8dq4mkr), the ring zone only (mkr) and no mask; every tag of a level is an arm.
+
+################ control dncg; DQ_SAT dilation (dq4mkr), edge band (ee8dq4mkr), ring zone only (mkr), no mask
+dq4mkrdncg: 8 big craters; 88 craters with depth > 50 at any depth/model; deepest 199
+dq4mkrdncgp: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+dq4mkrsd1: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+dq4mkrsd1p: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+ee8dq4mkrdncg: 8 big craters; 88 craters with depth > 50 at any depth/model; deepest 199
+ee8dq4mkrdncgp: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+ee8dq4mkrsd1: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+ee8dq4mkrsd1p: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+mkrdncg: 32 big craters; 117 craters with depth > 50 at any depth/model; deepest 308
+mkrdncgp: 32 big craters; new vs control 0, gone 0; matched 32 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 117 craters with depth > 50 at any depth/model; deepest 308
+mkrsd1: 32 big craters; new vs control 0, gone 0; matched 32 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 117 craters with depth > 50 at any depth/model; deepest 308
+mkrsd1p: 32 big craters; new vs control 0, gone 0; matched 32 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 117 craters with depth > 50 at any depth/model; deepest 308
+dncg: 68 big craters; 1525 craters with depth > 50 at any depth/model; deepest 20980
+dncgp: 68 big craters; new vs control 0, gone 0; matched 68 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 1525 craters with depth > 50 at any depth/model; deepest 20980
+sd1: 68 big craters; new vs control 0, gone 0; matched 68 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 1525 craters with depth > 50 at any depth/model; deepest 20980
+sd1p: 68 big craters; new vs control 0, gone 0; matched 68 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 1525 craters with depth > 50 at any depth/model; deepest 20980
+
+################ rescue on in both arms: control dncgp, treatment sd1p; same four render levels
+dq4mkrdncgp: 8 big craters; 88 craters with depth > 50 at any depth/model; deepest 199
+dq4mkrsd1p: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+ee8dq4mkrdncgp: 8 big craters; 88 craters with depth > 50 at any depth/model; deepest 199
+ee8dq4mkrsd1p: 8 big craters; new vs control 0, gone 0; matched 8 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 88 craters with depth > 50 at any depth/model; deepest 199
+mkrdncgp: 32 big craters; 117 craters with depth > 50 at any depth/model; deepest 308
+mkrsd1p: 32 big craters; new vs control 0, gone 0; matched 32 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 117 craters with depth > 50 at any depth/model; deepest 308
+dncgp: 68 big craters; 1525 craters with depth > 50 at any depth/model; deepest 20980
+sd1p: 68 big craters; new vs control 0, gone 0; matched 68 with depth change median +0.00, min +0.0, max +0.0 MJy/sr; 1525 craters with depth > 50 at any depth/model; deepest 20980
+
+################ the craters that the added rows create or remove at the DQ_SAT dilation level (sd1 against dncg, sd1p against dncgp), with the distance to the nearest added seed row
+nrca added rows 1 5
+nrcb added rows 2 4
+dq4mkrdncg -> dq4mkrsd1: 0 new, 0 gone big craters (3 px); added seed rows 12
+nrca added rows 1 5
+nrcb added rows 2 4
+dq4mkrdncgp -> dq4mkrsd1p: 0 new, 0 gone big craters (3 px); added seed rows 12

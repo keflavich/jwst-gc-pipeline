@@ -1,0 +1,11 @@
+# o118 F480M: the added seed rows against the rows of the merged catalogs of the control (dncg) and the treatment (sd1).
+# 'new row' = no control row within 0.1 arcsec; 'row existed' = the control had a row within 0.1 arcsec; flux column = flux_fit_avg.
+
+nrca added rows 6 3
+nrcb added rows 9 7
+seed flux column flux added rows 25
+exempt {'new row': 13, 'row existed': 2}
+   new row           n  13; merged flux_fit_avg median     694.9; control-row flux median       nan; seed flux median     695.3; nearest-row sep median 0.000"
+   row existed       n   2; merged flux_fit_avg median     320.9; control-row flux median     421.3; seed flux median     482.7; nearest-row sep median 0.000"
+relaxed {'new row': 10}
+   new row           n  10; merged flux_fit_avg median    1455.9; control-row flux median       nan; seed flux median    1038.4; nearest-row sep median 0.001"

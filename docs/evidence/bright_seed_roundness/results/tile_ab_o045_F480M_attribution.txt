@@ -1,0 +1,66 @@
+################ control dncg -> sd1 (DQ_SAT dilation 3 px, no edge band)
+nrca added rows 22 2
+nrcb added rows 41 2
+added seed rows 67 {'exempt': 63, 'relaxed': 4}
+dq3mkrdncg -> dq3mkrsd1: 3 control leftovers >= 100.0 MJy/sr cleared (no treatment leftover within 3.0 px)
+   x     y   peak  class                  nearest added seed (origin, mod, sep arcsec, seed_origin)
+ 1048   755    616  NOT_IN_M7_CATALOG      relaxed  nrca 0.047" i2d
+ 2783   958    444  NOT_IN_M7_CATALOG      relaxed  nrca 0.005" i2d
+ 3887   207    201  NOT_IN_M7_CATALOG      relaxed  nrcb 0.022" i2d
+attribution counts {'exempt': 0, 'relaxed': 3, 'none': 0}
+added seed rows that sit under a cleared leftover: 3 of 67
+
+################ rescue on in both arms: control dncgp -> sd1p
+nrca added rows 22 2
+nrcb added rows 41 2
+added seed rows 67 {'exempt': 63, 'relaxed': 4}
+dq3mkrdncgp -> dq3mkrsd1p: 3 control leftovers >= 100.0 MJy/sr cleared (no treatment leftover within 3.0 px)
+   x     y   peak  class                  nearest added seed (origin, mod, sep arcsec, seed_origin)
+ 1048   755    616  NOT_IN_M7_CATALOG      relaxed  nrca 0.047" i2d
+ 2783   958    444  NOT_IN_M7_CATALOG      relaxed  nrca 0.005" i2d
+ 3887   207    201  NOT_IN_M7_CATALOG      relaxed  nrcb 0.022" i2d
+attribution counts {'exempt': 0, 'relaxed': 3, 'none': 0}
+added seed rows that sit under a cleared leftover: 3 of 67
+
+################ share of the control leftovers >= 100 MJy/sr that sd1 clears, by whether an added row lies within 0.035 arcsec (control dncg; DQ_SAT dilation 3 px)
+nrca added rows 22 2
+nrcb added rows 41 2
+added seed rows 67 {'exempt': 63, 'relaxed': 4}
+dq3mkrdncg -> dq3mkrsd1: 56 control leftovers >= 100.0 MJy/sr; added row within 0.035": 2; cleared in total 3
+  with an added row within radius: 2 leftovers, 2 cleared, 0 persist
+  without an added row within radius: 54 leftovers, 1 cleared, 53 persist
+  radius 0.035": 2 leftovers with an added row, 2 cleared
+  radius 0.1": 3 leftovers with an added row, 3 cleared
+  radius 0.3": 3 leftovers with an added row, 3 cleared
+  radius 1.0": 4 leftovers with an added row, 3 cleared
+
+################ the same with the edge band of 6 px
+nrca added rows 22 2
+nrcb added rows 41 2
+added seed rows 67 {'exempt': 63, 'relaxed': 4}
+ee6dq3mkrdncg -> ee6dq3mkrsd1: 52 control leftovers >= 100.0 MJy/sr; added row within 0.035": 2; cleared in total 3
+  with an added row within radius: 2 leftovers, 2 cleared, 0 persist
+  without an added row within radius: 50 leftovers, 1 cleared, 49 persist
+  radius 0.035": 2 leftovers with an added row, 2 cleared
+  radius 0.1": 3 leftovers with an added row, 3 cleared
+  radius 0.3": 3 leftovers with an added row, 3 cleared
+  radius 1.0": 4 leftovers with an added row, 3 cleared
+
+################ the leftovers that the #1365 rescue clears (dncgp against dncg), by whether an added row lies within 0.035 arcsec (DQ_SAT dilation 3 px)
+nrca added rows 22 2
+nrcb added rows 41 2
+added seed rows 67 {'exempt': 63, 'relaxed': 4}
+dq3mkrdncg -> dq3mkrdncgp: 56 control leftovers >= 100.0 MJy/sr; added row within 0.035": 2; cleared in total 0
+  with an added row within radius: 2 leftovers, 0 cleared, 2 persist
+  without an added row within radius: 54 leftovers, 0 cleared, 54 persist
+  persists under an added relaxed row (0.005"): (2783, 958) peak 444 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.022"): (3887, 207) peak 201 NOT_IN_M7_CATALOG
+  radius 0.035": 2 leftovers with an added row, 0 cleared
+  radius 0.1": 3 leftovers with an added row, 0 cleared
+  radius 0.3": 3 leftovers with an added row, 0 cleared
+  radius 1.0": 4 leftovers with an added row, 0 cleared
+
+################ the leftovers that the #1365 rescue clears, with and without the added rows (dncgp against dncg, sd1p against sd1)
+dq3mkr: rescue clears 0 of the dncg leftovers >= 100 and 0 of the sd1 leftovers >= 100
+sd1p-cleared positions with a dncgp-cleared position within 3 px: 0 of 0
+dncgp-cleared positions with a sd1p-cleared position within 3 px: 0 of 0

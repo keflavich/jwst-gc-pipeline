@@ -166,6 +166,20 @@ MANUAL_DEFAULTS = {
     # (docs/evidence/faint_defaults_on).
     'manual_seed_round_loose_max': 0.0,
     'manual_seed_round_loose_prom_min': 5.0,
+    # opt-in (0 = off; the m7 seed only): roundness beyond the tight and loose
+    # windows, up to +-x, admitted only for bright, prominent detections that
+    # the previous catalog left in the residual: ERR S/N >=
+    # manual_seed_round_bright_snr_min AND annulus prominence >=
+    # manual_seed_round_bright_prom_min AND residual peak / data peak >=
+    # manual_seed_round_bright_frac_min AND width across the short axis >=
+    # manual_seed_round_bright_width_min x the PSF standard deviation (a streak
+    # or a single-pixel spike is thinner than a star; 0 = no cut).  No AUTO
+    # value.
+    'manual_seed_round_bright_max': 0.0,
+    'manual_seed_round_bright_snr_min': 100.0,
+    'manual_seed_round_bright_prom_min': 50.0,
+    'manual_seed_round_bright_frac_min': 0.9,
+    'manual_seed_round_bright_width_min': 0.60,
     'manual_seed_sharp_lo': 0.4,
     'manual_seed_sharp_hi': 1.2,
     # -- per-pass prominence reject (ext-emission NIRCam; 0 = off)

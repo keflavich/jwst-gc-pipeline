@@ -53,6 +53,7 @@ from jwst_gc_pipeline.photometry.observation_merge import (
     merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import (
     MANUAL_DEFAULTS, manual_group_fit_enabled, mopt)
+from jwst_gc_pipeline.photometry.band_option import band_mopt
 from jwst_gc_pipeline.photometry.perframe_write_guard import (
     recorded_source_exposure)
 from jwst_gc_pipeline.photometry.requested_filters import (
@@ -7068,6 +7069,109 @@ def _annulus_prominence(image, x, y, *, half=10, core_r=1.5, ann_in=4):
     return out
 
 
+def _peak_fraction(resid, data, x, y):
+    """3x3 maximum of ``resid`` over the 3x3 maximum of ``data`` at each (x, y)
+    (two images on one grid, NaN ignored): the part of a source's peak that is
+    still in the residual.  NaN when either maximum is not finite, when the
+    data maximum is not positive, or off the image."""
+    ny, nx = resid.shape
+    out = np.full(len(x), np.nan)
+    for i, (xi, yi) in enumerate(zip(x, y)):
+        if not (np.isfinite(xi) and np.isfinite(yi)):
+            continue
+        ix, iy = int(round(float(xi))), int(round(float(yi)))
+        if not (0 <= ix < nx and 0 <= iy < ny):
+            continue
+        sl = (slice(max(iy - 1, 0), iy + 2), slice(max(ix - 1, 0), ix + 2))
+        r, d = resid[sl], data[sl]
+        if not (np.isfinite(r).any() and np.isfinite(d).any()):
+            continue
+        dmax = np.nanmax(d)
+        if dmax > 0:
+            out[i] = np.nanmax(r) / dmax
+    return out
+
+
+# the bright roundness window keeps no detection within this many pixels of a
+# hole of at least this many masked pixels: the rim of a saturated core or the
+# edge of the data, where the previous catalog subtracted nothing
+_BRIGHT_HOLE_MIN_AREA = 20
+_BRIGHT_HOLE_RADIUS_PX = 4.0
+
+
+def _near_large_hole(mask, x, y, min_area=_BRIGHT_HOLE_MIN_AREA,
+                     radius=_BRIGHT_HOLE_RADIUS_PX):
+    """Whether each (x, y) (pixel coordinates) lies within ``radius`` pixels of
+    a pixel of a hole: an 8-connected blob of at least ``min_area`` True pixels
+    of ``mask``.  False for a position that is not finite or lies off the image."""
+    from scipy import ndimage
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    out = np.zeros(len(x), dtype=bool)
+    lab, n = ndimage.label(np.asarray(mask, dtype=bool), structure=np.ones((3, 3), dtype=int))
+    if n == 0:
+        return out
+    big = np.bincount(lab.ravel(), minlength=n + 1) >= int(min_area)
+    big[0] = False
+    holes = big[lab]
+    if not holes.any():
+        return out
+    ny, nx = holes.shape
+    r = int(np.ceil(radius))
+    gy, gx = np.mgrid[-r:r + 1, -r:r + 1]
+    disk = np.hypot(gx, gy) < radius
+    for i, (xi, yi) in enumerate(zip(x, y)):
+        if not (np.isfinite(xi) and np.isfinite(yi)):
+            continue
+        ix, iy = int(round(float(xi))), int(round(float(yi)))
+        y0, y1 = max(iy - r, 0), min(iy + r + 1, ny)
+        x0, x1 = max(ix - r, 0), min(ix + r + 1, nx)
+        if y0 >= y1 or x0 >= x1:
+            continue
+        out[i] = bool((holes[y0:y1, x0:x1]
+                       & disk[y0 - (iy - r):y1 - (iy - r), x0 - (ix - r):x1 - (ix - r)]).any())
+    return out
+
+
+def _minor_axis_sigma(img, x, y, half=7, level=0.25):
+    """Width across the short axis of the source at each (x, y), in pixels of
+    ``img``: the square root of the smaller eigenvalue of the covariance of the
+    pixel positions, weighted by the pixel values, of the 8-connected pixels at
+    or above ``level`` of the 3x3 maximum around (x, y), inside the
+    (2 ``half`` + 1)-pixel square window centred there.  A star of the PSF
+    width has 0.65-0.9 of its PSF standard deviation (Gaussian stars, peak S/N
+    30 to noiseless); a streak one pixel wide, a pair of
+    adjacent hot pixels and a single-pixel spike have a smaller one (0 when the
+    component has at most two pixels).  NaN when the window is not inside the
+    image, or the 3x3 maximum is not finite and positive."""
+    from scipy import ndimage
+    ny, nx = img.shape
+    out = np.full(len(x), np.nan)
+    for i, (xi, yi) in enumerate(zip(x, y)):
+        if not (np.isfinite(xi) and np.isfinite(yi)):
+            continue
+        ix, iy = int(round(float(xi))), int(round(float(yi)))
+        if ix - half < 0 or iy - half < 0 or ix + half >= nx or iy + half >= ny:
+            continue
+        cut = img[iy - half:iy + half + 1, ix - half:ix + half + 1]
+        core = cut[half - 1:half + 2, half - 1:half + 2]
+        if not np.isfinite(core).any():
+            continue
+        peak = np.nanmax(core)
+        if not peak > 0:
+            continue
+        py, px = np.unravel_index(np.nanargmax(core), core.shape)
+        lab, _ = ndimage.label(cut >= level * peak, structure=np.ones((3, 3), dtype=int))
+        sel = lab == lab[py + half - 1, px + half - 1]
+        if sel.sum() <= 2:
+            out[i] = 0.0
+            continue
+        yy, xx = np.nonzero(sel)
+        cov = np.cov(np.vstack([xx, yy]), aweights=cut[sel])
+        out[i] = np.sqrt(max(np.linalg.eigvalsh(cov)[0], 0.0))
+    return out
+
+
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
@@ -7075,6 +7179,10 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                               coarse_bg_box=0, seed_struct_protect_snr=8.0,
                               noise_floor_box=0, noise_floor_k=5.0,
                               round_loose_max=0.0, round_loose_prom_min=5.0,
+                              round_bright_max=0.0, round_bright_snr_min=100.0,
+                              round_bright_prom_min=50.0, round_bright_frac_min=0.9,
+                              round_bright_width_min=0.60,
+                              data_i2d_path=None,
                               label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
@@ -7115,6 +7223,55 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     ``seed_round_loose`` = True in the seed catalog; rows carried over from
     ``prev_vetted_path`` are False.
 
+    ``round_bright_max`` > the outer edge of the tight and loose windows
+    (opt-in; default 0 = off): also admit detections with roundness beyond that
+    edge, up to +-``round_bright_max``, when they are bright and prominent:
+    ERR S/N (peak / i2d ERR at the detection) >= ``round_bright_snr_min``,
+    annulus prominence >= ``round_bright_prom_min`` and unsubtracted fraction
+    >= ``round_bright_frac_min``: the 3x3 maximum of the detection image over
+    the 3x3 maximum of ``data_i2d_path`` (the data co-add on the same grid),
+    both after the same background subtraction, which is the part of the
+    source's peak that the previous catalog left in the residual.  The S/N and
+    prominence floors alone pass the residual lobes of subtracted stars and the
+    lumps around saturated cores; the fraction separates them.  In the Brick
+    o045 F480M m6 residual (the m7 detection image), 114 detections have
+    roundness <= 1.5, ERR S/N >= 100 and prominence >= 50: 4 have a fraction of
+    0.94-1.00 and 110 have 0.12-0.84 (median 0.47).  The rim of a hole of the
+    detection image (the edge of a saturated core, the edge of the data) is
+    unsubtracted as well, so a detection within 4 pixels of a hole of 20 or
+    more masked pixels (8-connected) is dropped too: Brick o138 F480M nrcb
+    (5614, 412) has a fraction of 0.98 and a peak of 2163 MJy/sr 1.0 pixel from
+    a hole of 156 pixels.  A single masked pixel beside a star does not count
+    (Brick o045 F480M nrcb (5332, 2213) has one 1.4 pixels from its peak).  A
+    thin streak or a single-pixel spike passes the other tests and is not a star:
+    the width across the short axis of the detection (``_minor_axis_sigma``)
+    must be >= ``round_bright_width_min`` times the PSF standard deviation
+    (FWHM / 2.355; 0 = no cut).  A Gaussian star of the PSF width measures
+    0.65-0.9 of its standard deviation at peak S/N 30-100 (400 sub-pixel
+    positions each); a compact source narrower than the PSF measures less.  Of
+    the Brick candidates that reach the width gate (five tiles, every ERR S/N),
+    6 of 37 (F480M) and 11 of 160 (F212N) measure 0-0.57 and 0-0.58 of the PSF
+    standard deviation; the others measure 0.70-1.25 and 0.63-1.87.  In the
+    cutouts most of those 17 are single pixels, or lines and bars one or two
+    pixels wide; the few compact blobs among them look like the candidates
+    just above the cut, so the cut cannot separate a compact source from a faint
+    star.  The S/N and prominence floors are far above the ones of the
+    loose window (5 and 5), and the sharpness bounds stay as for the other
+    windows.  The ERR S/N floor acts as a flux floor and the ERR differs between
+    the bands: of the Brick candidates that pass the other tests 27 of 31
+    (F480M) and 3 of 149 (F212N) pass 100, and 31 and 132 pass 30, so F212N
+    wants ``round_bright_snr_min`` = 30.  The option takes a value per band
+    (``--manual-seed-round-bright-snr-min F212N=30,F480M=100``; see
+    :func:`band_option.parse_band_values`) and the caller passes this function
+    the value of ``filtername``; the seed catalog records it as ``RBSNRMIN``
+    when the window is on.  A run without an ERR plane, without a
+    ``data_i2d_path`` that exists, or with a data co-add of another shape gets
+    no bright detection (a gate cannot be applied, so the class is dropped).
+    Admitted detections carry ``seed_round_bright`` = True in the seed catalog,
+    a column that exists only when the window is on; ``seed_round_loose`` is
+    then True only for the detections inside the loose window.  Measurements
+    per tile and band: docs/evidence/bright_seed_roundness/README.md.
+
     The i2d cutouts are drizzled at the native detector scale (0.063"/px), so the
     per-frame pixel FWHM applies unchanged.  Returns the seed-catalog path.
     """
@@ -7140,6 +7297,9 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     mask = ~np.isfinite(data)
     if wht is not None:
         mask |= ~np.isfinite(wht) | (wht <= 0)
+    # the detection image before any background subtraction: the data co-add of
+    # the bright roundness window gets the same subtraction
+    data_before = data.copy() if (float(round_bright_max) > 0 and data_i2d_path) else None
     # iter5: also subtract the diffuse background so faint sources sitting on
     # nebulosity become local maxima (same grid as the residual i2d)
     if bg_subtract_path and os.path.exists(bg_subtract_path):
@@ -7164,6 +7324,22 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
         print(f"[{label}] coarse-bg detection: subtracted {int(coarse_bg_box)}px median",
               flush=True)
     pixscale_as = float(np.sqrt(np.abs(np.linalg.det(ww_i2d.pixel_scale_matrix))) * 3600.0)
+    data_ref = None
+    if data_before is not None:
+        if not os.path.exists(data_i2d_path):
+            print(f"[{label}] bright roundness: data co-add {os.path.basename(data_i2d_path)} "
+                  f"is missing", flush=True)
+        else:
+            with fits.open(data_i2d_path) as rh:
+                rn = [h.name for h in rh]
+                dref = np.asarray((rh['SCI'] if 'SCI' in rn else rh[0]).data, dtype=float)
+            if dref.shape == data.shape:
+                data_ref = dref - (data_before - data)
+            else:
+                print(f"[{label}] bright roundness: data co-add shape {dref.shape} != "
+                      f"{data.shape}", flush=True)
+            del dref
+        del data_before
 
     # Detection threshold from the local-noise floor (as _build_manual_seed),
     # but the S/N CUT uses the i2d's propagated ERR -- not the empirical
@@ -7175,31 +7351,92 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     finite = np.isfinite(noise_map) & (noise_map > 0)
     if not np.any(finite):
         raise ValueError(f"[{label}] i2d local noise map has no positive finite values")
-    _loose = float(round_loose_max) > max(abs(roundlo), abs(roundhi))
+    _tight = max(abs(roundlo), abs(roundhi))
+    _loose = float(round_loose_max) > _tight
+    # the outer edge of the windows whose only extra gate is the prominence
+    _inner = float(round_loose_max) if _loose else _tight
+    _bright = float(round_bright_max) > _inner
+    if _bright:
+        _wide = float(round_bright_max)
+    elif _loose:
+        _wide = float(round_loose_max)
+    else:
+        _wide = None
     det = _daofind_emission_floor(
         np.where(mask, 0.0, data), noise_map, mask, fwhm_pix,
-        roundlo=-float(round_loose_max) if _loose else roundlo,
-        roundhi=float(round_loose_max) if _loose else roundhi,
+        roundlo=roundlo if _wide is None else -_wide,
+        roundhi=roundhi if _wide is None else _wide,
         sharplo=sharplo, sharphi=sharphi,
         noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k, label=label)
-    if _loose and len(det):
+    if _wide is not None and len(det):
         # the detections outside the tight bound must rise above local structure
         _rc = [c for c in ('roundness1', 'roundness2') if c in det.colnames]
         _r1 = (np.asarray(det[_rc[0]], dtype=float) if _rc else np.zeros(len(det)))
         _r2 = (np.asarray(det[_rc[1]], dtype=float) if len(_rc) > 1 else _r1)
         outside = ((_r1 < roundlo) | (_r1 > roundhi) | (_r2 < roundlo) | (_r2 > roundhi))
+        # beyond the loose window: the bright class, which also needs the ERR S/N
+        # gate below (its prominence floor is higher)
+        beyond = (outside & ((np.abs(_r1) > _inner) | (np.abs(_r2) > _inner))
+                  if _bright else np.zeros(len(det), dtype=bool))
+        loose_only = outside & ~beyond
         if np.any(outside):
             xo, yo = _L._best_available_xy(det[outside])
             prom = _annulus_prominence(np.where(mask, np.nan, data),
                                        np.asarray(xo, float), np.asarray(yo, float))
+            prom_floor = np.where(beyond[outside], float(round_bright_prom_min),
+                                  float(round_loose_prom_min))
             ok = np.ones(len(det), dtype=bool)
-            ok[np.where(outside)[0]] = np.isfinite(prom) & (prom >= float(round_loose_prom_min))
-            print(f"[{label}] i2d daofind loose roundness: {int(outside.sum())} "
-                  f"detection(s) with roundness in ({roundhi:g},{float(round_loose_max):g}], "
-                  f"{int(ok[outside].sum())} kept at prominence >= "
-                  f"{float(round_loose_prom_min):g}", flush=True)
-            det['seed_round_loose'] = outside
+            ok[np.where(outside)[0]] = np.isfinite(prom) & (prom >= prom_floor)
+            n_prom = n_hole = int(ok[beyond].sum())
+            if _bright and np.any(beyond):
+                # only a source that the previous catalog left in the residual
+                if data_ref is None:
+                    ok[beyond] = False
+                else:
+                    xb, yb = _L._best_available_xy(det[beyond])
+                    frac = _peak_fraction(data, data_ref, np.asarray(xb, float),
+                                          np.asarray(yb, float))
+                    ok[np.where(beyond)[0]] &= (np.isfinite(frac)
+                                                & (frac >= float(round_bright_frac_min)))
+                    # the unsubtracted rim of a hole (saturated core, edge of the
+                    # data) has a fraction near 1 as well
+                    _keep = np.where(beyond)[0]
+                    _keep = _keep[ok[_keep]]
+                    if len(_keep):
+                        xk, yk = _L._best_available_xy(det[_keep])
+                        ok[_keep] &= ~_near_large_hole(mask, xk, yk)
+                    n_hole = int(ok[beyond].sum())
+                    # a streak or a single-pixel spike is thinner than any star
+                    _keep = _keep[ok[_keep]]
+                    if len(_keep) and float(round_bright_width_min) > 0:
+                        xk, yk = _L._best_available_xy(det[_keep])
+                        width = _minor_axis_sigma(data, np.asarray(xk, float),
+                                                  np.asarray(yk, float))
+                        ok[_keep] &= (np.isfinite(width)
+                                      & (width >= float(round_bright_width_min)
+                                         * fwhm_pix / 2.355))
+            if _loose:
+                print(f"[{label}] i2d daofind loose roundness: {int(loose_only.sum())} "
+                      f"detection(s) with roundness in ({roundhi:g},{_inner:g}], "
+                      f"{int(ok[loose_only].sum())} kept at prominence >= "
+                      f"{float(round_loose_prom_min):g}", flush=True)
+            if _bright:
+                print(f"[{label}] i2d daofind bright roundness: {int(beyond.sum())} "
+                      f"detection(s) with roundness in ({_inner:g},{_wide:g}], "
+                      f"{n_prom} kept at prominence >= {float(round_bright_prom_min):g}, "
+                      f"{n_hole} at unsubtracted fraction >= "
+                      f"{float(round_bright_frac_min):g} and >= {_BRIGHT_HOLE_RADIUS_PX:g} px "
+                      f"from a hole of {_BRIGHT_HOLE_MIN_AREA} masked px, "
+                      f"{int(ok[beyond].sum())} at width >= "
+                      f"{float(round_bright_width_min):g} PSF sigma"
+                      + ('' if data_ref is not None else ' (no data co-add: none kept)'),
+                      flush=True)
+                det['seed_round_bright'] = beyond
+            det['seed_round_loose'] = loose_only
             det = det[ok]
+        elif _bright:
+            det['seed_round_bright'] = beyond
+            det['seed_round_loose'] = loose_only
     n_raw = len(det)
     if len(det):
         if err is not None:
@@ -7208,7 +7445,22 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
             det, _ = annotate_and_filter_by_local_snr(
                 det, snr_map, snr_threshold=local_snr_min)
             snr_basis = f'ERR S/N>={local_snr_min}'
+            if _bright and len(det):
+                # the bright class is admitted at the higher ERR S/N only
+                _b = np.asarray(det['seed_round_bright'], dtype=bool)
+                _hi = np.asarray(det['local_snr'], dtype=float) >= float(round_bright_snr_min)
+                print(f"[{label}] i2d daofind bright roundness: {int(_b.sum())} "
+                      f"detection(s) at ERR S/N >= {local_snr_min:g}, "
+                      f"{int((_b & _hi).sum())} kept at ERR S/N >= "
+                      f"{float(round_bright_snr_min):g}", flush=True)
+                det = det[~_b | _hi]
         else:
+            if _bright and len(det):
+                # no ERR plane: the S/N gate cannot be applied, so the class is dropped
+                _b = np.asarray(det['seed_round_bright'], dtype=bool)
+                print(f"[{label}] i2d daofind bright roundness: no ERR plane, "
+                      f"{int(_b.sum())} detection(s) dropped", flush=True)
+                det = det[~_b]
             det, _ = annotate_and_filter_by_local_snr(det, noise_map, snr_threshold=0.0)
             snr_basis = 'no ERR -> no S/N cut'
     else:
@@ -7308,9 +7560,19 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                   else np.zeros(n_new, dtype=bool))
     out['seed_round_loose'] = np.concatenate([np.zeros(len(all_flux) - n_new, dtype=bool),
                                               _det_loose])
+    if _bright:
+        # only written with the window on, so the default seed table is unchanged
+        _det_bright = (np.asarray(det['seed_round_bright'], dtype=bool)[fresh]
+                       if n_new and 'seed_round_bright' in det.colnames
+                       else np.zeros(n_new, dtype=bool))
+        out['seed_round_bright'] = np.concatenate([np.zeros(len(all_flux) - n_new, dtype=bool),
+                                                   _det_bright])
     # every 'i2d' row is at least this far from every prev seed
     # (annotate_independent_detection matches them back at this radius)
     out.meta['DEDUPMAS'] = float(match_as * 1e3)
+    if _bright:
+        # the ERR S/N floor of this band, only with the window on (see seed_round_bright)
+        out.meta['RBSNRMIN'] = float(round_bright_snr_min)
     # keyed by (filter, module), not by shard -- see write_table_atomic
     write_table_atomic(out, outpath)
     print(f"[{label}] i2d-augmented seed: {len(prev_sky)} prev + {n_new} new i2d "
@@ -12076,6 +12338,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # the catalog the i2d detections are added to: the
                     # previous phase's vetted catalog, or m7's band seed
                     _aug_base = prev_seed if phase == 'm7' else vetted_prev
+                    # the bright window is for the final seed only; its ERR S/N
+                    # floor is the value of this band (read before the try: a bad
+                    # value must stop the run, not be swallowed by the except)
+                    _rb_max = (float(mopt(opts_phase, 'manual_seed_round_bright_max'))
+                               if phase == 'm7' else 0.0)
+                    _rb_snr = band_mopt(opts_phase, 'manual_seed_round_bright_snr_min', filt,
+                                        label=f'{phase}:{filt}' if _rb_max > 0 else None)
                     try:
                         _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
                         prev_seed = _build_i2d_augmented_seed(
@@ -12084,6 +12353,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             roundlo=-_sround, roundhi=_sround,
                             round_loose_max=_sround_loose,
                             round_loose_prom_min=float(mopt(opts_phase, 'manual_seed_round_loose_prom_min')),
+                            round_bright_max=_rb_max,
+                            round_bright_snr_min=_rb_snr,
+                            round_bright_prom_min=float(mopt(opts_phase, 'manual_seed_round_bright_prom_min')),
+                            round_bright_frac_min=float(mopt(opts_phase, 'manual_seed_round_bright_frac_min')),
+                            round_bright_width_min=float(mopt(opts_phase, 'manual_seed_round_bright_width_min')),
+                            data_i2d_path=_data_i2d_path(module, filt),
                             sharplo=float(mopt(opts_phase, 'manual_seed_sharp_lo')),
                             sharphi=float(mopt(opts_phase, 'manual_seed_sharp_hi')),
                             bg_subtract_path=bg_sub,

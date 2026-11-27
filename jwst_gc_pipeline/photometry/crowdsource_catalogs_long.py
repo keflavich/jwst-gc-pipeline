@@ -16,6 +16,7 @@ from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+from jwst_gc_pipeline.photometry.band_option import band_option_callback
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
@@ -5204,6 +5205,42 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-seed-round-loose-prom-min", dest="manual_seed_round_loose_prom_min",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_loose_prom_min'],
                     help="Prominence floor of the loose-roundness i2d seeds (default 5).")
+    parser.add_option("--manual-seed-round-bright-max", dest="manual_seed_round_bright_max",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_max'],
+                    help="Also admit i2d residual-seed detections with roundness beyond "
+                         "the tight and loose windows, up to +-x, but only bright and "
+                         "prominent ones that the previous catalog left in the residual: "
+                         "ERR S/N >= --manual-seed-round-bright-snr-min, annulus "
+                         "prominence >= --manual-seed-round-bright-prom-min and "
+                         "residual peak / data peak >= "
+                         "--manual-seed-round-bright-frac-min and width >= "
+                         "--manual-seed-round-bright-width-min.  Applies to the m7 seed "
+                         "only.  Default 0 = off.  A run whose detection image has no "
+                         "ERR plane or whose data co-add is missing gets no such "
+                         "detection.")
+    parser.add_option("--manual-seed-round-bright-snr-min", dest="manual_seed_round_bright_snr_min",
+                    type='string', action='callback', callback=band_option_callback,
+                    metavar='VALUE|BAND=VALUE,...',
+                    default=MANUAL_DEFAULTS['manual_seed_round_bright_snr_min'],
+                    help="ERR S/N floor of the bright-roundness i2d seeds (default 100).  A "
+                         "number applies to every band; BAND=VALUE pairs (F212N=30,F480M=100) "
+                         "set the bands they name and leave every other band at the default.  "
+                         "The ERR differs between the bands: 30 suits F212N, and F480M keeps "
+                         "the default 100 (docs/evidence/bright_seed_roundness).")
+    parser.add_option("--manual-seed-round-bright-prom-min", dest="manual_seed_round_bright_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_prom_min'],
+                    help="Prominence floor of the bright-roundness i2d seeds (default 50).")
+    parser.add_option("--manual-seed-round-bright-frac-min", dest="manual_seed_round_bright_frac_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_frac_min'],
+                    help="Floor of the unsubtracted fraction (3x3 peak of the detection image "
+                         "over the 3x3 peak of the data co-add, both background-subtracted) of "
+                         "the bright-roundness i2d seeds (default 0.9).")
+    parser.add_option("--manual-seed-round-bright-width-min", dest="manual_seed_round_bright_width_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_bright_width_min'],
+                    help="Floor of the width across the short axis of a bright-roundness "
+                         "i2d seed, in units of the PSF standard deviation (FWHM / 2.355; "
+                         "default 0.60): a streak or a single-pixel spike is thinner than "
+                         "a star.  0 = no cut.")
     parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_lo'],
                     help="DAOStarFinder sharpness lower bound for the residual seed "

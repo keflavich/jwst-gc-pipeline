@@ -1,0 +1,79 @@
+# o105 F212N, 48 frames: frame-catalog and merged-catalog differences between replay arms.
+# Each line group: control frame dir vs treatment frame dir, then combined merged catalogs.  'added rows' = treatment fit rows with no control row within 0.5 px;
+# 'junk' = qfit > 0.3 or flux < 100; 'matched rows with flux change' = rows within 0.5 px whose fitted flux differs by more than 1 %.
+
+## production seed, #1366 off (dnc) -> production seed, #1366 on (dnp3): the effect of #1366 alone (same saturated-star PSF grid state)
+frames 48; control rows 2242668; treatment rows 2244286
+added rows 1739: >=1e4 143, 1e3-1e4 224, 100-1e3 764, <100 608; junk (qfit>0.3 or flux<100) 783
+control rows with no treatment row within 0.5 px: 121 (>=1e3 12, <1e3 109); matched rows with flux change >1 %: 376
+combined: control rows 573653, treatment rows 573832; rows new in treatment (no control row within 0.1 arcsec) 111 (flux_fit_avg >=1000: 41); control rows with no treatment row 3 (>=1000: 2)
+
+## production seed, #1366 on (dnp3) -> union seed, #1366 on (sd1): the seed rows plus a different saturated-star PSF grid state
+frames 48; control rows 2244286; treatment rows 2244642
+added rows 3544: >=1e4 8, 1e3-1e4 344, 100-1e3 1765, <100 1427; junk (qfit>0.3 or flux<100) 2910
+control rows with no treatment row within 0.5 px: 3189 (>=1e3 126, <1e3 3063); matched rows with flux change >1 %: 145405
+combined: control rows 573832, treatment rows 573870; rows new in treatment (no control row within 0.1 arcsec) 603 (flux_fit_avg >=1000: 86); control rows with no treatment row 588 (>=1000: 22)
+
+## where the differences of the second comparison lie relative to the 81 added seed rows (frame rows within a radius of an added row, shares of all rows of that kind)
+{'nrca': 30, 'nrcb': 51}
+frames 48; control rows 2244286; lost 3189; added 3544; flux changed >1 % 145405
+radius [arcsec]          0.15      0.50      1.00      3.00
+all    within radius      117      2076      9623     91572
+       share of total    0.0001    0.0009    0.0043    0.0408
+lost   within radius       10        11        17       111
+       share of total    0.0031    0.0034    0.0053    0.0348
+added  within radius      277       283       295       399
+       share of total    0.0782    0.0799    0.0832    0.1126
+chg    within radius       59       231       681      5906
+       share of total    0.0004    0.0016    0.0047    0.0406
+
+## EPSFSHFT (header keyword of the frame catalogs, mpix) of the three replay sets: dc = production seed #1366 off, dn = production seed #1366 on, sd = union seed #1366 on
+## 8 values per set = 8 detectors (nrca1-4, nrcb1-4) x 6 exposures each; the dc and dn replays rebuilt the saturated-star PSF grid, the sd replays loaded the grid cached by the production run
+rpl_dc105 n 48 distinct EPSFSHFT {44.70617817659753: 6, 26.200087962190224: 6, 35.25068213102654: 6, 29.33852226509462: 6, 62.06462967620877: 6, 62.37128856354881: 6, 69.19783485470963: 6, 64.37461224948808: 6} nrca1 exp1 ('f212n_nrca1_o105_visit001_vgroup02101_ex', 44.70617817659753)
+rpl_dn105 n 48 distinct EPSFSHFT {44.70617817659753: 6, 26.200087962190224: 6, 35.25068213102654: 6, 29.33852226509462: 6, 62.06462967620877: 6, 62.37128856354881: 6, 69.19783485470963: 6, 64.37461224948808: 6} nrca1 exp1 ('f212n_nrca1_o105_visit001_vgroup02101_ex', 44.70617817659753)
+rpl_sd105 n 48 distinct EPSFSHFT {45.207749426412995: 6, 26.570365569381455: 6, 35.70367979662391: 6, 29.778458703409676: 6, 62.4246432714379: 6, 62.706226800487705: 6, 69.57427346109766: 6, 64.71764243331177: 6} nrca1 exp1 ('f212n_nrca1_o105_visit001_vgroup02101_ex', 45.207749426412995)
+
+## production seed, #1366 on: PSF grid cached (dncg, control) -> rebuilt (dnp3, treatment): the effect of the saturated-star PSF grid state alone; distance of the differing frame rows from the 81 added rows of the union seed
+{'nrca': 30, 'nrcb': 51}
+frames 48; control rows 2244374; lost 3265; added 3178; flux changed >1 % 145316
+radius [arcsec]          0.15      0.50      1.00      3.00
+all    within radius      117      2079      9634     91589
+       share of total    0.0001    0.0009    0.0043    0.0408
+lost   within radius        0         4        16       120
+       share of total    0.0000    0.0012    0.0049    0.0368
+added  within radius        0         0         6       100
+       share of total    0.0000    0.0000    0.0019    0.0315
+chg    within radius        5       114       563      5770
+       share of total    0.0000    0.0008    0.0039    0.0397
+
+## production seed -> union seed, both with the cached PSF grid (dncg, control -> sd1, treatment): the effect of the 81 added rows alone; distance of the differing frame rows from the added rows
+{'nrca': 30, 'nrcb': 51}
+frames 48; control rows 2244374; lost 11; added 279; flux changed >1 % 126
+radius [arcsec]          0.15      0.50      1.00      3.00
+all    within radius      117      2079      9634     91589
+       share of total    0.0001    0.0009    0.0043    0.0408
+lost   within radius       10        11        11        11
+       share of total    0.9091    1.0000    1.0000    1.0000
+added  within radius      277       279       279       279
+       share of total    0.9928    1.0000    1.0000    1.0000
+chg    within radius       58       126       126       126
+       share of total    0.4603    1.0000    1.0000    1.0000
+
+## production seed, #1366 off (dc, control) -> on (dn, treatment), both with the rebuilt PSF grid; distance of the differing frame rows from the added rows
+{'nrca': 30, 'nrcb': 51}
+frames 48; control rows 2242668; lost 121; added 1739; flux changed >1 % 376
+radius [arcsec]          0.15      0.50      1.00      3.00
+all    within radius      117      2073      9612     91506
+       share of total    0.0001    0.0009    0.0043    0.0408
+lost   within radius        0         1         1         5
+       share of total    0.0000    0.0083    0.0083    0.0413
+added  within radius        0         4        12        71
+       share of total    0.0000    0.0023    0.0069    0.0408
+chg    within radius        0         1         2        17
+       share of total    0.0000    0.0027    0.0053    0.0452
+
+## EPSFSHFT (mpix) of the replay sets, including cg = production seed #1366 on with the cached grid; same layout as above
+rpl_cg105 n 48 distinct EPSFSHFT {45.207749426412995: 6, 26.570365569381455: 6, 35.70367979662391: 6, 29.778458703409676: 6, 62.4246432714379: 6, 62.706226800487705: 6, 69.57427346109766: 6, 64.71764243331177: 6} nrca1 exp1 ('f212n_nrca1_o105_visit001_vgroup02101_ex', 45.207749426412995)
+rpl_sd105 n 48 distinct EPSFSHFT {45.207749426412995: 6, 26.570365569381455: 6, 35.70367979662391: 6, 29.778458703409676: 6, 62.4246432714379: 6, 62.706226800487705: 6, 69.57427346109766: 6, 64.71764243331177: 6} nrca1 exp1 ('f212n_nrca1_o105_visit001_vgroup02101_ex', 45.207749426412995)
+rpl_dn105 n 48 distinct EPSFSHFT {44.70617817659753: 6, 26.200087962190224: 6, 35.25068213102654: 6, 29.33852226509462: 6, 62.06462967620877: 6, 62.37128856354881: 6, 69.19783485470963: 6, 64.37461224948808: 6} nrca1 exp1 ('f212n_nrca1_o105_visit001_vgroup02101_ex', 44.70617817659753)
+rpl_dc105 n 48 distinct EPSFSHFT {44.70617817659753: 6, 26.200087962190224: 6, 35.25068213102654: 6, 29.33852226509462: 6, 62.06462967620877: 6, 62.37128856354881: 6, 69.19783485470963: 6, 64.37461224948808: 6} nrca1 exp1 ('f212n_nrca1_o105_visit001_vgroup02101_ex', 44.70617817659753)
