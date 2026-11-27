@@ -22,6 +22,10 @@
 #     frame and silently fall back to the un-anchored fit ('sq') when it is
 #     absent, so a scratch tree without them does NOT reproduce a run that has
 #     them.  Any staged `_cal` without a sibling ramp is reported as a WARNING.
+#     Like the `_cal` links, the ramp links are inputs only while the reduction
+#     runs with -s (skip_step1and2): a run that re-fits stage 1/2 regenerates
+#     `_ramp.fits` and `_cal.fits` under these names, which the output-pattern
+#     self-check below does not cover.
 #
 # Usage: stage_scratch_basepath.sh <REAL_BASEPATH> <SCRATCH_BASEPATH> <MODE> <SUFFIX> <FILTER...>
 #   MODE = reduce  -> only *_cal.fits (+ *_ramp.fits) linked (crf/i2d are OUTPUTS of the reduction)
