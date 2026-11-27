@@ -1,0 +1,39 @@
+Rows of the per-frame tables near the craters of features 1 and 2, production table (PROD) and table of the run (RUN).
+Rows within 0.12 arcsec of the crater position with flux 1000 or more. d = distance to the crater position; xy = pixel position; qfit, flags, finit, gs (group size), lbkg (local background), forced (forced refit), ovs, npix as in the table.
+
+### Feature 1: o105 F212N crater (8306, 1270)
+# o105 F212N near (266.6516152,-28.6001715) radius 0.12" min flux 1000.0; 48 frames
+## f212n_nrcb2_o105_visit001_vgroup02101_exp00004  (rows: prod 49992, run 50049)
+   PROD i=46898 d=0.044" xy=(500.9,1126.5) flux=37536.4 qfit=0.0182 flags=0 finit=13769 gs=2 lbkg=2.51 forced=False ovs=False npix=25
+   RUN  i=46937 d=0.044" xy=(500.9,1126.5) flux=37523.2 qfit=0.0197 flags=0 finit=13769 gs=2 lbkg=2.17 forced=False ovs=False npix=25
+## f212n_nrcb2_o105_visit001_vgroup02101_exp00005  (rows: prod 51650, run 51724)
+   PROD i=47492 d=0.060" xy=(502.6,781.4) flux=21023.3 qfit=0.0194 flags=0 finit=13769 gs=2 lbkg=4.38 forced=True ovs=False npix=25
+   RUN  i=47520 d=0.060" xy=(502.6,781.4) flux=21354 qfit=0.0206 flags=0 finit=13769 gs=2 lbkg=3.81 forced=True ovs=False npix=25
+## f212n_nrcb4_o105_visit001_vgroup02101_exp00001  (rows: prod 53074, run 52914)
+   PROD i=48792 d=0.060" xy=(1139.0,778.4) flux=23308.5 qfit=0.0166 flags=0 finit=13769 gs=2 lbkg=4.6 forced=True ovs=False npix=25
+   RUN  i=48679 d=0.045" xy=(1139.4,778.8) flux=38982.5 qfit=0.0171 flags=0 finit=13769 gs=2 lbkg=4.31 forced=False ovs=False npix=25
+## f212n_nrcb4_o105_visit001_vgroup02101_exp00002  (rows: prod 51875, run 51914)
+   PROD i=48758 d=0.060" xy=(1131.3,1122.1) flux=23718.7 qfit=0.0166 flags=0 finit=13769 gs=2 lbkg=2.85 forced=True ovs=False npix=25
+   RUN  i=48762 d=0.046" xy=(1131.6,1122.4) flux=37515.4 qfit=0.0167 flags=0 finit=13769 gs=2 lbkg=2.02 forced=False ovs=False npix=25
+## f212n_nrcb4_o105_visit001_vgroup02101_exp00003  (rows: prod 51661, run 51582)
+   PROD i=48681 d=0.060" xy=(1911.3,1123.8) flux=23197.3 qfit=0.0140 flags=0 finit=13769 gs=2 lbkg=3.63 forced=True ovs=False npix=25
+   RUN  i=48623 d=0.060" xy=(1911.3,1123.8) flux=23709.1 qfit=0.0180 flags=0 finit=13769 gs=2 lbkg=3.41 forced=True ovs=False npix=25
+## f212n_nrcb4_o105_visit001_vgroup02101_exp00006  (rows: prod 51518, run 51560)
+   PROD i=47875 d=0.047" xy=(1917.5,779.8) flux=36195.5 qfit=0.0127 flags=1 finit=13769 gs=2 lbkg=3.69 forced=False ovs=False npix=23
+   RUN  i=47874 d=0.048" xy=(1917.5,779.8) flux=35573.7 qfit=0.0112 flags=1 finit=13769 gs=2 lbkg=3.39 forced=False ovs=False npix=23
+
+### Feature 2: o105 F212N crater (4469, 1280)
+# o105 F212N near (266.6519237,-28.6334488) radius 0.12" min flux 1000.0; 48 frames
+## f212n_nrca3_o105_visit001_vgroup02101_exp00001  (rows: prod 44447, run 44488)
+   PROD i=41694 d=0.049" xy=(707.5,898.2) flux=18878.9 qfit=0.0277 flags=0 finit=8853.9 gs=2 lbkg=5.98 forced=False ovs=False npix=25
+   RUN  i=41693 d=0.048" xy=(707.4,898.2) flux=18866.6 qfit=0.0245 flags=0 finit=8853.9 gs=2 lbkg=6 forced=False ovs=False npix=25
+## f212n_nrca3_o105_visit001_vgroup02101_exp00002  (rows: prod 42878, run 42948)
+   PROD i=40855 d=0.049" xy=(702.5,1242.0) flux=18778.7 qfit=0.0304 flags=0 finit=8853.9 gs=2 lbkg=6.28 forced=False ovs=False npix=25
+   RUN  i=40886 d=0.049" xy=(702.5,1242.0) flux=18707.6 qfit=0.0264 flags=0 finit=8853.9 gs=2 lbkg=6.15 forced=False ovs=False npix=25
+## f212n_nrca3_o105_visit001_vgroup02101_exp00003  (rows: prod 46546, run 46604)
+   PROD i=43969 d=0.049" xy=(1480.5,1242.9) flux=19240.6 qfit=0.0288 flags=0 finit=8853.9 gs=2 lbkg=0.948 forced=False ovs=False npix=25
+   RUN  i=43987 d=0.049" xy=(1480.5,1242.9) flux=18871.8 qfit=0.0261 flags=0 finit=8853.9 gs=2 lbkg=1.07 forced=False ovs=False npix=25
+## f212n_nrca3_o105_visit001_vgroup02101_exp00006  (rows: prod 47844, run 47935)
+   PROD i=44464 d=0.058" xy=(1483.7,899.3) flux=14082.7 qfit=0.0228 flags=0 finit=8853.9 gs=2 lbkg=1.7 forced=True ovs=False npix=25
+   RUN  i=44509 d=0.048" xy=(1483.6,899.6) flux=18835.1 qfit=0.0192 flags=0 finit=8853.9 gs=2 lbkg=1.35 forced=False ovs=False npix=25
+
