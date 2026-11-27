@@ -66,7 +66,7 @@ copy_glob () {  # srcdir dstdir pattern   (COPY things the pipeline may overwrit
   shopt -u nullglob; echo "    copied $n  ($pat)"
 }
 warn_missing_ramps () {  # realdir filter   (a _cal with no sibling _ramp.fits runs un-anchored)
-  local rd="$1" filt="$2" ncal=0 nmiss=0 f b stem
+  local rd="$1" filt="$2" ncal=0 nmiss=0 f b
   [ -d "$rd" ] || return 0
   shopt -s nullglob
   for f in "$rd"/*_cal.fits; do

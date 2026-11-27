@@ -190,6 +190,38 @@ def test_staging_warns_when_a_frame_has_no_ramp(mode):
         shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.mark.parametrize('det', ['nrca1', 'nrcb4'])
+def test_staging_ramp_stem_keeps_the_detector_digit(det):
+    """Short-wavelength frames name the detector 'nrca1'..'nrcb4' (digit last).
+
+    The ramp lookup stem is ``jw<prog>_<visit>_<exp>_<detector>``; a class that
+    stopped at the first digit (``[a-z]+``) would look for ``..._nrca_ramp.fits``
+    and flag every short-wavelength frame as ramp-less.  The staging is
+    filter-agnostic, so the F480M tree stands in for a short-wavelength filter.
+    """
+    root = _underscore_free_root()
+    try:
+        real = Path(root) / 'realbase' / 'w51'
+        pl = real / 'F480M' / 'pipeline'
+        _build_real(real)
+        _touch(pl / f'jw06151001001_03109_00001_{det}_cal.fits')
+        _touch(pl / f'jw06151001001_03109_00001_{det}_ramp.fits')
+
+        r = _stage(real, Path(root) / 'scratchbase' / 'w51', 'catalog')
+        assert r.returncode == 0, f"stage failed:\n{r.stdout}\n{r.stderr}"
+        assert 'WARNING' not in r.stderr, r.stderr   # both frames have their ramp
+        assert (Path(root) / 'scratchbase' / 'w51' / 'F480M' / 'pipeline'
+                / f'jw06151001001_03109_00001_{det}_ramp.fits').is_symlink()
+
+        # without that ramp the digit-named frame is counted, and only it
+        (pl / f'jw06151001001_03109_00001_{det}_ramp.fits').unlink()
+        r = _stage(real, Path(root) / 'scratchbase2' / 'w51', 'catalog')
+        assert r.returncode == 0, f"stage failed:\n{r.stdout}\n{r.stderr}"
+        assert 'WARNING [F480M]: 1 of 2 staged *_cal.fits have no sibling _ramp.fits' in r.stderr, r.stderr
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_staging_warns_when_no_ramps_at_all():
     root = _underscore_free_root()
     try:
