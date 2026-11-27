@@ -42,7 +42,9 @@ the star goes to the daophot channel.  A neighbour of the star, 4.8 px away at
 (1264.48, 634.44), is fitted in the same group there (exposure 6 only), the group fit moves
 it by 0.06 px, and the near-saturation filter then drops the row, which leaves the
 403 MJy/sr leftover at pixel (4452, 858) of the tile render.  The second step belongs to the
-near-saturation distance rule and is the subject of its own switch.
+near-saturation distance rule and is the subject of its own switch
+(`near_saturation_continuous_distance.md`); the replays below show that this switch alone
+does not bring the neighbour back, and that it restores the channel of the star.
 
 ## Measurement
 
@@ -137,6 +139,55 @@ scale above 1, but no value was measured or tested for it.
 * The fit-quality hand-off in `cataloging.py` that compares implied and observed peaks with
   the floor (`DAOPHOT_HANDOFF_FAINT_FIT_QUALITY`) stays unscaled; no o105 F480M row lies
   between the scaled and unscaled gate there.
+
+## One-frame replays
+
+The m7 pass of two o105 F480M frames was replayed with the integration code plus the two
+switches (ePSF core on, every other setting that of the end-to-end control run), with four
+arms: no switch (control), this switch alone, the near-saturation distance switch alone
+(`NEARSAT_CONTINUOUS_DIST`) and both.  The rows are those of the final daophot table (after
+the near-saturation filter) within 3 px of the position, and the satstar rows within
+1 arcsec of the star.
+
+Frame `nrcblong` exposure 6: the F5 star (1268.97, 632.68) and its neighbour at (1264.5, 634.4).
+
+| arm | star, satstar channel | star, daophot row | neighbour, daophot row (x_fit, flux, flags) |
+|---|---|---|---|
+| production (STPSF only) | accepted: implied peak 2553.5, observed peak 1996.0, flux 29125.9 | none | 1264.4819, 5232.8, 1 |
+| control | rejected by the gate: implied peak 2418.3, observed peak 1996.0, flux 28636.7 | flux 23597.7 | none |
+| this switch | accepted, the same fit (flux 28636.7) | none | none |
+| near-saturation switch | rejected, as in the control | flux 23597.7 | 1264.5422, 5360.7, 0 |
+| both | accepted | none | 1264.5107, 5291.3, 1 |
+
+Frame `nrcalong` exposure 1: the F4 row at (1834.5, 1633.2).
+
+| arm | daophot row (x_fit, y_fit, flux, flags) |
+|---|---|
+| production | 1834.5003, 1633.1601, 13850.3, 1 |
+| control | none |
+| this switch | none |
+| near-saturation switch | 1834.4991, 1633.1712, 13502.2, 1 |
+| both | 1834.4991, 1633.1712, 13502.2, 1 |
+
+The switch changes which channel owns the star and nothing else about its fit: the satstar
+flux is 28636.7 with and without it, and the daophot fit that the control makes of the same
+star gives 23597.7.  It does not return the neighbour: in the arm with this switch alone the
+neighbour has no row, and in the arm with both it is present at x_fit 1264.5107, a position
+that rounds to the pixel next to the saturated blob and that the rounded-pixel rule would
+drop.  Production has that row at 1264.4819.  The F4 row does not return with this switch
+either.
+
+The scale moves whole-frame decisions as the measurement says.  Satstar catalog rows
+(rejected rows) in the control and with this switch: `nrcblong` exposure 6, 513 (216) and
+519 (210); `nrcalong` exposure 1, 438 (127) and 445 (120).  Against the production satstar
+catalog of the frame (519 and 444 rows; positions matched within 0.05 arcsec) the control
+lacks 10 and 9 production rows and has 4 and 3 rows that production does not; with this
+switch the numbers are 4 and 4 (`nrcblong`), 4 and 5 (`nrcalong`).  A satstar-only replay of
+exposure 2 of the same detector accepts the F5 star (implied peak 2410.9 against 2387.5,
+the same flux 28504.9) and grows the catalog from 510 (233 rejected) to 521 (222) rows; its
+cache key gains the part `gs0.955`.  The control arm reproduces the daophot table of the
+earlier control replay of each frame (54060 and 52982 rows; `x_fit`, `y_fit`, `flux_fit`,
+`flags` and `qfit` identical in every row), so a run without the switches is unchanged.
 
 ## Limits of this change
 
