@@ -87,15 +87,17 @@ o130 F212N:
 | 24 pixels | 50 or more | 13176 | 1.18 | 2.5% |
 | full box, leave-one-out | 50 or more | 83132 | 1.17 | 2.4% |
 
-The o105 F212N values are 1.86 and 27.8% (12 pixels or fewer, S/N 50 or more,
-291 rows), 1.67 and 20.9% (13 - 16 pixels, 478 rows) and 1.26 and 3.7% for the
-leave-one-out baseline (275353 rows).  Below S/N 50 the partial rows of 16
-pixels or fewer have a robust sd of z of 0.92 - 1.28, within 0.12 of the
-leave-one-out baseline of the same S/N range (1.09 and 1.16 for S/N 10 - 50 in
-o130 and o105).  At S/N 50 or more the partial rows of 16 pixels or fewer are
-2 - 4% fainter than the full-box mean in the median (relative median -0.018
-to -0.037 in o105 and o130), and 21 - 28% of them lie more than 3 sigma away.  The 17 - 19 pixel bin
-agrees with the baseline.  The same measurement for rows of 20 pixels in o130
+At S/N 50 or more in the four F212N tiles (o105, o118, o130, o138), the rows
+with 12 pixels or fewer have a robust sd of z of 1.86, 2.29, 1.79 and 1.88
+with 25.0 - 27.8% beyond 3 sigma, the rows with 13 - 16 pixels have 1.67, 1.73,
+1.51 and 1.58 with 16.2 - 21.2%, and the leave-one-out baseline is 1.26, 1.19,
+1.17 and 1.20 with 2.4 - 3.7%.  The median of the partial rows of 16 pixels or
+fewer is 0.9 - 3.7% below the full-box mean (relative median -0.009 to -0.037).
+Below S/N 50 the partial rows of 16 pixels or fewer have a robust sd of z of
+0.84 - 1.28, which differs from the leave-one-out baseline of the same S/N
+range (1.01 - 1.16) by -0.19 to +0.16.  The 17 - 19 pixel bin of o130 has the
+robust sd of the baseline (1.16 against 1.17) and a larger tail (7.6% beyond
+3 sigma against 2.4%).  The same measurement for rows of 20 pixels in o130
 (a column or row lost from the box) gives 1.72 and 13.4% at S/N 50 or more, so
 the 0.5 threshold does not separate every discrepant row from the others.
 
@@ -179,15 +181,17 @@ fitted its three parameters (flux and two positions) with fewer than half of
 its pixels.  The support checks above do not separate the thresholds 0.4, 0.5
 and 0.6: in o130 F212N the rules 0.5 and 0.6 change the same sample stars
 (flux closer to the data for 9 of 12, position for 12 of 16), and 0.4 changes
-2 and 5 of them, all closer.  The threshold 0.6 changes 1392 stars of o130
-F212N against 1205 for 0.5, and the agreement table shows that rows of 13 - 16
-pixels disagree with the full-box rows at S/N 50 or more almost as much as the
-rows of 12 pixels or fewer, so a value between 0.5 and 0.6 may be better.  At
-0.7 the support check turns negative: with `ZMAX=3` the three position changes
-of the o105 F212N sample all move away from the data centroid (median
-distance 1.4 -> 2.2 pixel) and 7 of 13 flux changes of o138 F212N move away
-from the aperture flux.  `ZMAX=3` reduces the number of stars changed by a
-factor of 9 - 13 in F212N (268 against 2523 in o105, 103 against 1205 in
-o130) and keeps the stars whose partial row disagrees with the full-box rows.
-Both settings are environment variables, so a different value needs no code
-change.
+2 and 5 of them, all closer.  The threshold 0.6 (rows of 14 pixels or fewer)
+changes 1392 stars of o130 F212N against 1205 for 0.5, and 214 for 0.4.  At S/N
+50 or more the rows with 13 - 16 pixels disagree with the full-box rows by less
+than the rows with 12 pixels or fewer but more than the baseline (robust sd of
+z 1.51 - 1.73 against 1.79 - 2.29 and 1.17 - 1.26), so a threshold above 0.5
+is also defensible.  At 0.7 with `ZMAX=3` the checks give mixed results: o130
+F212N improves (flux closer to the data for 12 of 17 changes, position closer
+for 6 of 6), while in o105 F212N the three position changes of the sample all
+move away from the data centroid (median distance 1.4 -> 2.2 pixel) and in
+o138 F212N 7 of 13 flux changes move away from the aperture flux.  `ZMAX=3`
+reduces the number of stars changed by a factor of 9 - 13 in F212N (268
+against 2523 in o105, 103 against 1205 in o130) and keeps the stars whose
+partial row disagrees with the full-box rows.  Both settings are environment
+variables, so a different value needs no code change.
