@@ -53,6 +53,16 @@ noisy halo of a saturated star can also stand over calm neighbours; the excess
 must therefore be at least ``SPIKE_MIN_SIGMA`` times the scatter of the annulus
 the background comes from (halo pixels: 0.2-1.1 sigma, the defects of one
 exposure: 10.8 sigma or more).
+
+A spike whose 3x3 box holds a dropped pixel is not judged by default, so a defect
+that sits beside a NaN or DO_NOT_USE pixel stays in the mosaic (F480M o130 nrcalong
+exposure 3, pixel (1525, 141): 1572 MJy/sr against 5-15 MJy/sr in its neighbours, the
+lower left neighbour NaN with DO_NOT_USE).  Env ``POSITIVE_SPIKE_MASK_MAX_UNUSABLE``
+(``find_positive_spikes(max_unusable=...)``, default 0) lets up to that many of the
+eight neighbours be missing: non-finite, DO_NOT_USE or outside the array.  The
+isolation is then judged on the remaining usable neighbours, whose brightest must stay
+below ``SPIKE_ISOLATION`` of the excess as before.  A SATURATED neighbour is never
+tolerated: a pixel beside a saturated core is the rim of a star or a snowball.
 """
 import os
 from dataclasses import dataclass, field
@@ -72,6 +82,17 @@ ENV_NEGATIVE = 'NEGATIVE_PIXEL_MASK_NSIGMA'
 
 #: environment switch of the isolated positive spike mask (MJy/sr); off unless set
 ENV_SPIKE = 'POSITIVE_SPIKE_MASK_MIN_EXCESS'
+
+#: environment switch of the spike finder's tolerance for missing neighbours: the
+#: number of the eight neighbours of a candidate that may be unusable; 0 (the finder
+#: as shipped) unless set
+ENV_SPIKE_UNUSABLE = 'POSITIVE_SPIKE_MASK_MAX_UNUSABLE'
+
+#: the most neighbours a candidate may lack: it keeps two usable neighbours to be judged on.
+#: A Gaussian star of PSF sigma 0.95 pixel (F212N) on a pixel corner has 0.33 of its peak
+#: pixel in the second faintest neighbour and 0.109 in the faintest, below ``SPIKE_ISOLATION``,
+#: so a candidate that has only the faintest neighbour left can be a star.
+SPIKE_MAX_UNUSABLE_LIMIT = 6
 
 #: the brightest neighbour of a spike rises at most this fraction of the spike's own
 #: excess over the local background; the brightest neighbour of a star is at 0.3 or
@@ -397,6 +418,25 @@ def positive_spike_min_excess():
     return _env_threshold(ENV_SPIKE)
 
 
+def positive_spike_max_unusable():
+    """``POSITIVE_SPIKE_MASK_MAX_UNUSABLE``: 0 (all eight neighbours of a spike must be
+    usable, the finder as shipped) when unset or blank; otherwise the number of
+    neighbours that may be unusable (0 to ``SPIKE_MAX_UNUSABLE_LIMIT``, six).  A value that
+    is not an integer in that range raises ``ValueError`` naming the variable, so a
+    typo is not read as 0."""
+    raw = os.environ.get(ENV_SPIKE_UNUSABLE)
+    if raw is None or not raw.strip():
+        return 0
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        value = -1
+    if not 0 <= value <= SPIKE_MAX_UNUSABLE_LIMIT:
+        raise ValueError(f'{ENV_SPIKE_UNUSABLE}={raw!r}: expected an integer from 0 to '
+                         f'{SPIKE_MAX_UNUSABLE_LIMIT} (0 is off)')
+    return value
+
+
 def negative_pixel_mask(sci, err, dq, nsigma):
     """Bool mask of the pixels whose SCI is finite and below ``-nsigma * ERR``
     (``err`` finite and > 0), and that carry neither SATURATED nor DO_NOT_USE.
@@ -417,26 +457,43 @@ def negative_pixel_mask(sci, err, dq, nsigma):
 
 def find_positive_spikes(sci, dq, min_excess, isolation=SPIKE_ISOLATION,
                          bkg_r_in=SPIKE_BKG_R_IN, bkg_r_out=SPIKE_BKG_R_OUT,
-                         min_sigma=SPIKE_MIN_SIGMA):
+                         min_sigma=SPIKE_MIN_SIGMA, max_unusable=0):
     """The isolated one-pixel spikes of one frame, as a list of dicts ``x, y, peak,
-    excess, bkg, sigma, neighbour``.
+    excess, bkg, sigma, neighbour`` (and ``unusable`` when ``max_unusable`` > 0).
 
     A spike is a pixel that is at least ``min_excess`` and at least ``min_sigma``
     sigma over the local background (the median and MAD-sigma of the finite pixels
     between ``bkg_r_in`` and ``bkg_r_out`` of it; ``min_sigma`` 0 drops the second
     condition) and whose brightest neighbour of the eight is at most ``isolation``
     of that excess over the same background (``neighbour`` is that neighbour's
-    excess).  All nine pixels of the 3x3 box must be finite and carry
+    excess).  By default all nine pixels of the 3x3 box must be finite and carry
     neither SATURATED nor DO_NOT_USE: a pixel beside a saturated core, a dropped
     pixel or the edge of the array is not judged, so the rim of a snowball and a
     star cut by the edge are left to the event test and the satstar handling.
     A star is never isolated: its PSF puts 0.3 or more of the peak into the
-    brightest neighbour."""
+    brightest neighbour.
+
+    ``max_unusable`` (an integer from 0 to ``SPIKE_MAX_UNUSABLE_LIMIT``; 0 is the
+    finder as described above) lets that many of the eight neighbours be missing:
+    non-finite, DO_NOT_USE or outside the array.  The neighbour that limits the
+    isolation is then the brightest of the usable ones, and ``unusable`` is the
+    number of missing neighbours of the spike.  A SATURATED neighbour is never
+    tolerated, and a pixel with more missing neighbours than ``max_unusable`` is
+    not judged, as before."""
     sci = np.asarray(sci, dtype=float)
     dq = np.asarray(dq)
+    max_unusable = int(max_unusable)
+    if not 0 <= max_unusable <= SPIKE_MAX_UNUSABLE_LIMIT:
+        raise ValueError(f'max_unusable={max_unusable}: expected an integer from 0 to '
+                         f'{SPIKE_MAX_UNUSABLE_LIMIT}')
     usable = np.isfinite(sci) & ((dq & (DO_NOT_USE | SATURATED)) == 0)
-    complete = ndimage.minimum_filter(usable.astype(np.uint8), size=3,
-                                      mode='constant', cval=0) > 0
+    ring_weights = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int32)
+    n_usable = ndimage.convolve(usable.astype(np.int32), ring_weights,
+                                mode='constant', cval=0)
+    n_saturated = ndimage.convolve(((dq & SATURATED) != 0).astype(np.int32),
+                                   ring_weights, mode='constant', cval=0)
+    # the array edge counts as missing: cval 0 of the convolution
+    complete = usable & (n_saturated == 0) & (n_usable >= 8 - max_unusable)
     filled = np.where(usable, sci, -np.inf)
     ring = np.ones((3, 3), dtype=bool)
     ring[1, 1] = False
@@ -457,8 +514,11 @@ def find_positive_spikes(sci, dq, min_excess, isolation=SPIKE_ISOLATION,
         if (excess < min_excess or neighbour > isolation * excess
                 or excess < min_sigma * sig):
             continue
-        out.append(dict(x=float(x), y=float(y), peak=float(sci[y, x]), excess=excess,
-                        bkg=bkg, sigma=sig, neighbour=neighbour))
+        spike = dict(x=float(x), y=float(y), peak=float(sci[y, x]), excess=excess,
+                     bkg=bkg, sigma=sig, neighbour=neighbour)
+        if max_unusable:
+            spike['unusable'] = int(8 - n_usable[y, x])
+        out.append(spike)
     return out
 
 

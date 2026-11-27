@@ -3190,7 +3190,9 @@ def single_exposure_event_masks(files):
     they are resampled into one mosaic: the single-exposure transients of
     ``single_exposure_events`` (env ``SINGLE_EXPOSURE_EVENT_MASK``), the extreme
     negative pixels (env ``NEGATIVE_PIXEL_MASK_NSIGMA``) and the isolated
-    one-pixel positive spikes (env ``POSITIVE_SPIKE_MASK_MIN_EXCESS``).
+    one-pixel positive spikes (env ``POSITIVE_SPIKE_MASK_MIN_EXCESS``; env
+    ``POSITIVE_SPIKE_MASK_MAX_UNUSABLE`` lets a spike have that many missing
+    neighbours, default 0).
 
     Empty unless one of the three is on.  ``files`` are all the per-frame images
     of ONE filter that the mosaic is built from (the original frames, or the
@@ -3204,11 +3206,16 @@ def single_exposure_event_masks(files):
     events_on = _single_exposure_events.event_mask_enabled()
     nsigma = _single_exposure_events.negative_pixel_nsigma()
     spike_min = _single_exposure_events.positive_spike_min_excess()
+    spike_unusable = _single_exposure_events.positive_spike_max_unusable()
+    if spike_unusable and not spike_min:
+        print(f"WARNING positive spikes: {_single_exposure_events.ENV_SPIKE_UNUSABLE}="
+              f"{spike_unusable} has no effect while "
+              f"{_single_exposure_events.ENV_SPIKE} is off", flush=True)
     if not (events_on or nsigma or spike_min):
         return {}
     files = sorted({os.fspath(f) for f in files})
     key = (tuple((f, os.stat(f).st_size, os.stat(f).st_mtime_ns) for f in files),
-           events_on, nsigma, spike_min)
+           events_on, nsigma, spike_min, spike_unusable)
     hit = _EVENT_MASK_CACHE.get(key)
     if hit is not None:
         return hit
@@ -3243,14 +3250,16 @@ def single_exposure_event_masks(files):
         n_sp = 0
         n_px = 0
         n_fr = 0
+        n_missing = 0
         for f in files:
             with fits.open(f, memmap=False) as hdul:
                 sci = hdul['SCI'].data
                 spikes = _single_exposure_events.find_positive_spikes(
-                    sci, hdul['DQ'].data, spike_min)
+                    sci, hdul['DQ'].data, spike_min, max_unusable=spike_unusable)
                 if not spikes:
                     continue
                 box = _single_exposure_events.positive_spike_mask(sci.shape, spikes)
+            n_missing += sum(1 for sp in spikes if sp.get('unusable'))
             n_sp += len(spikes)
             n_px += int(box.sum())
             n_fr += 1
@@ -3258,7 +3267,10 @@ def single_exposure_event_masks(files):
         print(f"positive spikes: {n_sp} isolated one-pixel spikes of >= {spike_min:g} "
               f"MJy/sr in {n_fr} of {len(files)} frames, {n_px} px set to "
               f"DO_NOT_USE ({time.time() - t0:.0f} s) "
-              f"(POSITIVE_SPIKE_MASK_MIN_EXCESS)", flush=True)
+              f"(POSITIVE_SPIKE_MASK_MIN_EXCESS)"
+              + (f"; {_single_exposure_events.ENV_SPIKE_UNUSABLE}={spike_unusable}: "
+                 f"{n_missing} of the spikes have a missing neighbour"
+                 if spike_unusable else ""), flush=True)
     _EVENT_MASK_CACHE.clear()
     _EVENT_MASK_CACHE[key] = masks
     return masks
