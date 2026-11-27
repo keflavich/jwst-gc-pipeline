@@ -398,6 +398,52 @@ returns 53004 / 49732 rows, identical in every column to the unflagged run
   (with sidelobe/ssr backstops); `snr > 3.0`. The `ssr_ratio < 1.0` gate is
   **confidence-subordinated** — a high-S/N (>10), good-qfit fit is kept even if
   ssr fails (BFE makes the STPSF first sidelobe brighter than the real star).
+- **Fractional sidelobe waiver** (`SATSTAR_SIDELOBE_FRAC_MIN` = f, default 0 = off,
+  NIRCam only; the same criterion as the `test/wd2-sidelobe-frac` branch of #1077).
+  The sidelobe cut divides the median residual of the r = 2–10 px annulus by the
+  local background scatter, so it rejects a bright star at a few percent of its
+  model: the first-sidelobe mismatch of the STPSF model is a fixed fraction of the
+  star, the noise is not. With f > 0 a fit that fails only that cut is kept when
+  `sidelobe_resid_frac` = median(residual) / median(model) over the same annulus is
+  above −f. The snr, flux, qfit and ssr rules are unchanged, a NaN fraction waives
+  nothing, MIRI is untouched, and the column is written to the satstar catalog and
+  the rejected table (the cut itself is `accept_satstar_fit(sidelobe_resid_frac=,
+  sidelobe_frac_min=)`). The switch keys the satstar cache (`sf<f>`).
+  In 30 replayed satstar-stage frames of gc-treasury 10678 F212N (9 / 6 / 6 / 9 of
+  o045 / o118 / o130 / o138, chosen for the residual cleanup, not a census) 60 fits
+  pass every gate except this cut. 50 are the nrca1 detector-feature cluster
+  (x ≈ 1315, y ≈ 475–500; fractions −3.2 to −1.0, the annulus residual at least as
+  bright as the model), which no f ≤ 1 accepts. f = 0.05 / 0.1 / 0.2 / 0.3 / 0.5 / 1.0 accepts
+  0 / 1 / 2 / 3 / 6 / 9 of the 60; the six at f = 0.5 are stars of fitted flux
+  8.0e5 to 1.7e7 (o130 1, o138 3, o045 2; fractions −0.08 to −0.35). The next row
+  has −0.55.
+  The waived fits are not clean subtractions. Replays with f = 0.5 (o130 and o138
+  frames, 4 stars) leave over-subtracted rings: the smallest residual in the
+  r = 3–6 px ring is −2.7e3 for the o130 star (data maximum there 3.0e3, model
+  maximum 3.9e3) and −5.6e4, −8.0e4 and −7.1e3 for the three o138 stars (ring model
+  maxima 1.3e5, 8.0e4 and 1.6e4), and the r < 3 px pixels around the saturated core
+  are over-subtracted too (o130: residual minimum −3.2e4, model maximum 7.6e4).
+  #1077 compared the satstar fits that this cut rejects, for two 10 mag wd2 stars,
+  with a 2MASS-based F200W estimate and found them 0.09 and 0.36 mag fainter (the
+  production fits: 0.24 and 0.22 mag brighter), so a waived flux is not validated
+  against an independent measurement.
+  Rendered into the m7 residual mosaics (F212N; o130 with 1 waived star, o138 with 3,
+  all from the replayed frames above; the production vetted and satstar-union
+  catalogs of the `dblfs3` render plus the waived rows; scoring as in the leftover
+  list above), a waived fit trades a leftover for a crater of the same order unless
+  the footprint mask (#1361, #1364) covers it. Without the mask the whole-star
+  leftovers above 500 MJy/sr that disappear are o130 (501,2193) 43100 and (492,2192)
+  503, o138 (6398,2509) 29276 and (6395,2514) 52668 (mosaic pixel x, y), and the craters
+  above 200 MJy/sr that appear are o130 (501,2193) 26474 and (492,2192) 349, o138
+  (6389,2512) 4193, (6394,2514) 28725, (6400,2511) 20999, (6400,2505) 1666, (7356,4684)
+  17660 and (7361,4685) 4264 (craters above 2000 MJy/sr: o130 2 -> 3, o138 12 -> 16;
+  leftovers above 2000: 9 -> 8 and 18 -> 16). With the mask (and the ring extension,
+  tags `mkslfdblfs3`, `mkrslfdblfs3`) the o138 scores do not change. In o130 the two
+  leftovers go and the craters above 200 MJy/sr go from 9 to 10 (mask) and 3 to 4
+  (mask and ring), one of them (492,2192) at 349 MJy/sr; the craters above 50 MJy/sr
+  go from 55 to 61 and 32 to 38, five of those new ones 112-170 MJy/sr deep at
+  0.27 arcsec from the star. The waived rows of the 30 replayed frames are the only
+  ones in these renders; the other frames of each tile were not replayed.
 - The MIRI seed gate, spike-merge, 2-D background, and satstar-coincidence
   exclusion are MIRI-only (§4).
 - **Detector1 provides the ramp** (`PipelineRerunNIRCAM-LONG.py`): the sibling
@@ -771,6 +817,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `SATSTAR_DEBLEND_ORDER` | 0 | with the ZEROFRAME deblend, fit the seeds of one component largest ZF-saturated core first, then the unsaturated peaks in detection order.  The deblended seeds of a component all carry its `sat_area`, so the `-sat_area` sort leaves their order at the raster order of the cores; this adds the core radius (`order_key`) as a second sort key.  `sat_area` is unchanged.  The satstar cache key gains `do` on deblended frames.  Not yet measured on wd2: whether any over-bright row has a larger-core neighbour fitted after it is the census of #1094 |
 | `SATSTAR_OPTIN_FILTERS` | (unset: every bandpass) | bandpasses (`F480M` or `F480M,F405N`) that keep the opt-in fit switches `SATSTAR_ZF_KEEP_FINITE`, `SATSTAR_OBS_PK_FROM_CRF`, `SATSTAR_QFIT_LOCAL_GATE`, `SATSTAR_QFIT_LOCAL_R` and `SATSTAR_DEBLEND_ORDER`; for any other bandpass those five are unset for the whole per-frame fit (`satstar_optin_scoped` on `load_or_make_satstar_catalog`), so the frame fits and keys its cache (`SATFITSW`) as if they were never exported.  A chain takes one environment, so gc-treasury sets the switches once with `SATSTAR_OPTIN_FILTERS=F480M`; a malformed name raises |
 | `SATSTAR_ERR_BKG_SCATTER` | 1 for extended-emission NIRCam (set by `cataloging.py`), else 0 | add the robust local-background-annulus scatter in quadrature to the satstar fit errors (`bkg_scatter_fit_error`); NIRCam in-FOV fits only |
+| `SATSTAR_SIDELOBE_FRAC_MIN` | 0 (off) | NIRCam in-FOV fits: a fit that fails only the absolute sidelobe cut (`sidelobe_resid_sigma` ≤ −10) is kept when `sidelobe_resid_frac` (median residual / median model of the same r = 2–10 px annulus) is > −value; the column is written to the satstar catalog and the rejected table; a non-numeric, negative or non-finite value raises; keys the satstar cache (`sf<value>` in `SATFITSW`); see the accept-gate bullet in §3 |
 | `DAOPHOT_HANDOFF_UNACCEPTED_SAT` / `DAOPHOT_HANDOFF_DATA_FLOOR` | on for the targets in `_DAOPHOT_HANDOFF_UNACCEPTED_SAT_TARGETS` (gc-treasury), off elsewhere; an export wins / 0 | NIRCam only: hand every SATURATED component without an accepted satstar to daophot and return its valid-rate late-group pixels to the fit; limited to the bandpasses in `DAOPHOT_HANDOFF_FILTERS` when that is set; recorded per frame as catalog header `HNDOFFSA` |
 | `SATPROX_SEEDED_COMPANION` | off | NIRCam m3..m7 daophot passes on frames whose hand-off restored pixels: a fit within 0.5 px of a seed-catalog position (the pass's `prev_seed_catalog`) is exempt from the `_filter_near_saturation` veto when its nearest SATURATED pixel NOT restored to the fit (`_handoff_restore_pixels`) is more than `near_sat_dist_pix` away and it has finite `flux_fit > 0` and finite `qfit`. Keeps companions 4-5 px from a handed-off bright star whose restored late-group footprint reaches within 1 px of them (gc-treasury F480M); fresh, unseeded fits on the restored footprint stay vetoed (`cataloging.py::_seeded_companion_kwargs`). On/off values follow the hand-off convention; an unknown value raises |
 | `DAOPHOT_BRIGHT_PRESUB_PEAK_NOISE` | 0 (off) | m3..m7 daophot pass: seeds whose 3x3 data peak exceeds this multiple of the frame's median local noise are fit first and their model is subtracted before the detection that builds the seed, so faint neighbours within ~14 px of a bright daophot-fit star are not lost to the bright star's inflated local-noise map (the satstar channel already subtracts its stars first); the bright seeds plus the residual detections then go to the one full fit; non-numeric, negative or non-finite raises (#991) |
@@ -790,13 +837,13 @@ covers the ones that change shipped behaviour. `git grep "environ.get('SATSTAR"`
 and `…'MIRI` is the authoritative list.
 
 The seven `SATSTAR_ZF_*` / `SATSTAR_OBS_PK_*` / `SATSTAR_QFIT_LOCAL_*` rows,
-`SATSTAR_SEED_CORE_DQ` and `SATSTAR_ERR_BKG_SCATTER` are read by
+`SATSTAR_SEED_CORE_DQ`, `SATSTAR_ERR_BKG_SCATTER` and `SATSTAR_SIDELOBE_FRAC_MIN` are read by
 `satstar_fit_switches`, and the
 per-exposure satstar cache is keyed on them
 (meta `SATFITSW`, `satstar_fit_switch_signature`) beside `SATRECOV`, so changing
 one refits the cached catalogs it affects. Their on/off values follow the
 daophot hand-off convention: unset or blank gives the default, `1/true/yes/on`
-and `0/false/no/off` are accepted in any case, and any other value raises.
+and `0/false/no/off` are accepted in any case, and any other value raises (`SATSTAR_SIDELOBE_FRAC_MIN` is a number, 0 = off).
 A cap-on run (`NIRCAM_SATSTAR_RECOVERED_CAP=1`, read as an integer like the
 fitter reads it) adds `cs<NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC>` to the key, so
 catalogs fitted before the cap read only the seed's share of a blended

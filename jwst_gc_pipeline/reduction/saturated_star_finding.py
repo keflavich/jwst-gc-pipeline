@@ -1354,6 +1354,17 @@ def satstar_fit_switches(env=None):
       seed of a component carries the component's ``sat_area``, so the
       ``-sat_area`` sort alone leaves the order inside a component at the
       raster order of its cores (#1094).  ``sat_area`` itself is unchanged.
+    * ``SATSTAR_SIDELOBE_FRAC_MIN`` (default 0 = OFF): a NIRCam fit that fails
+      the sidelobe cut (``sidelobe_resid_sigma``, the median residual of the
+      r = 2-10 px annulus in units of the local background scatter) is kept
+      when the same median is within this fraction of the annulus median of its
+      own model (``sidelobe_resid_frac`` > -value).  The cut in units of the
+      noise grows with the star's brightness, while the first-sidelobe
+      mismatch of the STPSF model is a fixed fraction of it, so a bright star
+      with a good fit by every other measure fails it at a few percent of its
+      model.  Writes the ``sidelobe_resid_frac`` column; NIRCam only (the MIRI
+      cut is already looser).  A non-numeric, negative or non-finite value
+      raises.
     * ``NIRCAM_SATSTAR_RECOVERED_CAP`` (default OFF) and
       ``NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC`` (0.005): the NIRCam
       recovered-core cap and the PSF fraction below which it is skipped
@@ -1365,6 +1376,13 @@ def satstar_fit_switches(env=None):
     qloc_r = float(env.get('SATSTAR_QFIT_LOCAL_R', '') or (10.0 if qloc_gate else 0.0))
     # Parsed like the cap itself (get_saturated_stars).
     cap_on = bool(int(env.get('NIRCAM_SATSTAR_RECOVERED_CAP', '') or 0))
+    frac_raw = env.get('SATSTAR_SIDELOBE_FRAC_MIN', '') or '0'
+    try:
+        frac_min = float(frac_raw)
+    except ValueError:
+        raise ValueError(f"SATSTAR_SIDELOBE_FRAC_MIN={frac_raw!r} is not a number") from None
+    if not (np.isfinite(frac_min) and frac_min >= 0.0):
+        raise ValueError(f"SATSTAR_SIDELOBE_FRAC_MIN={frac_raw!r} must be a finite number >= 0")
     return {
         'rcurve_guard': _env_switch('SATSTAR_ZF_RCURVE_GUARD', True, env),
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
@@ -1383,6 +1401,7 @@ def satstar_fit_switches(env=None):
         'qfit_local_r': qloc_r,
         'qfit_local_max': float(env.get('SATSTAR_QFIT_LOCAL_MAX', '') or 5.0),
         'recovered_cap': cap_on,
+        'sidelobe_frac_min': frac_min,
         'deblend_psf_margin': max(
             float(env.get('SATSTAR_DEBLEND_PSF_MARGIN', '') or 0.0), 0.0),
         'cap_min_psf_frac': float(
@@ -1783,6 +1802,10 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
+    if sw['sidelobe_frac_min'] > 0:
+        # Changes which fits pass the accept gate of every NIRCam in-FOV
+        # frame, with or without a ramp.
+        parts.append(f"sf{sw['sidelobe_frac_min']:g}")
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
@@ -3732,7 +3755,8 @@ def satstar_implied_peak(flux, psf_model, x_fit, y_fit):
 def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
                        sidelobe_resid_sigma, ssr_ratio, is_miri,
                        qfit_max_keep, sidelobe_min_keep, ssr_ratio_max_keep,
-                       snr_min_keep, ssr_trust_snr=10.0):
+                       snr_min_keep, ssr_trust_snr=10.0,
+                       sidelobe_resid_frac=float('nan'), sidelobe_frac_min=0.0):
     """Decide whether a fitted saturated-star candidate is accepted.
 
     Pure predicate factored out of ``get_saturated_stars`` so the keep-logic is
@@ -3747,6 +3771,12 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     must-detect bright stars get silently deleted from the satstar catalog and
     linger in the residual.  The white-point/no-source failure ssr was built to
     catch had snr~2, qfit=27, so the snr and qfit gates already reject it.
+
+    ``sidelobe_frac_min`` > 0 (env ``SATSTAR_SIDELOBE_FRAC_MIN``, NIRCam only)
+    waives the sidelobe cut for a fit whose annulus residual is within that
+    fraction of its model there (``sidelobe_resid_frac`` > -``sidelobe_frac_min``;
+    a NaN ``sidelobe_resid_frac`` waives nothing).  The cut in noise units fails a
+    bright star at a few percent of its model.
     """
     if result_is_none or not np.isfinite(fluxerr):
         return False
@@ -3761,7 +3791,9 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     if np.isfinite(qfit) and not (qfit < qfit_max_keep):
         return False
     if (np.isfinite(sidelobe_resid_sigma)
-            and not (sidelobe_resid_sigma > sidelobe_min_keep)):
+            and not (sidelobe_resid_sigma > sidelobe_min_keep)
+            and not (sidelobe_frac_min > 0 and np.isfinite(sidelobe_resid_frac)
+                     and sidelobe_resid_frac > -sidelobe_frac_min)):
         return False
     ssr_trustworthy = (np.isfinite(snr) and snr > ssr_trust_snr
                        and np.isfinite(qfit) and qfit < qfit_max_keep)
@@ -5917,8 +5949,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # zone and fires on background noise instead.
         _ann = ((_r2_c >= 2 ** 2) & (_r2_c < 10 ** 2)
                 & (~mask) & np.isfinite(resid_cutout))
+        sidelobe_resid_frac = float('nan')
         if _ann.any():
             sidelobe_resid_sigma = float(np.median(resid_cutout[_ann]) / _bg_sigma_local)
+            _mod_ann = float(np.median(model_image[_ann]))
+            if _mod_ann > 0:
+                sidelobe_resid_frac = float(np.median(resid_cutout[_ann]) / _mod_ann)
         else:
             sidelobe_resid_sigma = float('nan')
         # SSR ratio: fit-vs-no-fit sum-of-squared-residual.
@@ -5951,6 +5987,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             ssr_ratio = float('nan')
 
         result['sidelobe_resid_sigma'] = [sidelobe_resid_sigma] * len(result)
+        if _fit_switches['sidelobe_frac_min'] > 0:
+            result['sidelobe_resid_frac'] = [sidelobe_resid_frac] * len(result)
         result['ssr_ratio'] = [ssr_ratio] * len(result)
 
         # LOCAL qfit (see satstar_local_qfit).  Computed, and written as the
@@ -6055,7 +6093,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             flux=flux, qfit=_qfit_gate, sidelobe_resid_sigma=sidelobe_resid_sigma,
             ssr_ratio=ssr_ratio, is_miri=_is_miri,
             qfit_max_keep=_qfit_gate_max, sidelobe_min_keep=_sidelobe_min_keep,
-            ssr_ratio_max_keep=_ssr_ratio_max_keep, snr_min_keep=_snr_min_keep)
+            ssr_ratio_max_keep=_ssr_ratio_max_keep, snr_min_keep=_snr_min_keep,
+            sidelobe_resid_frac=sidelobe_resid_frac,
+            sidelobe_frac_min=_fit_switches['sidelobe_frac_min'])
         if not accept_source:
             _reject_reason = 'fit_quality_gate'
 
