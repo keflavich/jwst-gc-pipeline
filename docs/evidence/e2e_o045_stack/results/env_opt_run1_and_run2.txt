@@ -1,0 +1,24 @@
+# Opt-in switches of the stacked draft PRs (all default off), as the user answered them.  Sourced for the opt arm only.
+# fit time -----------------------------------------------------------------------------------------------------------
+export SINGLE_EXPOSURE_EVENT_MASK=1            # #1360 per-frame single-exposure event mask
+export NEGATIVE_PIXEL_MASK_NSIGMA=50           # #1360
+export MERGE_ROW_RESID_SUPPORT_MIN=0.3         # #1360
+export SINGLE_EXPOSURE_EVENT_RAMP=1            # #1367 ramp-level events
+export POSITIVE_SPIKE_MASK_MIN_EXCESS=300      # #1374 per-frame positive-spike mask
+export DAOPHOT_DEDUP_NONPOSITIVE=1             # #1366 dedup keeps a positive-flux winner
+export MERGE_PAIR_RESCUE_RATIO=3               # #1365 merge-pair rescue
+export MERGE_PAIR_RESCUE_FLUX_MIN=500          # #1365
+export SATSTAR_FITTER_MAXITERS=1000            # #1371 class D
+export SATSTAR_EDGE_POS_BOUND=12               # #1371
+export SATSTAR_SIDELOBE_MASK_FRAC_MIN=0.5      # #1369 sidelobe-only rejects go to the mask (SATSTAR_SIDELOBE_FRAC_MIN of #1368 stays UNSET: "Mask only")
+export SATSTAR_DAO_RESTORE_FRAC_MIN=0.8        # #1362 DAO-supported dropped rows restored (value is the fork's reading)
+# render time (finalize; render-only, m7 pass) -------------------------------------------------------------------------
+export MERGEDCAT_FOOTPRINT_MASK_KFAC=4         # user: k=4 mask (#1380)
+export MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX=2
+export MERGEDCAT_FOOTPRINT_MASK_RING_FLUX_MIN=1e6      # #1364 ring zone
+export MERGEDCAT_FOOTPRINT_MASK_RING_RADIUS_PX=25
+export MERGEDCAT_FOOTPRINT_MASK_RING2_FLUX_MIN=3e4     # #1375 ring tier 2
+export MERGEDCAT_FOOTPRINT_MASK_RING2_RADIUS_PX=8
+export MERGEDCAT_FOOTPRINT_MASK_REJECTED=1             # #1369 rejected-satstar footprints
+export MERGEDCAT_FOOTPRINT_MASK_DQSAT_PX=4             # #1372 DQ_SAT dilation (user choice)
+export MERGEDCAT_FOOTPRINT_MASK_EDGE_PX=8              # #1373 footprint-edge guard band

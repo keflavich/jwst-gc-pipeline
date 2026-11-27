@@ -1,0 +1,50 @@
+listing before run 2 (crds_before.txt): modification time 2026-11-25 03:04:53; bad_files.txt 5034 bytes; server_config 1457934 bytes
+listing after run 2 (crds_after.txt, taken by the post job): modification time 2026-11-25 17:50:37; bad_files.txt 5034 bytes; server_config 1457934 bytes
+sizes equal before and after: True
+run 2 finalize log e2f-m7-fin_52781394_4294967294.log: 1 CRDS client lines, 8 PARS-RESAMPLESTEP lines
+  CRDS client line 2026-11-25 15:49:13.916:  DEV calibration SW identified. Defaulting to Edit Context. [no step marker]
+  PARS-RESAMPLESTEP lines from 15:49:17 to 16:54:10
+  nearest CRDS / PARS line to the modification time after run 2: 16:54:10.356 (-3386.6 s)
+  lines within 100 s of the modification time: 0
+run 2 post log e2fpost_52782455.log: 2 CRDS client lines, 2 PARS-RESAMPLESTEP lines
+  CRDS client line 2026-11-25 17:44:01.218:  DEV calibration SW identified. Defaulting to Edit Context. [inside step render_nm_F212N (step ended 17:49:19)]
+  CRDS client line 2026-11-25 17:52:22.605:  DEV calibration SW identified. Defaulting to Edit Context. [inside step render_nm_F480M (step ended 17:53:18)]
+  PARS-RESAMPLESTEP lines from 17:44:02 to 17:52:25
+  nearest CRDS / PARS line to the modification time after run 2: 17:52:22.605 (+105.6 s)
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 0 log e2f-m7-fan_52781393_0.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 1 log e2f-m7-fan_52781393_1.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 2 log e2f-m7-fan_52781393_2.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 3 log e2f-m7-fan_52781393_3.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 4 log e2f-m7-fan_52781393_4.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 5 log e2f-m7-fan_52781393_5.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 6 log e2f-m7-fan_52781393_6.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 2 fan-out task 7 log e2f-m7-fan_52781393_7.log: 0 CRDS client lines, 0 PARS-RESAMPLESTEP lines
+  nearest CRDS / PARS line to the modification time after run 2: none
+  lines within 100 s of the modification time: 0
+run 1 ctl finalize log e2e045-ctl-m7-fin_52689539_4294967294.log: 1 CRDS client lines, 8 PARS-RESAMPLESTEP lines
+run 1 opt finalize log e2e045-opt-m7-fin_52688508_4294967294.log: 1 CRDS client lines, 8 PARS-RESAMPLESTEP lines
+reference named by the PARS-RESAMPLESTEP lines: run 2 finalize: jwst_nircam_pars-resamplestep_0001.asdf; run 2 post: jwst_nircam_pars-resamplestep_0001.asdf; run 1 ctl finalize: jwst_nircam_pars-resamplestep_0001.asdf; run 1 opt finalize: jwst_nircam_pars-resamplestep_0001.asdf
+accounting query (sacct -u adamginsburg -X -P, window 2026-11-25T17:00:00 to 2026-11-25T17:52:00): jobs with `finalize` in the name that started at or before 2026-11-25 17:50:37 and had not ended before it, not part of run 2
+  candidate 52255738 wd11905-o001-m4-finalize partition hpg-turin state RUNNING start 2026-11-25T16:32:53 end Unknown
+  candidate 50895726 brick2221-o001-m6-finalize-F182M partition hpg-turin state RUNNING start 2026-11-25T17:02:38 end Unknown
+  candidate 50895727 brick2221-o001-m6-finalize-F187N partition hpg-turin state RUNNING start 2026-11-25T17:25:56 end Unknown
+  candidate 50895728 brick2221-o001-m6-finalize-F212N partition hpg-turin state RUNNING start 2026-11-25T17:37:38 end Unknown
+  candidate 50895780 cloudc2221-o002-m5-finalize-F182M partition hpg-turin state RUNNING start 2026-11-25T17:41:46 end Unknown
+  candidate 50895781 cloudc2221-o002-m5-finalize-F187N partition hpg-turin state RUNNING start 2026-11-25T17:45:37 end Unknown
+  candidate 50895782 cloudc2221-o002-m5-finalize-F212N partition hpg-turin state RUNNING start 2026-11-25T17:49:32 end Unknown
+  candidates: 7

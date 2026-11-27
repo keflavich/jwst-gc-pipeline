@@ -1,0 +1,337 @@
+matching radius 3 px = 0.094 arcsec; leftovers >= 100 MJy/sr in the pair tables
+
+tag                      L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50   >=200  >=500 
+ctlfin                        349      257      212      149      123                97     42     10
+optfin                         47        7        3        0        0                 1      0      0
+optnm                         262      213      198      146      123                30     24      7
+opt2fin                        54        6        2        0        0                 0      0      0
+opt2nm                        268      212      197      146      123                29     24      7
+optk4full                      47        7        3        0        0                 1      0      0
+opt2k4full                     54        6        2        0        0                 0      0      0
+optv480k4full                  49        9        4        0        0                 1      0      0
+opt2v480k4full                 56        8        3        0        0                 0      0      0
+ctlk4emu                       88       28        8        0        0                22      3      0
+opt2k4emu                      54        6        2        0        0                 0      0      0
+ctlv480k4emu                   91       30        9        0        0                22      3      0
+opt2v480k4emu                  56        8        3        0        0                 0      0      0
+ctlv480k1emu                  118       51       15        1        0                43      7      0
+opt2v480k1emu                  68       15        4        0        0                 0      0      0
+prod                          318      224      180      121      101                90     34      9
+dq3mkrdncg                    129       56       17        1        0                 1      0      0
+dq3mkrsd1                     119       53       14        0        0                 1      0      0
+ee6dq3mkrdncg                 120       52       16        1        0                 1      0      0
+ee6dq3mkrsd1                  110       49       13        0        0                 1      0      0
+dq3kf4mkr1e6x20                99       33       11        0        0                23      3      0
+ee6dq3kf4mkr1e6x20             91       30       10        0        0                22      3      0
+dq3kf1mkr1e6x20               129       56       17        1        0                35      6      0
+ee6dq3kf1mkr1e6x20            120       52       16        1        0                33      6      0
+
+ctlfin                   >=200 by class: NOT_IN_M7_CATALOG 24, SATSTAR_NEAR 181, VETTED_BUT_UNSUBTRACTED 7, VETTED_OUT 0
+optfin                   >=200 by class: NOT_IN_M7_CATALOG 1, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+optnm                    >=200 by class: NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 179, VETTED_BUT_UNSUBTRACTED 3, VETTED_OUT 0
+opt2fin                  >=200 by class: NOT_IN_M7_CATALOG 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+opt2nm                   >=200 by class: NOT_IN_M7_CATALOG 16, SATSTAR_NEAR 179, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+optk4full                >=200 by class: NOT_IN_M7_CATALOG 1, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+opt2k4full               >=200 by class: NOT_IN_M7_CATALOG 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+optv480k4full            >=200 by class: NOT_IN_M7_CATALOG 2, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+opt2v480k4full           >=200 by class: NOT_IN_M7_CATALOG 2, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+ctlk4emu                 >=200 by class: NOT_IN_M7_CATALOG 4, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 0
+opt2k4emu                >=200 by class: NOT_IN_M7_CATALOG 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+ctlv480k4emu             >=200 by class: NOT_IN_M7_CATALOG 5, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 0
+opt2v480k4emu            >=200 by class: NOT_IN_M7_CATALOG 2, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+ctlv480k1emu             >=200 by class: NOT_IN_M7_CATALOG 8, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 0
+opt2v480k1emu            >=200 by class: NOT_IN_M7_CATALOG 2, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+prod                     >=200 by class: NOT_IN_M7_CATALOG 24, SATSTAR_NEAR 148, VETTED_BUT_UNSUBTRACTED 7, VETTED_OUT 1
+dq3mkrdncg               >=200 by class: NOT_IN_M7_CATALOG 10, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq3mkrsd1                >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3mkrdncg            >=200 by class: NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3mkrsd1             >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq3kf4mkr1e6x20          >=200 by class: NOT_IN_M7_CATALOG 6, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf4mkr1e6x20       >=200 by class: NOT_IN_M7_CATALOG 5, SATSTAR_NEAR 0, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+dq3kf1mkr1e6x20          >=200 by class: NOT_IN_M7_CATALOG 10, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+ee6dq3kf1mkr1e6x20       >=200 by class: NOT_IN_M7_CATALOG 9, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 4, VETTED_OUT 1
+
+4 added seed rows (survive file <scratch>/e2e2/results/survive_F480M.json): {'B relaxed': 4}
+
+reference pair ee6dq3mkrdncg -> ee6dq3mkrsd1: 3 leftovers >= 100 cleared; followed in every pair below
+
+=== ctlfin -> opt2nm: leftovers >= 100: 257 -> 212; cleared 48, reduced <0.5x 0, unchanged 209, worse >1.5x 0; new (no counterpart in ctlfin) 2
+    cleared >= 200: 17 of 212; >= 500: 5 of 149; >= 1000: 2 of 123
+    cleared by class: NOT_IN_M7_CATALOG 24, SATSTAR_NEAR 9, VETTED_BUT_UNSUBTRACTED 12, VETTED_OUT 3
+    new by class: SATSTAR_NEAR 2
+    cleared  (  390,  117) VETTED_BUT_UNSUBTRACTED     5101 ->       0
+    cleared  ( 5332, 2213) SATSTAR_NEAR                1814 ->       0  added B relaxed 0.016"
+    cleared  ( 1048,  755) NOT_IN_M7_CATALOG            617 ->       0  added B relaxed 0.047"
+    cleared  ( 5249, 1623) NOT_IN_M7_CATALOG            548 ->       0
+    cleared  ( 5254, 1630) NOT_IN_M7_CATALOG            543 ->       0
+    cleared  ( 2783,  958) NOT_IN_M7_CATALOG            444 ->       0  added B relaxed 0.005"
+    cleared  ( 2353, 1644) NOT_IN_M7_CATALOG            405 ->       0
+    cleared  ( 2425,  253) SATSTAR_NEAR                 385 ->       0
+    cleared  (  155,  140) NOT_IN_M7_CATALOG            333 ->       0
+    cleared  ( 4150, 1256) VETTED_BUT_UNSUBTRACTED      299 ->       0
+    cleared  ( 1167,  508) SATSTAR_NEAR                 241 ->       0
+    cleared  ( 3327,  723) SATSTAR_NEAR                 236 ->       0
+    new      ( 4470,  212) SATSTAR_NEAR                           1752
+    new      ( 5140,  694) SATSTAR_NEAR                           1236
+    added rows with a ctlfin leftover >= 100 within 0.1": {'B relaxed': 4}; of those the leftover is cleared in opt2nm for {'B relaxed': 4}
+    cleared leftovers by nearest added row: {'none': 44, 'B relaxed': 4}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 3 are leftovers >= 100 in ctlfin, 3 of those are cleared in opt2nm; 0 are not leftovers in ctlfin
+    big craters: 97 -> 29; gone 69 (>= 200: 18), new 1 (>= 200: 1)
+    crater new  ( 1818, 1303) depth 278 model_peak 862 depth_over_model 0.322 nearest vetted row 0.180"
+    crater gone ( 1099, 1974) depth 2130 model_peak 2390 depth_over_model 0.891 nearest vetted row 0.016"
+    crater gone ( 3408,  858) depth 983 model_peak 1294 depth_over_model 0.760 nearest vetted row 0.014"
+    crater gone ( 3330,  724) depth 814 model_peak 1133 depth_over_model 0.719 nearest vetted row 0.037"
+    crater gone ( 2267, 1747) depth 479 model_peak 1205 depth_over_model 0.397 nearest vetted row 0.035"
+    crater gone ( 5336,  750) depth 446 model_peak 661 depth_over_model 0.675 nearest vetted row 0.024"
+    crater gone (  598,  192) depth 399 model_peak 789 depth_over_model 0.506 nearest vetted row 0.017"
+    crater gone ( 4353, 1883) depth 384 model_peak 715 depth_over_model 0.536 nearest vetted row 0.031"
+    crater gone (  396,  704) depth 383 model_peak 849 depth_over_model 0.451 nearest vetted row 0.033"
+    crater gone ( 3915,  447) depth 366 model_peak 903 depth_over_model 0.405 nearest vetted row 0.035"
+    crater gone ( 3899,  447) depth 345 model_peak 841 depth_over_model 0.411 nearest vetted row 0.035"
+    crater gone ( 1740, 1974) depth 332 model_peak 456 depth_over_model 0.727 nearest vetted row 0.042"
+    crater gone ( 3986,  813) depth 303 model_peak 670 depth_over_model 0.452 nearest vetted row 0.004"
+
+=== ctlfin -> opt2fin: leftovers >= 100: 257 -> 6; cleared 251, reduced <0.5x 0, unchanged 6, worse >1.5x 0; new (no counterpart in ctlfin) 0
+    cleared >= 200: 210 of 212; >= 500: 149 of 149; >= 1000: 123 of 123
+    cleared by class: NOT_IN_M7_CATALOG 44, SATSTAR_NEAR 190, VETTED_BUT_UNSUBTRACTED 14, VETTED_OUT 3
+    new by class: 
+    cleared  ( 2120, 2233) SATSTAR_NEAR                6940 ->       0
+    cleared  ( 2390, 1685) SATSTAR_NEAR                6452 ->       0
+    cleared  (  390,  117) VETTED_BUT_UNSUBTRACTED     5101 ->       0
+    cleared  (  479,  174) SATSTAR_NEAR                4923 ->       0
+    cleared  ( 1394,  832) SATSTAR_NEAR                4626 ->       0
+    cleared  ( 2000,  126) SATSTAR_NEAR                4440 ->       0
+    cleared  ( 1321, 1528) SATSTAR_NEAR                4080 ->       0
+    cleared  (  346,  177) SATSTAR_NEAR                3903 ->       0
+    cleared  ( 4303, 1540) SATSTAR_NEAR                3738 ->       0
+    cleared  ( 4647,  600) SATSTAR_NEAR                3484 ->       0
+    cleared  ( 5460, 1076) NOT_IN_M7_CATALOG           3096 ->       0
+    cleared  ( 2501, 2047) SATSTAR_NEAR                3056 ->       0
+    added rows with a ctlfin leftover >= 100 within 0.1": {'B relaxed': 4}; of those the leftover is cleared in opt2fin for {'B relaxed': 4}
+    cleared leftovers by nearest added row: {'none': 247, 'B relaxed': 4}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 3 are leftovers >= 100 in ctlfin, 3 of those are cleared in opt2fin; 0 are not leftovers in ctlfin
+    big craters: 97 -> 0; gone 97 (>= 200: 42), new 0 (>= 200: 0)
+    crater gone ( 3419, 2094) depth 14001 model_peak 4876 depth_over_model 2.872 nearest vetted row 0.447"
+    crater gone ( 1099, 1974) depth 2130 model_peak 2390 depth_over_model 0.891 nearest vetted row 0.016"
+    crater gone (  222, 2005) depth 2058 model_peak 3940 depth_over_model 0.522 nearest vetted row 0.008"
+    crater gone ( 4985, 1426) depth 1485 model_peak 4021 depth_over_model 0.369 nearest vetted row 0.268"
+    crater gone ( 5470, 1067) depth 1343 model_peak 3134 depth_over_model 0.428 nearest vetted row 0.306"
+    crater gone ( 2120, 2229) depth 1222 model_peak 2817 depth_over_model 0.434 nearest vetted row 0.097"
+    crater gone ( 3408,  858) depth 983 model_peak 1294 depth_over_model 0.760 nearest vetted row 0.014"
+    crater gone ( 3330,  724) depth 814 model_peak 1133 depth_over_model 0.719 nearest vetted row 0.037"
+    crater gone ( 5127, 2048) depth 785 model_peak 2131 depth_over_model 0.368 nearest vetted row 0.036"
+    crater gone ( 5124,  713) depth 737 model_peak 2383 depth_over_model 0.309 nearest vetted row 0.042"
+    crater gone ( 2267, 1747) depth 479 model_peak 1205 depth_over_model 0.397 nearest vetted row 0.035"
+    crater gone ( 5336,  750) depth 446 model_peak 661 depth_over_model 0.675 nearest vetted row 0.024"
+
+=== optnm -> opt2nm: leftovers >= 100: 213 -> 212; cleared 1, reduced <0.5x 0, unchanged 212, worse >1.5x 0; new (no counterpart in optnm) 0
+    cleared >= 200: 1 of 198; >= 500: 0 of 146; >= 1000: 0 of 123
+    cleared by class: VETTED_BUT_UNSUBTRACTED 1
+    new by class: 
+    cleared  (  410, 1680) VETTED_BUT_UNSUBTRACTED      214 ->       0
+    added rows with a optnm leftover >= 100 within 0.1": {}; of those the leftover is cleared in opt2nm for {}
+    cleared leftovers by nearest added row: {'none': 1}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 0 are leftovers >= 100 in optnm, 0 of those are cleared in opt2nm; 3 are not leftovers in optnm
+    big craters: 30 -> 29; gone 1 (>= 200: 0), new 0 (>= 200: 0)
+    crater gone ( 3701,  498) depth 71 model_peak 149 depth_over_model 0.474 nearest vetted row 0.015"
+
+=== optfin -> opt2fin: leftovers >= 100: 7 -> 6; cleared 1, reduced <0.5x 0, unchanged 6, worse >1.5x 0; new (no counterpart in optfin) 0
+    cleared >= 200: 1 of 3; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: VETTED_BUT_UNSUBTRACTED 1
+    new by class: 
+    cleared  (  410, 1680) VETTED_BUT_UNSUBTRACTED      214 ->       0
+    added rows with a optfin leftover >= 100 within 0.1": {}; of those the leftover is cleared in opt2fin for {}
+    cleared leftovers by nearest added row: {'none': 1}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 0 are leftovers >= 100 in optfin, 0 of those are cleared in opt2fin; 3 are not leftovers in optfin
+    big craters: 1 -> 0; gone 1 (>= 200: 0), new 0 (>= 200: 0)
+    crater gone ( 3701,  498) depth 71 model_peak 149 depth_over_model 0.474 nearest vetted row 0.015"
+
+=== optk4full -> opt2k4full: leftovers >= 100: 7 -> 6; cleared 1, reduced <0.5x 0, unchanged 6, worse >1.5x 0; new (no counterpart in optk4full) 0
+    cleared >= 200: 1 of 3; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: VETTED_BUT_UNSUBTRACTED 1
+    new by class: 
+    cleared  (  410, 1680) VETTED_BUT_UNSUBTRACTED      214 ->       0
+    added rows with a optk4full leftover >= 100 within 0.1": {}; of those the leftover is cleared in opt2k4full for {}
+    cleared leftovers by nearest added row: {'none': 1}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 0 are leftovers >= 100 in optk4full, 0 of those are cleared in opt2k4full; 3 are not leftovers in optk4full
+    big craters: 1 -> 0; gone 1 (>= 200: 0), new 0 (>= 200: 0)
+    crater gone ( 3701,  498) depth 71 model_peak 149 depth_over_model 0.474 nearest vetted row 0.015"
+
+=== optv480k4full -> opt2v480k4full: leftovers >= 100: 9 -> 8; cleared 1, reduced <0.5x 0, unchanged 8, worse >1.5x 0; new (no counterpart in optv480k4full) 0
+    cleared >= 200: 1 of 4; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: VETTED_BUT_UNSUBTRACTED 1
+    new by class: 
+    cleared  (  410, 1680) VETTED_BUT_UNSUBTRACTED      214 ->       0
+    added rows with a optv480k4full leftover >= 100 within 0.1": {}; of those the leftover is cleared in opt2v480k4full for {}
+    cleared leftovers by nearest added row: {'none': 1}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 0 are leftovers >= 100 in optv480k4full, 0 of those are cleared in opt2v480k4full; 3 are not leftovers in optv480k4full
+    big craters: 1 -> 0; gone 1 (>= 200: 0), new 0 (>= 200: 0)
+    crater gone ( 3701,  498) depth 71 model_peak 149 depth_over_model 0.474 nearest vetted row 0.015"
+
+=== ctlk4emu -> opt2k4emu: leftovers >= 100: 28 -> 6; cleared 22, reduced <0.5x 0, unchanged 6, worse >1.5x 0; new (no counterpart in ctlk4emu) 0
+    cleared >= 200: 6 of 8; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: NOT_IN_M7_CATALOG 12, VETTED_BUT_UNSUBTRACTED 7, VETTED_OUT 3
+    new by class: 
+    cleared  ( 2783,  958) NOT_IN_M7_CATALOG            444 ->       0  added B relaxed 0.005"
+    cleared  (  155,  140) NOT_IN_M7_CATALOG            333 ->       0
+    cleared  ( 1071,  147) VETTED_BUT_UNSUBTRACTED      230 ->       0
+    cleared  ( 1420,  275) VETTED_BUT_UNSUBTRACTED      214 ->       0
+    cleared  ( 1238, 1546) VETTED_BUT_UNSUBTRACTED      213 ->       0
+    cleared  ( 3887,  207) NOT_IN_M7_CATALOG            201 ->       0  added B relaxed 0.022"
+    cleared  ( 1967, 1643) NOT_IN_M7_CATALOG            173 ->       0
+    cleared  ( 5541, 1254) NOT_IN_M7_CATALOG            167 ->       0
+    cleared  (  698,  602) VETTED_OUT                   154 ->       0
+    cleared  (  405, 1013) NOT_IN_M7_CATALOG            143 ->       0
+    cleared  ( 3826,  360) NOT_IN_M7_CATALOG            142 ->       0
+    cleared  ( 1554,  509) NOT_IN_M7_CATALOG            140 ->       0
+    added rows with a ctlk4emu leftover >= 100 within 0.1": {'B relaxed': 2}; of those the leftover is cleared in opt2k4emu for {'B relaxed': 2}
+    cleared leftovers by nearest added row: {'none': 20, 'B relaxed': 2}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 2 are leftovers >= 100 in ctlk4emu, 2 of those are cleared in opt2k4emu; 1 are not leftovers in ctlk4emu
+    big craters: 22 -> 0; gone 22 (>= 200: 3), new 0 (>= 200: 0)
+    crater gone (  565,  514) depth 276 model_peak 768 depth_over_model 0.359 nearest vetted row 0.037"
+    crater gone ( 5219, 2166) depth 267 model_peak 278 depth_over_model 0.961 nearest vetted row 0.021"
+    crater gone ( 1141, 1714) depth 251 model_peak 370 depth_over_model 0.678 nearest vetted row 0.138"
+    crater gone ( 2007, 1502) depth 154 model_peak 313 depth_over_model 0.492 nearest vetted row 0.025"
+    crater gone ( 3192,  964) depth 131 model_peak 270 depth_over_model 0.486 nearest vetted row 0.026"
+    crater gone ( 2395, 1396) depth 106 model_peak 205 depth_over_model 0.516 nearest vetted row 0.031"
+    crater gone ( 2681, 2048) depth 96 model_peak 186 depth_over_model 0.516 nearest vetted row 0.012"
+    crater gone ( 3825,  598) depth 95 model_peak 165 depth_over_model 0.577 nearest vetted row 0.015"
+    crater gone ( 2629,  250) depth 94 model_peak 312 depth_over_model 0.301 nearest vetted row 0.013"
+    crater gone ( 4561, 1480) depth 93 model_peak 261 depth_over_model 0.354 nearest vetted row 0.042"
+    crater gone ( 2044, 1649) depth 79 model_peak 258 depth_over_model 0.307 nearest vetted row 0.012"
+    crater gone ( 5122,  589) depth 76 model_peak 251 depth_over_model 0.304 nearest vetted row 0.027"
+
+=== ctlv480k4emu -> opt2v480k4emu: leftovers >= 100: 30 -> 8; cleared 22, reduced <0.5x 0, unchanged 8, worse >1.5x 0; new (no counterpart in ctlv480k4emu) 0
+    cleared >= 200: 6 of 9; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: NOT_IN_M7_CATALOG 12, VETTED_BUT_UNSUBTRACTED 7, VETTED_OUT 3
+    new by class: 
+    cleared  ( 2783,  958) NOT_IN_M7_CATALOG            444 ->       0  added B relaxed 0.005"
+    cleared  (  155,  140) NOT_IN_M7_CATALOG            333 ->       0
+    cleared  ( 1071,  147) VETTED_BUT_UNSUBTRACTED      230 ->       0
+    cleared  ( 1420,  275) VETTED_BUT_UNSUBTRACTED      214 ->       0
+    cleared  ( 1238, 1546) VETTED_BUT_UNSUBTRACTED      213 ->       0
+    cleared  ( 3887,  207) NOT_IN_M7_CATALOG            201 ->       0  added B relaxed 0.022"
+    cleared  ( 1967, 1643) NOT_IN_M7_CATALOG            173 ->       0
+    cleared  ( 5541, 1254) NOT_IN_M7_CATALOG            167 ->       0
+    cleared  (  698,  602) VETTED_OUT                   154 ->       0
+    cleared  (  405, 1013) NOT_IN_M7_CATALOG            143 ->       0
+    cleared  ( 3826,  360) NOT_IN_M7_CATALOG            142 ->       0
+    cleared  ( 1554,  509) NOT_IN_M7_CATALOG            140 ->       0
+    added rows with a ctlv480k4emu leftover >= 100 within 0.1": {'B relaxed': 2}; of those the leftover is cleared in opt2v480k4emu for {'B relaxed': 2}
+    cleared leftovers by nearest added row: {'none': 20, 'B relaxed': 2}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 2 are leftovers >= 100 in ctlv480k4emu, 2 of those are cleared in opt2v480k4emu; 1 are not leftovers in ctlv480k4emu
+    big craters: 22 -> 0; gone 22 (>= 200: 3), new 0 (>= 200: 0)
+    crater gone (  565,  514) depth 276 model_peak 768 depth_over_model 0.359 nearest vetted row 0.037"
+    crater gone ( 5219, 2166) depth 267 model_peak 278 depth_over_model 0.960 nearest vetted row 0.021"
+    crater gone ( 1141, 1714) depth 251 model_peak 370 depth_over_model 0.678 nearest vetted row 0.138"
+    crater gone ( 2007, 1502) depth 154 model_peak 313 depth_over_model 0.492 nearest vetted row 0.025"
+    crater gone ( 3192,  964) depth 131 model_peak 270 depth_over_model 0.486 nearest vetted row 0.026"
+    crater gone ( 2395, 1396) depth 106 model_peak 205 depth_over_model 0.516 nearest vetted row 0.031"
+    crater gone ( 2681, 2048) depth 96 model_peak 186 depth_over_model 0.516 nearest vetted row 0.012"
+    crater gone ( 3825,  598) depth 95 model_peak 165 depth_over_model 0.577 nearest vetted row 0.015"
+    crater gone ( 2629,  250) depth 94 model_peak 312 depth_over_model 0.301 nearest vetted row 0.013"
+    crater gone ( 4561, 1480) depth 93 model_peak 261 depth_over_model 0.354 nearest vetted row 0.042"
+    crater gone ( 2044, 1649) depth 79 model_peak 258 depth_over_model 0.307 nearest vetted row 0.012"
+    crater gone ( 5122,  589) depth 76 model_peak 251 depth_over_model 0.304 nearest vetted row 0.027"
+
+=== ctlv480k1emu -> opt2v480k1emu: leftovers >= 100: 51 -> 15; cleared 36, reduced <0.5x 0, unchanged 15, worse >1.5x 0; new (no counterpart in ctlv480k1emu) 0
+    cleared >= 200: 11 of 15; >= 500: 1 of 1; >= 1000: 0 of 0
+    cleared by class: NOT_IN_M7_CATALOG 19, SATSTAR_NEAR 7, VETTED_BUT_UNSUBTRACTED 7, VETTED_OUT 3
+    new by class: 
+    cleared  ( 1048,  755) NOT_IN_M7_CATALOG            617 ->       0  added B relaxed 0.047"
+    cleared  ( 2783,  958) NOT_IN_M7_CATALOG            444 ->       0  added B relaxed 0.005"
+    cleared  ( 2353, 1644) NOT_IN_M7_CATALOG            405 ->       0
+    cleared  ( 2425,  253) SATSTAR_NEAR                 385 ->       0
+    cleared  (  155,  140) NOT_IN_M7_CATALOG            333 ->       0
+    cleared  ( 1167,  508) SATSTAR_NEAR                 240 ->       0
+    cleared  ( 1071,  147) VETTED_BUT_UNSUBTRACTED      230 ->       0
+    cleared  ( 5524,  883) NOT_IN_M7_CATALOG            215 ->       0
+    cleared  ( 1420,  275) VETTED_BUT_UNSUBTRACTED      214 ->       0
+    cleared  ( 1238, 1546) VETTED_BUT_UNSUBTRACTED      213 ->       0
+    cleared  ( 3887,  207) NOT_IN_M7_CATALOG            201 ->       0  added B relaxed 0.022"
+    cleared  ( 1967, 1643) NOT_IN_M7_CATALOG            173 ->       0
+    added rows with a ctlv480k1emu leftover >= 100 within 0.1": {'B relaxed': 3}; of those the leftover is cleared in opt2v480k1emu for {'B relaxed': 3}
+    cleared leftovers by nearest added row: {'none': 33, 'B relaxed': 3}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 3 are leftovers >= 100 in ctlv480k1emu, 3 of those are cleared in opt2v480k1emu; 0 are not leftovers in ctlv480k1emu
+    big craters: 43 -> 0; gone 43 (>= 200: 7), new 0 (>= 200: 0)
+    crater gone ( 3887,  449) depth 332 model_peak 791 depth_over_model 0.419 nearest vetted row 0.021"
+    crater gone ( 3926,  449) depth 286 model_peak 715 depth_over_model 0.400 nearest vetted row 0.044"
+    crater gone (  565,  514) depth 276 model_peak 768 depth_over_model 0.359 nearest vetted row 0.037"
+    crater gone ( 5219, 2166) depth 267 model_peak 278 depth_over_model 0.960 nearest vetted row 0.021"
+    crater gone ( 1141, 1714) depth 251 model_peak 370 depth_over_model 0.678 nearest vetted row 0.138"
+    crater gone ( 3887,  472) depth 247 model_peak 597 depth_over_model 0.414 nearest vetted row 0.034"
+    crater gone (  773, 2057) depth 201 model_peak 285 depth_over_model 0.706 nearest vetted row 0.043"
+    crater gone ( 3907,  484) depth 172 model_peak 399 depth_over_model 0.432 nearest vetted row 0.027"
+    crater gone (  793,  888) depth 154 model_peak 274 depth_over_model 0.563 nearest vetted row 0.055"
+    crater gone ( 2007, 1502) depth 154 model_peak 313 depth_over_model 0.492 nearest vetted row 0.025"
+    crater gone ( 2805, 1951) depth 140 model_peak 287 depth_over_model 0.488 nearest vetted row 0.019"
+    crater gone (  760, 2056) depth 135 model_peak 288 depth_over_model 0.469 nearest vetted row 0.085"
+
+=== opt2k4full -> opt2v480k4full: leftovers >= 100: 6 -> 8; cleared 0, reduced <0.5x 0, unchanged 6, worse >1.5x 0; new (no counterpart in opt2k4full) 2
+    cleared >= 200: 0 of 2; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: NOT_IN_M7_CATALOG 2
+    new      ( 2935, 2210) NOT_IN_M7_CATALOG                       273
+    new      ( 1458, 1713) NOT_IN_M7_CATALOG                       195
+    added rows with a opt2k4full leftover >= 100 within 0.1": {}; of those the leftover is cleared in opt2v480k4full for {}
+    cleared leftovers by nearest added row: {}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 0 are leftovers >= 100 in opt2k4full, 0 of those are cleared in opt2v480k4full; 3 are not leftovers in opt2k4full
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+=== opt2fin -> opt2v480k4full: leftovers >= 100: 6 -> 8; cleared 0, reduced <0.5x 0, unchanged 6, worse >1.5x 0; new (no counterpart in opt2fin) 2
+    cleared >= 200: 0 of 2; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: NOT_IN_M7_CATALOG 2
+    new      ( 2935, 2210) NOT_IN_M7_CATALOG                       273
+    new      ( 1458, 1713) NOT_IN_M7_CATALOG                       195
+    added rows with a opt2fin leftover >= 100 within 0.1": {}; of those the leftover is cleared in opt2v480k4full for {}
+    cleared leftovers by nearest added row: {}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 0 are leftovers >= 100 in opt2fin, 0 of those are cleared in opt2v480k4full; 3 are not leftovers in opt2fin
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+=== prod -> opt2fin: leftovers >= 100: 224 -> 6; cleared 218, reduced <0.5x 0, unchanged 6, worse >1.5x 0; new (no counterpart in prod) 0
+    cleared >= 200: 178 of 180; >= 500: 121 of 121; >= 1000: 101 of 101
+    cleared by class: NOT_IN_M7_CATALOG 41, SATSTAR_NEAR 157, VETTED_BUT_UNSUBTRACTED 15, VETTED_OUT 5
+    new by class: 
+    cleared  ( 2120, 2233) SATSTAR_NEAR                6799 ->       0
+    cleared  (  390,  117) VETTED_BUT_UNSUBTRACTED     5098 ->       0
+    cleared  ( 2501, 2047) SATSTAR_NEAR                3143 ->       0
+    cleared  ( 5460, 1076) NOT_IN_M7_CATALOG           3096 ->       0
+    cleared  ( 2783, 1957) SATSTAR_NEAR                3004 ->       0
+    cleared  ( 3863,  372) SATSTAR_NEAR                2767 ->       0
+    cleared  ( 1598, 2193) SATSTAR_NEAR                2764 ->       0
+    cleared  ( 2781, 1962) SATSTAR_NEAR                2716 ->       0
+    cleared  ( 1605, 2199) SATSTAR_NEAR                2677 ->       0
+    cleared  ( 2495, 2054) SATSTAR_NEAR                2662 ->       0
+    cleared  ( 1611, 2193) SATSTAR_NEAR                2615 ->       0
+    cleared  ( 2509, 2054) SATSTAR_NEAR                2604 ->       0
+    added rows with a prod leftover >= 100 within 0.1": {'B relaxed': 4}; of those the leftover is cleared in opt2fin for {'B relaxed': 4}
+    cleared leftovers by nearest added row: {'none': 214, 'B relaxed': 4}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 3 are leftovers >= 100 in prod, 3 of those are cleared in opt2fin; 0 are not leftovers in prod
+    big craters: 90 -> 0; gone 90 (>= 200: 34), new 0 (>= 200: 0)
+    crater gone ( 3419, 2095) depth 18506 model_peak 5665 depth_over_model 3.267 nearest vetted row 0.390"
+    crater gone (   64, 1661) depth 2959 model_peak 9098 depth_over_model 0.325 nearest vetted row 0.035"
+    crater gone (  222, 2005) depth 2031 model_peak 3912 depth_over_model 0.519 nearest vetted row 0.006"
+    crater gone ( 2120, 2229) depth 1429 model_peak 3024 depth_over_model 0.473 nearest vetted row 0.105"
+    crater gone ( 3408,  858) depth 1021 model_peak 1332 depth_over_model 0.767 nearest vetted row 0.010"
+    crater gone ( 3330,  724) depth 895 model_peak 1199 depth_over_model 0.746 nearest vetted row 0.037"
+    crater gone ( 5127, 2048) depth 802 model_peak 2146 depth_over_model 0.374 nearest vetted row 0.035"
+    crater gone ( 2419,  269) depth 702 model_peak 2121 depth_over_model 0.331 nearest vetted row 0.284"
+    crater gone ( 1099, 1974) depth 544 model_peak 804 depth_over_model 0.677 nearest vetted row 0.016"
+    crater gone ( 4670, 2254) depth 455 model_peak 1057 depth_over_model 0.431 nearest vetted row 0.276"
+    crater gone ( 5336,  750) depth 446 model_peak 661 depth_over_model 0.675 nearest vetted row 0.024"
+    crater gone ( 2267, 1747) depth 431 model_peak 1159 depth_over_model 0.372 nearest vetted row 0.034"
+
+=== ee6dq3mkrdncg -> ee6dq3mkrsd1: leftovers >= 100: 52 -> 49; cleared 3, reduced <0.5x 0, unchanged 49, worse >1.5x 0; new (no counterpart in ee6dq3mkrdncg) 0
+    cleared >= 200: 3 of 16; >= 500: 1 of 1; >= 1000: 0 of 0
+    cleared by class: NOT_IN_M7_CATALOG 3
+    new by class: 
+    cleared  ( 1048,  755) NOT_IN_M7_CATALOG            616 ->       0  added B relaxed 0.047"
+    cleared  ( 2783,  958) NOT_IN_M7_CATALOG            444 ->       0  added B relaxed 0.005"
+    cleared  ( 3887,  207) NOT_IN_M7_CATALOG            201 ->       0  added B relaxed 0.022"
+    added rows with a ee6dq3mkrdncg leftover >= 100 within 0.1": {'B relaxed': 3}; of those the leftover is cleared in ee6dq3mkrsd1 for {'B relaxed': 3}
+    cleared leftovers by nearest added row: {'B relaxed': 3}
+    the 3 leftovers cleared in ee6dq3mkrdncg:ee6dq3mkrsd1: 3 are leftovers >= 100 in ee6dq3mkrdncg, 3 of those are cleared in ee6dq3mkrsd1; 0 are not leftovers in ee6dq3mkrdncg
+    big craters: 1 -> 1; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+wrote <scratch>/e2e2/results/compare_F480M.json

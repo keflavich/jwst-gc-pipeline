@@ -1,0 +1,62 @@
+# o045 F212N residual i2d counts of the neighbour-guard test: whole-star leftovers (resid_over_data > 0.7, resid_peak >= N MJy/sr) and big craters (depth > 50 MJy/sr, depth/model peak > 0.3).
+# Tags: opt3cnm / opt3gnm = unmasked render of the control (guard off) / guard arm (SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN=0.2); opt3cfin / opt3gfin = render of the finalize with the footprint mask at KFAC 4;
+# opt3ck3, opt3gk3 and opt3ck2, opt3gk2 = the same masks at KFAC 3 and 2.  Leftover pair tables use leftovers >= 100 MJy/sr and a matching radius of 3 pixels.
+matching radius 3 px = 0.094 arcsec; leftovers >= 100 MJy/sr in the pair tables
+
+tag                      L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50   >=200  >=500 
+opt3cnm                       857      195       77       46       34               129     57     15
+opt3gnm                       828      164       46       22       14               128     56     14
+opt3cfin                      661       78        9        0        0                10      0      0
+opt3gfin                      661       78        9        0        0                10      0      0
+opt3ck3                       682       88        9        0        0                12      0      0
+opt3gk3                       682       88        9        0        0                12      0      0
+opt3ck2                       701       97       16        1        0                15      0      0
+opt3gk2                       701       97       16        1        0                15      0      0
+
+opt3cnm                  >=200 by class: NOT_IN_M7_CATALOG 8, SATSTAR_NEAR 65, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 2
+opt3gnm                  >=200 by class: NOT_IN_M7_CATALOG 8, SATSTAR_NEAR 34, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 2
+opt3cfin                 >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+opt3gfin                 >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+opt3ck3                  >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+opt3gk3                  >=200 by class: NOT_IN_M7_CATALOG 7, SATSTAR_NEAR 1, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 0
+opt3ck2                  >=200 by class: NOT_IN_M7_CATALOG 10, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+opt3gk2                  >=200 by class: NOT_IN_M7_CATALOG 10, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 1, VETTED_OUT 1
+
+=== opt3cnm -> opt3gnm: leftovers >= 100: 195 -> 164; cleared 32, reduced <0.5x 0, unchanged 163, worse >1.5x 0; new (no counterpart in opt3cnm) 1
+    cleared >= 200: 31 of 77; >= 500: 24 of 46; >= 1000: 20 of 34
+    cleared by class: SATSTAR_NEAR 32
+    new by class: SATSTAR_NEAR 1
+    cleared  (   12, 2284) SATSTAR_NEAR               21606 ->       0
+    cleared  ( 7954, 1717) SATSTAR_NEAR                9879 ->       0
+    cleared  ( 7656, 4561) SATSTAR_NEAR                4474 ->       0
+    cleared  ( 5135, 4522) SATSTAR_NEAR                3984 ->       0
+    cleared  ( 2974, 3510) SATSTAR_NEAR                3924 ->       0
+    cleared  ( 6333, 1162) SATSTAR_NEAR                3739 ->       0
+    cleared  ( 1998,  757) SATSTAR_NEAR                3183 ->       0
+    cleared  ( 8385, 2328) SATSTAR_NEAR                2652 ->       0
+    cleared  ( 3944, 4041) SATSTAR_NEAR                2023 ->       0
+    cleared  ( 5805, 3638) SATSTAR_NEAR                1995 ->       0
+    cleared  ( 3446,  671) SATSTAR_NEAR                1902 ->       0
+    cleared  ( 3915, 2328) SATSTAR_NEAR                1881 ->       0
+    new      (  634,   80) SATSTAR_NEAR                            102
+    big craters: 129 -> 128; gone 1 (>= 200: 1), new 0 (>= 200: 0)
+    crater gone ( 8388, 2328) depth 540 model_peak 1536 depth_over_model 0.352 nearest vetted row 0.022"
+
+=== opt3cfin -> opt3gfin: leftovers >= 100: 78 -> 78; cleared 0, reduced <0.5x 0, unchanged 78, worse >1.5x 0; new (no counterpart in opt3cfin) 0
+    cleared >= 200: 0 of 9; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 10 -> 10; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+=== opt3ck3 -> opt3gk3: leftovers >= 100: 88 -> 88; cleared 0, reduced <0.5x 0, unchanged 88, worse >1.5x 0; new (no counterpart in opt3ck3) 0
+    cleared >= 200: 0 of 9; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 12 -> 12; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+=== opt3ck2 -> opt3gk2: leftovers >= 100: 97 -> 97; cleared 0, reduced <0.5x 0, unchanged 97, worse >1.5x 0; new (no counterpart in opt3ck2) 0
+    cleared >= 200: 0 of 16; >= 500: 0 of 1; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 15 -> 15; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+

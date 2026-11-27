@@ -1,0 +1,43 @@
+Slurm accounting of the replay jobs of the investigation of the star at (8385, 2328) (QOS astronomy-dept-b, partition hpg-dev).
+Job names: lgA* = replays of the star frame with the four forms of the code, lgv2* and lgv3* = replays with the variants V2 and V3 of the duplicate-survivor rule, lgc* = replays with commit 69a647b9 on the run 2 tree.
+
+sacct -X -P -o JobID,JobName,Partition,QOS,Start,End,Elapsed,State,ExitCode -j <the job ids below>
+JobID|JobName|Partition|QOS|Start|End|Elapsed|State|ExitCode
+52815633|lgActl|hpg-dev|astronomy-dept-b|2026-11-25T18:21:56|2026-11-25T18:32:08|00:10:12|COMPLETED|0:0
+52815634|lgAno1366|hpg-dev|astronomy-dept-b|2026-11-25T18:21:59|2026-11-25T18:32:12|00:10:13|COMPLETED|0:0
+52815635|lgAearly|hpg-dev|astronomy-dept-b|2026-11-25T18:21:59|2026-11-25T18:31:48|00:09:49|COMPLETED|0:0
+52815636|lgAfixed|hpg-dev|astronomy-dept-b|2026-11-25T18:21:59|2026-11-25T18:31:42|00:09:43|COMPLETED|0:0
+52827390|lgv2S|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:51:06|00:09:43|COMPLETED|0:0
+52827391|lgv3S|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:51:14|00:09:51|COMPLETED|0:0
+52827392|lgv2rA|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:51:22|00:09:59|COMPLETED|0:0
+52827393|lgv3rA|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:51:24|00:10:01|COMPLETED|0:0
+52827394|lgv2rB|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:51:18|00:09:55|COMPLETED|0:0
+52827395|lgv3rB|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:51:17|00:09:54|COMPLETED|0:0
+52827396|lgv2rD|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:53:07|00:11:44|COMPLETED|0:0
+52827403|lgv3rD|hpg-dev|astronomy-dept-b|2026-11-25T18:41:23|2026-11-25T18:53:08|00:11:45|COMPLETED|0:0
+52827404|lgv2f45a|hpg-dev|astronomy-dept-b|2026-11-25T18:41:25|2026-11-25T19:01:02|00:19:37|COMPLETED|0:0
+52827405|lgv3f45a|hpg-dev|astronomy-dept-b|2026-11-25T18:41:25|2026-11-25T19:02:22|00:20:57|COMPLETED|0:0
+52827406|lgv2f45b|hpg-dev|astronomy-dept-b|2026-11-25T18:41:25|2026-11-25T18:56:21|00:14:56|COMPLETED|0:0
+52827422|lgv3f45b|hpg-dev|astronomy-dept-b|2026-11-25T18:41:28|2026-11-25T18:56:20|00:14:52|COMPLETED|0:0
+52828045|lgv2f105|hpg-dev|astronomy-dept-b|2026-11-25T18:51:31|2026-11-25T19:07:20|00:15:49|COMPLETED|0:0
+52828046|lgv3f105|hpg-dev|astronomy-dept-b|2026-11-25T18:51:31|2026-11-25T19:07:06|00:15:35|COMPLETED|0:0
+52828047|lgv2fF4|hpg-dev|astronomy-dept-b|2026-11-25T18:51:31|2026-11-25T19:13:34|00:22:03|COMPLETED|0:0
+52828048|lgv3fF4|hpg-dev|astronomy-dept-b|2026-11-25T18:51:31|2026-11-25T19:13:46|00:22:15|COMPLETED|0:0
+52828049|lgv2fF5|hpg-dev|astronomy-dept-b|2026-11-25T18:51:31|2026-11-25T19:15:06|00:23:35|COMPLETED|0:0
+52828050|lgv3fF5|hpg-dev|astronomy-dept-b|2026-11-25T18:51:31|2026-11-25T19:13:38|00:22:07|COMPLETED|0:0
+52828451|lgv2f4|hpg-dev|astronomy-dept-b|2026-11-25T18:53:31|2026-11-25T18:59:14|00:05:43|COMPLETED|0:0
+52828453|lgv3f4|hpg-dev|astronomy-dept-b|2026-11-25T18:53:31|2026-11-25T18:59:15|00:05:44|COMPLETED|0:0
+52828808|lgv2f5|hpg-dev|astronomy-dept-b|2026-11-25T18:57:34|2026-11-25T19:02:37|00:05:03|COMPLETED|0:0
+52828809|lgv3f5|hpg-dev|astronomy-dept-b|2026-11-25T18:57:34|2026-11-25T19:02:28|00:04:54|COMPLETED|0:0
+52828954|lgv2fA|hpg-dev|astronomy-dept-b|2026-11-25T18:59:33|2026-11-25T19:07:06|00:07:33|COMPLETED|0:0
+52828955|lgv3fA|hpg-dev|astronomy-dept-b|2026-11-25T18:59:33|2026-11-25T19:09:13|00:09:40|COMPLETED|0:0
+52829171|lgv2fB|hpg-dev|astronomy-dept-b|2026-11-25T19:01:33|2026-11-25T19:07:52|00:06:19|COMPLETED|0:0
+52829210|lgcS|hpg-dev|astronomy-dept-b|2026-11-25T19:02:50|2026-11-25T19:12:20|00:09:30|COMPLETED|0:0
+52829211|lgcrA|hpg-dev|astronomy-dept-b|2026-11-25T19:02:50|2026-11-25T19:12:33|00:09:43|COMPLETED|0:0
+52829212|lgcrB|hpg-dev|astronomy-dept-b|2026-11-25T19:02:50|2026-11-25T19:12:33|00:09:43|COMPLETED|0:0
+52829213|lgcrD|hpg-dev|astronomy-dept-b|2026-11-25T19:02:50|2026-11-25T19:14:12|00:11:22|COMPLETED|0:0
+52829674|lgv3fB|hpg-dev|astronomy-dept-b|2026-11-25T19:07:36|2026-11-25T19:14:03|00:06:27|COMPLETED|0:0
+52829675|lgv2fC|hpg-dev|astronomy-dept-b|2026-11-25T19:07:36|2026-11-25T19:12:56|00:05:20|COMPLETED|0:0
+52829917|lgv3fC|hpg-dev|astronomy-dept-b|2026-11-25T19:09:36|2026-11-25T19:16:45|00:07:09|COMPLETED|0:0
+52829918|lgv2fD|hpg-dev|astronomy-dept-b|2026-11-25T19:09:36|2026-11-25T19:15:25|00:05:49|COMPLETED|0:0
+52830340|lgv3fD|hpg-dev|astronomy-dept-b|2026-11-25T19:13:35|2026-11-25T19:18:20|00:04:45|COMPLETED|0:0

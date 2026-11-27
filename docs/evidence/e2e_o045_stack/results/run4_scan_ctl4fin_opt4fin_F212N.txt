@@ -1,0 +1,30 @@
+# o045 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source optfin, references ['ctlfin']
+## features of optfin (n_left 9, n_crater 0) against the ctlfin extremum in the same box (regressions)
+  leftover: 9 features; ctlfin below the threshold and >1.5x lower (regressions): 0; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 4; ctlfin >1.5x higher: 5
+## features of ctlfin (n_left 191, n_crater 190) against the optfin extremum in the same box (improvements)
+  leftover: 191 features; optfin below the threshold and >1.5x lower (improvements): 183; optfin >1.5x lower but above the threshold: 1; within 1.5x: 6; optfin >1.5x higher: 1
+      (  266, 1113) ctlfin   48093  optfin       0  cls=NOT_IN_M7_CATALOG d_sat=2.114
+      ( 9221, 2227) ctlfin   38604  optfin       0  cls=SATSTAR_NEAR d_sat=0.207
+      (11044, 2288) ctlfin   35444  optfin       0  cls=SATSTAR_NEAR d_sat=0.408
+      (   12, 2284) ctlfin   21606  optfin       0  cls=SATSTAR_NEAR d_sat=0.113
+      ( 1483, 1522) ctlfin   18587  optfin       0  cls=SATSTAR_NEAR d_sat=0.477
+      ( 1477, 1524) ctlfin   18578  optfin       0  cls=SATSTAR_NEAR d_sat=0.530
+      ( 6443,  197) ctlfin   15349  optfin      10  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.707
+      ( 1480, 1527) ctlfin   14173  optfin       0  cls=SATSTAR_NEAR d_sat=0.619
+      ( 5164,  948) ctlfin   12991  optfin       9  cls=SATSTAR_NEAR d_sat=0.482
+      ( 6296, 2636) ctlfin   10826  optfin      23  cls=NOT_IN_M7_CATALOG d_sat=1.070
+      ( 7954, 1717) ctlfin    9879  optfin       0  cls=SATSTAR_NEAR d_sat=0.110
+      ( 4563, 4180) ctlfin    7860  optfin      17  cls=SATSTAR_NEAR d_sat=0.837
+  crater  : 190 features; optfin below the threshold and >1.5x lower (improvements): 190; optfin >1.5x lower but above the threshold: 0; within 1.5x: 0; optfin >1.5x higher: 0
+      ( 4949, 3839) ctlfin    8903  optfin      -0  d_vet1=0.013 is_sat1=True flux1=104120
+      (   12, 2288) ctlfin    8158  optfin      -0  d_vet1=0.016 is_sat1=True flux1=245923
+      ( 6903, 2173) ctlfin    6434  optfin      -0  d_vet1=0.013 is_sat1=True flux1=309402
+      ( 1529, 1755) ctlfin    4325  optfin      -0  d_vet1=0.012 is_sat1=True flux1=203826
+      ( 7199, 2516) ctlfin    4110  optfin      -0  d_vet1=0.011 is_sat1=True flux1=79607
+      ( 1626, 2418) ctlfin    3696  optfin      -0  d_vet1=0.010 is_sat1=True flux1=42223
+      ( 2778, 4280) ctlfin    3626  optfin      -0  d_vet1=0.009 is_sat1=False flux1=38158
+      ( 2823, 3145) ctlfin    3314  optfin      -0  d_vet1=0.008 is_sat1=True flux1=36960
+      ( 8388, 2328) ctlfin    2916  optfin      -0  d_vet1=0.022 is_sat1=True flux1=37578
+      ( 3557,  741) ctlfin    2661  optfin      -0  d_vet1=0.000 is_sat1=False flux1=27030
+      ( 4852, 4202) ctlfin    2590  optfin      -4  d_vet1=0.154 is_sat1=False flux1=181
+      ( 6996, 3783) ctlfin    2508  optfin      -0  d_vet1=0.016 is_sat1=False flux1=50069

@@ -1,0 +1,12 @@
+# Investigation of the 48 F212N added rows of run 1 that fail oksep_pass (97 added rows with a cross-band m7 row; group A = far-companion exemption of #1377, group B = relaxed bright window of #1376; the catalogs are those of the opt arm of run 1).
+F480M m6 vetted rows 150252; cut: seed within 2.5 FWHM (0.408 arcsec) more than 10x brighter; exemption (run 1): S/N >= 50, dominating source >= 1.75 FWHM (0.285 arcsec) away, unsaturated
+
+rows of the 97 with an F480M m6 vetted row within 30 mas (the flag test): populations
+  population      n with m6 row   neighbour has an m6 row   predicted cut (within 2.5 FWHM and > 10x brighter)   predicted cut and exempt   cut-and-not-exempt
+  A fail           16              16                      16                                               0                      16
+  A pass            2               2                       2                                               0                       2
+  B pass           31              30                       0                                               0                       0
+  A fail: F480M m6 flux ratio neighbour / row median 20.6 (16-84 % 13.7-27.4); separation row-neighbour in F480M FWHM median 0.97 (0.79-1.19); row F480M m6 S/N median 50.0 (max 110.5); neighbours saturated 0
+  B pass: ratio median 1.6 (16-84 % 1.0-7.3); separation in F480M FWHM median 3.25
+
+shows: whether the F480M m6 rows at the failing rows meet the condition of the documented cut, and that the rows that exist as seeds (B pass) do not; does not show the seed builder run itself (the cross-band positions, the flux donation and the satellite-star handling are not replayed)

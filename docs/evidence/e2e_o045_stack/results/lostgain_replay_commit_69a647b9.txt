@@ -1,0 +1,54 @@
+################ variant c: star frame (o045 F212N nrcb1 exp4)
+== stored ctl: 54187 rows, 0 near
+== stored opt: 54238 rows, 2 near
+   d=0.06 x_fit=593.26 y_fit=2.8522 flux_fit=14037 flux_init=6503.1 qfit=0.0037443 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=1.7546
+   d=2.07 x_fit=595.32 y_fit=2.4465 flux_fit=1748.2 flux_init=24491 qfit=0.12207 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=2.5046
+== stored opt2: 54234 rows, 0 near
+== replay lgcS: 54236 rows, 2 near
+   d=0.06 x_fit=593.26 y_fit=2.8522 flux_fit=14037 flux_init=6503.1 qfit=0.0037443 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=1.7546
+   d=2.07 x_fit=595.32 y_fit=2.4465 flux_fit=1748.2 flux_init=24491 qfit=0.12207 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=2.5046
+-- stored ctl vs stored opt2: rows only here 3, only in opt2 50, matched with flux change > 1 %: 7
+-- stored opt vs stored opt2: rows only here 4, only in opt2 0, matched with flux change > 1 %: 1
+-- replay lgcS vs stored opt2: rows only here 2, only in opt2 0, matched with flux change > 1 %: 0
+################ variant c: regression A (o045 F212N nrcb4 exp2, star 1484.0,929.1)
+== stored ctl: 54805 rows, 1 near
+   d=0.08 x_fit=1484 y_fit=929.17 flux_fit=37825 flux_init=27657 qfit=0.015683 flags=1 forced_refit=False group_size=3 model_data_peak_ratio=0.68829
+== stored opt: 54878 rows, 2 near
+   d=0.05 x_fit=1484 y_fit=929.13 flux_fit=35093 flux_init=27657 qfit=0.015683 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=0.76788
+   d=1.27 x_fit=1484.8 y_fit=930.04 flux_fit=17249 flux_init=60660 qfit=0.010596 flags=1 forced_refit=True group_size=3 model_data_peak_ratio=0.76801
+== stored opt2: 54873 rows, 1 near
+   d=0.08 x_fit=1484 y_fit=929.17 flux_fit=37825 flux_init=27657 qfit=0.015683 flags=1 forced_refit=False group_size=3 model_data_peak_ratio=0.68829
+== replay lgcrA: 54976 rows, 1 near
+   d=0.08 x_fit=1484 y_fit=929.17 flux_fit=37825 flux_init=27657 qfit=0.015683 flags=1 forced_refit=False group_size=3 model_data_peak_ratio=0.68829
+-- stored ctl vs stored opt2: rows only here 3, only in opt2 71, matched with flux change > 1 %: 14
+-- stored opt vs stored opt2: rows only here 5, only in opt2 0, matched with flux change > 1 %: 5
+-- replay lgcrA vs stored opt2: rows only here 119, only in opt2 16, matched with flux change > 1 %: 450
+################ variant c: regression B (o045 F212N nrcb2 exp4, star 851.2,928.4)
+== stored ctl: 54644 rows, 1 near
+   d=0.06 x_fit=851.25 y_fit=928.44 flux_fit=47711 flux_init=29069 qfit=0.011813 flags=0 forced_refit=False group_size=3 model_data_peak_ratio=0.88213
+== stored opt: 54704 rows, 2 near
+   d=0.19 x_fit=851.16 y_fit=928.21 flux_fit=33936 flux_init=29069 qfit=0.011813 flags=0 forced_refit=True group_size=3 model_data_peak_ratio=0.7892
+   d=1.20 x_fit=852.01 y_fit=929.28 flux_fit=18947 flux_init=60660 qfit=0.0079143 flags=0 forced_refit=True group_size=3 model_data_peak_ratio=0.78941
+== stored opt2: 54696 rows, 1 near
+   d=0.06 x_fit=851.25 y_fit=928.44 flux_fit=47711 flux_init=29069 qfit=0.011813 flags=0 forced_refit=False group_size=3 model_data_peak_ratio=0.88213
+== replay lgcrB: 54811 rows, 1 near
+   d=0.06 x_fit=851.25 y_fit=928.44 flux_fit=47711 flux_init=29069 qfit=0.011813 flags=0 forced_refit=False group_size=3 model_data_peak_ratio=0.88213
+-- stored ctl vs stored opt2: rows only here 5, only in opt2 57, matched with flux change > 1 %: 14
+-- stored opt vs stored opt2: rows only here 8, only in opt2 0, matched with flux change > 1 %: 6
+-- replay lgcrB vs stored opt2: rows only here 131, only in opt2 16, matched with flux change > 1 %: 468
+################ variant c: regression D (o045 F480M nrcalong exp6, star 6.6,1486.9)
+== stored ctl: 53197 rows, 1 near
+   d=2.95 x_fit=3.9455 y_fit=1488.2 flux_fit=3752.4 flux_init=4144.4 qfit=0.014446 flags=1 forced_refit=False group_size=4 model_data_peak_ratio=0.93496
+== stored opt: 54085 rows, 3 near
+   d=0.05 x_fit=6.6431 y_fit=1486.9 flux_fit=3943.8 flux_init=3936.3 qfit=0.0057268 flags=0 forced_refit=True group_size=4 model_data_peak_ratio=1.0037
+   d=1.36 x_fit=7.9625 y_fit=1486.8 flux_fit=107.7 flux_init=1253.1 qfit=1.1118 flags=0 forced_refit=True group_size=4 model_data_peak_ratio=1.0035
+   d=2.95 x_fit=3.9455 y_fit=1488.2 flux_fit=3752.4 flux_init=4144.4 qfit=0.014446 flags=1 forced_refit=False group_size=4 model_data_peak_ratio=1.0003
+== stored opt2: 53329 rows, 2 near
+   d=0.05 x_fit=6.6431 y_fit=1486.9 flux_fit=3943.8 flux_init=3936.3 qfit=0.0057268 flags=0 forced_refit=True group_size=4 model_data_peak_ratio=0.98421
+   d=2.95 x_fit=3.9455 y_fit=1488.2 flux_fit=3752.4 flux_init=4144.4 qfit=0.014446 flags=1 forced_refit=False group_size=4 model_data_peak_ratio=0.99903
+== replay lgcrD: 54072 rows, 2 near
+   d=0.05 x_fit=6.6431 y_fit=1486.9 flux_fit=3943.8 flux_init=3936.3 qfit=0.0057268 flags=0 forced_refit=True group_size=4 model_data_peak_ratio=0.98421
+   d=2.95 x_fit=3.9455 y_fit=1488.2 flux_fit=3752.4 flux_init=4144.4 qfit=0.014446 flags=1 forced_refit=False group_size=4 model_data_peak_ratio=0.99903
+-- stored ctl vs stored opt2: rows only here 9, only in opt2 141, matched with flux change > 1 %: 109
+-- stored opt vs stored opt2: rows only here 801, only in opt2 46, matched with flux change > 1 %: 500
+-- replay lgcrD vs stored opt2: rows only here 799, only in opt2 57, matched with flux change > 1 %: 560

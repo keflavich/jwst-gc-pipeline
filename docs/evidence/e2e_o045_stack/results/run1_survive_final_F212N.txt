@@ -1,0 +1,31 @@
+F212N: survival of the 97 rows added to the opt seed (nearest row within 0.1 arcsec; the opt arm and, at the same positions, the ctl arm)
+
+opt arm, rows present at every stage (module = the added row's own module):
+group          n     module raw  module vetted     merged raw  merged vetted       xb m7    xb oksep       xb m8  xb m8dedup  m8 carried
+A exempt      53             53             53             53             53          53           6          53          53          53
+B relaxed     44             44             44             44             44          44          43          44          43          43
+all           97             97             97             97             97          97          49          97          96          96
+
+present in opt and absent in ctl at the same position (rows that the opt arm adds to the final catalogs):
+group          n       xb m7    xb oksep       xb m8  xb m8dedup
+A exempt      53          45           4          45          45
+B relaxed     44          39          38          39          38
+all           97          84          42          84          83
+
+ctl arm at the same positions:
+group          n       xb m7    xb oksep       xb m8  xb m8dedup
+A exempt      53           8           2           8           8
+B relaxed     44           5           5           5           5
+all           97          13           7          13          13
+
+rows lost at a stage after the merged-module vetted catalog (opt arm):
+  A exempt   xb m7 -> oksep cut                            47
+  B relaxed  xb m7 -> oksep cut                             1
+  B relaxed  xb m8 -> m8_dedup (band not carried)           1
+
+opt arm, the added rows present in the cross-band m7 table: own-band values (median, 16th and 84th percentile) and fractions
+  A exempt   n= 53  S/N 55.2 (50.7..70.6)  qfit 0.242 (0.127..0.353)  flags>0 23  independently detected 50  oksep_pass 6  cmd_default 2  n_filt_independent>=2 18
+  B relaxed  n= 44  S/N 62.8 (52.2..77.6)  qfit 0.318 (0.216..0.382)  flags>0 16  independently detected 41  oksep_pass 43  cmd_default 33  n_filt_independent>=2 33
+  all        n= 97  S/N 60.5 (50.8..75.9)  qfit 0.267 (0.165..0.374)  flags>0 39  independently detected 91  oksep_pass 49  cmd_default 35  n_filt_independent>=2 51
+
+table sizes (rows; rows with a F212N detection): opt_m7 587759 / 584249; opt_oksep 190354 / 189834; opt_m8 587759 / 584249; opt_m8dedup 583081 / 579785; ctl_m7 587309 / 583841; ctl_oksep 187022 / 186520; ctl_m8 587309 / 583841; ctl_m8dedup 582653 / 579399

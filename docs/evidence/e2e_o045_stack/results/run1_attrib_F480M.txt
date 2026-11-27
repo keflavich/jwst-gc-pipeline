@@ -1,0 +1,111 @@
+F480M position-matched attribution of the leftovers >= 100 MJy/sr of A that B clears (no B leftover within 3 px = 0.094 arcsec)
+added seed rows 2410 ({'A exempt': 2406, 'B relaxed': 4}); merged vetted m7 rows only in opt: 2476, of those at an added row 2246, satstar_dao_restored (#1362) 1, other 229; only in ctl 106; in both with a flux that differs by more than 10 %: 702 of 145380 (vetting match radius 0.081 arcsec); opt raw merged rows with satstar_dao_restored: 1
+consolidated satstar rows: 1739 opt, 1738 ctl; matched within 0.1 arcsec 1738; fitted flux changed >1 % 0 (>10 % 0); moved >0.1 px 1 (>1 px 0); no counterpart: opt 1, ctl 0
+
+=== ctlfin -> optnm: 257 leftovers >= 100 in ctlfin; cleared 48, persisting 209
+  floor >= 100: 48 cleared, 209 persisting
+    flag added   : cleared    4, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    5, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    1, persisting    1 (50 % of the leftovers with the flag are cleared)
+    flag restore : cleared    0, persisting    1 (0 % of the leftovers with the flag are cleared)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 4 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 5 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 1 cleared / 1 persisting, restore 0 cleared / 1 persisting, satchg 0 cleared / 0 persisting, none 38 cleared / 207 persisting
+      class NOT_IN_M7_CATALOG       :   24 cleared (added 3, restrow 0, newvet 4, lostvet 0, fluxchg 0, restore 0, satchg 0, none 17),   23 persisting
+      class SATSTAR_NEAR            :    9 cleared (added 1, restrow 0, newvet 1, lostvet 0, fluxchg 0, restore 0, satchg 0, none 7),  181 persisting
+      class VETTED_BUT_UNSUBTRACTED :   12 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 1, restore 0, satchg 0, none 11),    5 persisting
+      class VETTED_OUT              :    3 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 3),    0 persisting
+  floor >= 500: 5 cleared, 144 persisting
+    flag added   : cleared    2, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    0, persisting    0 (no leftover with the flag)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    1, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restore : cleared    0, persisting    1 (0 % of the leftovers with the flag are cleared)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 2 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 0 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 1 cleared / 0 persisting, restore 0 cleared / 1 persisting, satchg 0 cleared / 0 persisting, none 2 cleared / 143 persisting
+      class NOT_IN_M7_CATALOG       :    3 cleared (added 1, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 2),   11 persisting
+      class SATSTAR_NEAR            :    1 cleared (added 1, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),  133 persisting
+      class VETTED_BUT_UNSUBTRACTED :    1 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 1, restore 0, satchg 0, none 0),    0 persisting
+      class VETTED_OUT              :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting
+
+=== ctlfin -> optfin: 257 leftovers >= 100 in ctlfin; cleared 251, persisting 6
+  floor >= 100: 251 cleared, 6 persisting
+    flag added   : cleared    4, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    5, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    1, persisting    1 (50 % of the leftovers with the flag are cleared)
+    flag restore : cleared    1, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 4 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 5 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 1 cleared / 1 persisting, restore 1 cleared / 0 persisting, satchg 0 cleared / 0 persisting, none 240 cleared / 5 persisting
+      class NOT_IN_M7_CATALOG       :   44 cleared (added 3, restrow 0, newvet 4, lostvet 0, fluxchg 0, restore 0, satchg 0, none 37),    3 persisting
+      class SATSTAR_NEAR            :  190 cleared (added 1, restrow 0, newvet 1, lostvet 0, fluxchg 0, restore 1, satchg 0, none 187),    0 persisting
+      class VETTED_BUT_UNSUBTRACTED :   14 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 1, restore 0, satchg 0, none 13),    3 persisting
+      class VETTED_OUT              :    3 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 3),    0 persisting
+  floor >= 500: 149 cleared, 0 persisting
+    flag added   : cleared    2, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    0, persisting    0 (no leftover with the flag)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    1, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restore : cleared    1, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 2 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 0 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 1 cleared / 0 persisting, restore 1 cleared / 0 persisting, satchg 0 cleared / 0 persisting, none 145 cleared / 0 persisting
+      class NOT_IN_M7_CATALOG       :   14 cleared (added 1, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 13),    0 persisting
+      class SATSTAR_NEAR            :  134 cleared (added 1, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 1, satchg 0, none 132),    0 persisting
+      class VETTED_BUT_UNSUBTRACTED :    1 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 1, restore 0, satchg 0, none 0),    0 persisting
+      class VETTED_OUT              :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting
+
+=== ctlk4emu -> optk4emu: 28 leftovers >= 100 in ctlk4emu; cleared 22, persisting 6
+  floor >= 100: 22 cleared, 6 persisting
+    flag added   : cleared    2, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    3, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    0, persisting    1 (0 % of the leftovers with the flag are cleared)
+    flag restore : cleared    0, persisting    0 (no leftover with the flag)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 2 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 3 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 0 cleared / 1 persisting, restore 0 cleared / 0 persisting, satchg 0 cleared / 0 persisting, none 17 cleared / 5 persisting
+      class NOT_IN_M7_CATALOG       :   12 cleared (added 2, restrow 0, newvet 3, lostvet 0, fluxchg 0, restore 0, satchg 0, none 7),    3 persisting
+      class VETTED_BUT_UNSUBTRACTED :    7 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 7),    3 persisting
+      class VETTED_OUT              :    3 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 3),    0 persisting
+  floor >= 500: 0 cleared, 0 persisting
+    flag added   : cleared    0, persisting    0 (no leftover with the flag)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    0, persisting    0 (no leftover with the flag)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    0, persisting    0 (no leftover with the flag)
+    flag restore : cleared    0, persisting    0 (no leftover with the flag)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 0 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 0 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 0 cleared / 0 persisting, restore 0 cleared / 0 persisting, satchg 0 cleared / 0 persisting, none 0 cleared / 0 persisting
+      class NOT_IN_M7_CATALOG       :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting
+      class VETTED_BUT_UNSUBTRACTED :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting
+      class VETTED_OUT              :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting
+
+=== ctlv480k4emu -> optv480k4emu: 30 leftovers >= 100 in ctlv480k4emu; cleared 22, persisting 8
+  floor >= 100: 22 cleared, 8 persisting
+    flag added   : cleared    2, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    3, persisting    0 (100 % of the leftovers with the flag are cleared)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    0, persisting    1 (0 % of the leftovers with the flag are cleared)
+    flag restore : cleared    0, persisting    0 (no leftover with the flag)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 2 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 3 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 0 cleared / 1 persisting, restore 0 cleared / 0 persisting, satchg 0 cleared / 0 persisting, none 17 cleared / 7 persisting
+      class NOT_IN_M7_CATALOG       :   12 cleared (added 2, restrow 0, newvet 3, lostvet 0, fluxchg 0, restore 0, satchg 0, none 7),    5 persisting
+      class VETTED_BUT_UNSUBTRACTED :    7 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 7),    3 persisting
+      class VETTED_OUT              :    3 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 3),    0 persisting
+  floor >= 500: 0 cleared, 0 persisting
+    flag added   : cleared    0, persisting    0 (no leftover with the flag)
+    flag restrow : cleared    0, persisting    0 (no leftover with the flag)
+    flag newvet  : cleared    0, persisting    0 (no leftover with the flag)
+    flag lostvet : cleared    0, persisting    0 (no leftover with the flag)
+    flag fluxchg : cleared    0, persisting    0 (no leftover with the flag)
+    flag restore : cleared    0, persisting    0 (no leftover with the flag)
+    flag satchg  : cleared    0, persisting    0 (no leftover with the flag)
+    first matching set (added > restrow > newvet > lostvet > fluxchg > restore > satchg > none): added 0 cleared / 0 persisting, restrow 0 cleared / 0 persisting, newvet 0 cleared / 0 persisting, lostvet 0 cleared / 0 persisting, fluxchg 0 cleared / 0 persisting, restore 0 cleared / 0 persisting, satchg 0 cleared / 0 persisting, none 0 cleared / 0 persisting
+      class NOT_IN_M7_CATALOG       :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting
+      class VETTED_BUT_UNSUBTRACTED :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting
+      class VETTED_OUT              :    0 cleared (added 0, restrow 0, newvet 0, lostvet 0, fluxchg 0, restore 0, satchg 0, none 0),    0 persisting

@@ -1,0 +1,8 @@
+# Summary of the 42 F212N rows that only the guard arm has in the unvetted merged catalog (table: run3_added_rows_F212N.csv); control = unmasked render of the control arm, guard = unmasked render of the guard arm.
+rows 42; rows with a complete 25 x 25 pixel cutout 42; daophot flux 2128 to 196338; pixel scale 0.0312 arcsec; 40 rows lie 0.044 to 0.129 arcsec from one of the 40 positions of run3_pairs_F212N.csv (whole-pixel positions on both sides; 40 distinct positions); the other 2 rows are 1.19, 10.13 arcsec from the nearest position
+control box maximum (MJy/sr): minimum over the rows 210, median 1604, maximum 21633
+box maximum lower with the guard: 42 of 42; higher 0; unchanged 0; median of guard / control 0.077; rows with a box maximum above 200: control 42, guard 12
+annulus mean |residual| (4 <= r < 10 px) lower with the guard: 41 of 41 rows with an annulus value; higher 0; median of guard / control 0.674
+box minimum deeper with the guard: 40 of 42; shallower 2; median change of |minimum| +16 %
+boxes with a minimum below -1000 MJy/sr: control 10, guard 16; below -200: control 34, guard 35
+K=4 masked renders: rows with a different box maximum, minimum or annulus value between control and guard: 1, 0, 0 of 42

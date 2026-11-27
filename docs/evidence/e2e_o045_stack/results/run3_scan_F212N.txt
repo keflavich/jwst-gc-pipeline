@@ -1,0 +1,50 @@
+# Position-independent scans of the unmasked F212N residual renders of run 3 (13 x 13 pixel box extremum of the other render at every leftover or crater >= 200 MJy/sr of the scanned render).
+## guard render (opt3gnm) scanned against the control render (opt3cnm) and run 2 (opt2nm)
+# F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source opt3gnm, references ['opt3cnm', 'opt2nm']
+## features of opt3gnm (n_left 46, n_crater 56) against the opt3cnm extremum in the same box (regressions)
+  leftover: 46 features; opt3cnm below the threshold and >1.5x lower (regressions): 0; opt3cnm >1.5x lower but above the threshold: 0; within 1.5x: 37; opt3cnm >1.5x higher: 9
+  crater  : 56 features; opt3cnm below the threshold and >1.5x lower (regressions): 0; opt3cnm >1.5x lower but above the threshold: 0; within 1.5x: 56; opt3cnm >1.5x higher: 0
+## features of opt3cnm (n_left 77, n_crater 57) against the opt3gnm extremum in the same box (improvements)
+  leftover: 77 features; opt3gnm below the threshold and >1.5x lower (improvements): 27; opt3gnm >1.5x lower but above the threshold: 4; within 1.5x: 39; opt3gnm >1.5x higher: 7
+      ( 7954, 1717) opt3cnm    9879  opt3gnm     162  cls=SATSTAR_NEAR d_sat=0.110
+      ( 7656, 4561) opt3cnm    4474  opt3gnm     148  cls=SATSTAR_NEAR d_sat=0.080
+      ( 5135, 4522) opt3cnm    3984  opt3gnm      42  cls=SATSTAR_NEAR d_sat=0.108
+      ( 2974, 3510) opt3cnm    3924  opt3gnm      56  cls=SATSTAR_NEAR d_sat=0.093
+      ( 1998,  757) opt3cnm    3183  opt3gnm      86  cls=SATSTAR_NEAR d_sat=0.105
+      ( 8385, 2328) opt3cnm    2652  opt3gnm      73  cls=SATSTAR_NEAR d_sat=0.072
+      ( 3944, 4041) opt3cnm    2023  opt3gnm      99  cls=SATSTAR_NEAR d_sat=0.108
+      ( 5805, 3638) opt3cnm    1995  opt3gnm      67  cls=SATSTAR_NEAR d_sat=0.108
+      ( 3446,  671) opt3cnm    1902  opt3gnm     123  cls=SATSTAR_NEAR d_sat=0.086
+      ( 5843, 2179) opt3cnm    1810  opt3gnm      64  cls=SATSTAR_NEAR d_sat=0.103
+      ( 6174, 1141) opt3cnm    1725  opt3gnm      85  cls=SATSTAR_NEAR d_sat=0.104
+      ( 9410,  671) opt3cnm    1651  opt3gnm      47  cls=SATSTAR_NEAR d_sat=0.105
+  crater  : 57 features; opt3gnm below the threshold and >1.5x lower (improvements): 1; opt3gnm >1.5x lower but above the threshold: 0; within 1.5x: 56; opt3gnm >1.5x higher: 0
+      ( 8388, 2328) opt3cnm     540  opt3gnm     143  d_vet1=0.022 is_sat1=True flux1=37578
+## features of opt3gnm (n_left 46, n_crater 56) against the opt2nm extremum in the same box (regressions)
+  leftover: 46 features; opt2nm below the threshold and >1.5x lower (regressions): 0; opt2nm >1.5x lower but above the threshold: 0; within 1.5x: 37; opt2nm >1.5x higher: 9
+  crater  : 56 features; opt2nm below the threshold and >1.5x lower (regressions): 0; opt2nm >1.5x lower but above the threshold: 0; within 1.5x: 56; opt2nm >1.5x higher: 0
+## features of opt2nm (n_left 77, n_crater 57) against the opt3gnm extremum in the same box (improvements)
+  leftover: 77 features; opt3gnm below the threshold and >1.5x lower (improvements): 27; opt3gnm >1.5x lower but above the threshold: 4; within 1.5x: 39; opt3gnm >1.5x higher: 7
+      ( 7954, 1717) opt2nm    9879  opt3gnm     162  cls=SATSTAR_NEAR d_sat=0.110
+      ( 7656, 4561) opt2nm    4474  opt3gnm     148  cls=SATSTAR_NEAR d_sat=0.080
+      ( 5135, 4522) opt2nm    3984  opt3gnm      42  cls=SATSTAR_NEAR d_sat=0.108
+      ( 2974, 3510) opt2nm    3924  opt3gnm      56  cls=SATSTAR_NEAR d_sat=0.093
+      ( 1998,  757) opt2nm    3183  opt3gnm      86  cls=SATSTAR_NEAR d_sat=0.105
+      ( 8385, 2328) opt2nm    2652  opt3gnm      73  cls=SATSTAR_NEAR d_sat=0.072
+      ( 3944, 4041) opt2nm    2023  opt3gnm      99  cls=SATSTAR_NEAR d_sat=0.108
+      ( 5805, 3638) opt2nm    1995  opt3gnm      67  cls=SATSTAR_NEAR d_sat=0.108
+      ( 3446,  671) opt2nm    1902  opt3gnm     123  cls=SATSTAR_NEAR d_sat=0.086
+      ( 5843, 2179) opt2nm    1810  opt3gnm      64  cls=SATSTAR_NEAR d_sat=0.103
+      ( 6174, 1141) opt2nm    1725  opt3gnm      85  cls=SATSTAR_NEAR d_sat=0.104
+      ( 9410,  671) opt2nm    1651  opt3gnm      47  cls=SATSTAR_NEAR d_sat=0.105
+  crater  : 57 features; opt3gnm below the threshold and >1.5x lower (improvements): 1; opt3gnm >1.5x lower but above the threshold: 0; within 1.5x: 56; opt3gnm >1.5x higher: 0
+      ( 8388, 2328) opt2nm     540  opt3gnm     143  d_vet1=0.022 is_sat1=True flux1=37578
+
+## control render (opt3cnm) scanned against run 2 (opt2nm); the two renders are identical, so every category count other than 'within 1.5x' comes from the comparison itself (the peak of the smoothed, background-subtracted feature against the maximum of the raw residual in the box)
+# F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source opt3cnm, references ['opt2nm']
+## features of opt3cnm (n_left 77, n_crater 57) against the opt2nm extremum in the same box (regressions)
+  leftover: 77 features; opt2nm below the threshold and >1.5x lower (regressions): 0; opt2nm >1.5x lower but above the threshold: 0; within 1.5x: 68; opt2nm >1.5x higher: 9
+  crater  : 57 features; opt2nm below the threshold and >1.5x lower (regressions): 0; opt2nm >1.5x lower but above the threshold: 0; within 1.5x: 57; opt2nm >1.5x higher: 0
+## features of opt2nm (n_left 77, n_crater 57) against the opt3cnm extremum in the same box (improvements)
+  leftover: 77 features; opt3cnm below the threshold and >1.5x lower (improvements): 0; opt3cnm >1.5x lower but above the threshold: 0; within 1.5x: 68; opt3cnm >1.5x higher: 9
+  crater  : 57 features; opt3cnm below the threshold and >1.5x lower (improvements): 0; opt3cnm >1.5x lower but above the threshold: 0; within 1.5x: 57; opt3cnm >1.5x higher: 0

@@ -1,0 +1,40 @@
+# F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source opt2nm, references ['ctlfin', 'optnm']
+## features of opt2nm (n_left 77, n_crater 57) against the ctlfin extremum in the same box (regressions)
+  leftover: 77 features; ctlfin below the threshold and >1.5x lower (regressions): 0; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 67; ctlfin >1.5x higher: 10
+  crater  : 57 features; ctlfin below the threshold and >1.5x lower (regressions): 0; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 54; ctlfin >1.5x higher: 3
+## features of ctlfin (n_left 191, n_crater 190) against the opt2nm extremum in the same box (improvements)
+  leftover: 191 features; opt2nm below the threshold and >1.5x lower (improvements): 113; opt2nm >1.5x lower but above the threshold: 1; within 1.5x: 68; opt2nm >1.5x higher: 9
+      ( 6443,  197) ctlfin   15349  opt2nm      16  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.707
+      ( 5164,  948) ctlfin   12991  opt2nm      19  cls=SATSTAR_NEAR d_sat=0.482
+      ( 6296, 2636) ctlfin   10826  opt2nm      24  cls=NOT_IN_M7_CATALOG d_sat=1.070
+      ( 4563, 4180) ctlfin    7860  opt2nm      20  cls=SATSTAR_NEAR d_sat=0.837
+      (10685, 3269) ctlfin    6814  opt2nm      28  cls=SATSTAR_NEAR d_sat=0.057
+      (11273, 3602) ctlfin    6764  opt2nm      21  cls=SATSTAR_NEAR d_sat=0.713
+      (  544, 1981) ctlfin    5936  opt2nm      33  cls=NOT_IN_M7_CATALOG d_sat=1.671
+      ( 9708, 3426) ctlfin    5857  opt2nm      13  cls=NOT_IN_M7_CATALOG d_sat=1.167
+      ( 7840, 3229) ctlfin    5457  opt2nm      35  cls=NOT_IN_M7_CATALOG d_sat=1.386
+      ( 6136, 4124) ctlfin    5357  opt2nm      32  cls=SATSTAR_NEAR d_sat=0.603
+      ( 7120, 2278) ctlfin    5306  opt2nm      19  cls=SATSTAR_NEAR d_sat=0.366
+      ( 3540, 1529) ctlfin    4907  opt2nm       9  cls=SATSTAR_NEAR d_sat=0.383
+  crater  : 190 features; opt2nm below the threshold and >1.5x lower (improvements): 97; opt2nm >1.5x lower but above the threshold: 13; within 1.5x: 73; opt2nm >1.5x higher: 7
+      ( 4949, 3839) ctlfin    8903  opt2nm     143  d_vet1=0.013 is_sat1=True flux1=104120
+      ( 1626, 2418) ctlfin    3696  opt2nm      41  d_vet1=0.010 is_sat1=True flux1=42223
+      ( 2823, 3145) ctlfin    3314  opt2nm      34  d_vet1=0.008 is_sat1=True flux1=36960
+      ( 4852, 4202) ctlfin    2590  opt2nm      -4  d_vet1=0.154 is_sat1=False flux1=181
+      ( 4073, 4192) ctlfin    2433  opt2nm       0  d_vet1=0.045 is_sat1=False flux1=394
+      ( 3295, 4182) ctlfin    2328  opt2nm      -1  d_vet1=0.218 is_sat1=False flux1=995
+      ( 2083, 2073) ctlfin    2301  opt2nm      45  d_vet1=0.016 is_sat1=True flux1=26743
+      (10309, 3202) ctlfin    2277  opt2nm      10  d_vet1=0.016 is_sat1=True flux1=28431
+      ( 4861, 3856) ctlfin    2116  opt2nm       2  d_vet1=0.117 is_sat1=False flux1=255
+      ( 1318, 2407) ctlfin    1971  opt2nm     139  d_vet1=0.004 is_sat1=True flux1=21473
+      ( 6533, 2727) ctlfin    1897  opt2nm     159  d_vet1=0.007 is_sat1=False flux1=37105
+      ( 9568, 1836) ctlfin    1701  opt2nm     162  d_vet1=0.015 is_sat1=False flux1=37647
+## features of opt2nm (n_left 77, n_crater 57) against the optnm extremum in the same box (regressions)
+  leftover: 77 features; optnm below the threshold and >1.5x lower (regressions): 1; optnm >1.5x lower but above the threshold: 0; within 1.5x: 67; optnm >1.5x higher: 9
+      ( 8385, 2328) opt2nm    2652  optnm      54  cls=SATSTAR_NEAR d_sat=0.072
+  crater  : 57 features; optnm below the threshold and >1.5x lower (regressions): 1; optnm >1.5x lower but above the threshold: 0; within 1.5x: 56; optnm >1.5x higher: 0
+      ( 8388, 2328) opt2nm     540  optnm     139  d_vet1=0.022 is_sat1=True flux1=37578
+## features of optnm (n_left 77, n_crater 56) against the opt2nm extremum in the same box (improvements)
+  leftover: 77 features; opt2nm below the threshold and >1.5x lower (improvements): 0; opt2nm >1.5x lower but above the threshold: 1; within 1.5x: 67; opt2nm >1.5x higher: 9
+  crater  : 56 features; opt2nm below the threshold and >1.5x lower (improvements): 0; opt2nm >1.5x lower but above the threshold: 0; within 1.5x: 56; opt2nm >1.5x higher: 0
+## first-run regression F212N (8653,1078): box extremum (max) in opt2nm 257; ctlfin 257; optnm 4811

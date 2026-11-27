@@ -1,0 +1,12 @@
+# Opt-in environment of the opt arm of run 4: the file env_opt3.sh, which sources env_opt.sh and env_guard.sh, followed by env_guard.sh.
+# env_opt.sh equals results/env_opt_run1_and_run2.txt line by line (checked: True), so the opt-in switches of run 4 are those of runs 1 and 2 plus the guard of env_guard.sh.
+## env_opt3.sh
+# Opt-in recipe for the next m7 run (decision 2026-11-26): the recipe of runs 1 and 2 (e2e2/env_opt.sh, unchanged so that the arms of those runs stay reproducible)
+# plus the #1360 second-pass neighbour guard.  Source after e2e2/env_common.sh.
+SCR=<scratch>
+. $SCR/e2e2/env_opt.sh
+. $SCR/e2e3/env_guard.sh
+## env_guard.sh
+# e2e3 = finalize-only A/B of the existing second-pass neighbour guard on the o045 F212N merge (arm opt3g); the control arm (opt3c) leaves it unset.
+# Same recipe as e2e2 (env_common.sh + env_opt.sh sourced from e2e2; both filters F212N and F480M) plus the guard.
+export SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN=0.2   # _MAX unset = 0.8: window [0.2, 0.8) of the satstar flux, the o105 F212N values of SATURATED_PIXEL_HANDLING.md

@@ -1,0 +1,124 @@
+F212N: new whole-star leftovers (>= 100 MJy/sr) and new big craters of render B against render A, split by what render A holds within 6 px (match radius 3 px)
+
+=== ctlfin -> optnm: new leftovers >= 100: 4 (shifted 1, below criteria in A 0, genuine 3); new big craters: 3 (shifted 1, below criteria in A 2, genuine 0)
+    leftover genuine    ( 8653, 1078) peak 4803 MJy/sr data peak 5163 class SATSTAR_NEAR
+    leftover genuine    (  537, 2399) peak 405 MJy/sr data peak 447 class SATSTAR_NEAR
+    leftover shifted    ( 5805, 2582) peak 269 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+    leftover genuine    ( 1302, 2399) peak 123 MJy/sr data peak 170 class SATSTAR_NEAR
+    crater   shifted    ( 7646, 1159) depth 1508 MJy/sr depth/model 0.51 | A candidate 3.2 px away: depth 1523, depth/model 0.33
+    crater   below_crit ( 2568, 2322) depth 1183 MJy/sr depth/model 0.40 | A candidate 3.2 px away: depth 1408, depth/model 0.28
+    crater   below_crit ( 9848,  819) depth 101 MJy/sr depth/model 0.43 | A candidate 5.0 px away: depth 743, depth/model 0.21
+
+=== ctlfin -> optfin: new leftovers >= 100: 6 (shifted 1, below criteria in A 0, genuine 5); new big craters: 2 (shifted 0, below criteria in A 0, genuine 2)
+    leftover shifted    ( 5805, 2582) peak 269 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+    leftover genuine    ( 9309,  432) peak 248 MJy/sr data peak 249 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 9314,  425) peak 223 MJy/sr data peak 225 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 9314,  441) peak 210 MJy/sr data peak 211 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 9323,  440) peak 178 MJy/sr data peak 179 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 6707,  558) peak 101 MJy/sr data peak 103 class NOT_IN_M7_CATALOG
+    crater   genuine    ( 6848, 1074) depth 92 MJy/sr depth/model 0.38
+    crater   genuine    ( 6848, 1121) depth 68 MJy/sr depth/model 0.34
+
+=== ctlfin -> ctledge8: new leftovers >= 100: 2 (shifted 1, below criteria in A 0, genuine 1); new big craters: 0 (shifted 0, below criteria in A 0, genuine 0)
+    leftover shifted    (   22, 2286) peak 958 MJy/sr data peak 989 class SATSTAR_NEAR | A candidate 5.4 px away: peak 2485, resid/data 1.00
+    leftover genuine    (   26, 2279) peak 480 MJy/sr data peak 498 class SATSTAR_NEAR
+
+=== ctlk4emu -> optk4emu: new leftovers >= 100: 1 (shifted 1, below criteria in A 0, genuine 0); new big craters: 0 (shifted 0, below criteria in A 0, genuine 0)
+    leftover shifted    ( 5805, 2582) peak 269 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+
+=== ctlk4emu -> optk4full: new leftovers >= 100: 1 (shifted 1, below criteria in A 0, genuine 0); new big craters: 0 (shifted 0, below criteria in A 0, genuine 0)
+    leftover shifted    ( 5805, 2582) peak 269 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+
+=== ctlk1emu -> optk1emu: new leftovers >= 100: 2 (shifted 1, below criteria in A 0, genuine 1); new big craters: 0 (shifted 0, below criteria in A 0, genuine 0)
+    leftover shifted    ( 5805, 2582) peak 268 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+    leftover genuine    ( 8649, 1076) peak 261 MJy/sr data peak 278 class SATSTAR_NEAR
+
+=== ctlk1emu -> optk1full: new leftovers >= 100: 1 (shifted 1, below criteria in A 0, genuine 0); new big craters: 0 (shifted 0, below criteria in A 0, genuine 0)
+    leftover shifted    ( 5805, 2582) peak 268 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+
+=== prod -> ctlfin: new leftovers >= 100: 12 (shifted 1, below criteria in A 0, genuine 11); new big craters: 53 (shifted 8, below criteria in A 20, genuine 25)
+    leftover genuine    ( 2847, 3834) peak 2645 MJy/sr data peak 3674 class SATSTAR_NEAR
+    leftover shifted    (   19, 2277) peak 553 MJy/sr data peak 570 class SATSTAR_NEAR | A candidate 5.0 px away: peak 2092, resid/data 1.00
+    leftover genuine    (10055, 2639) peak 400 MJy/sr data peak 562 class SATSTAR_NEAR
+    leftover genuine    ( 1374, 2058) peak 302 MJy/sr data peak 365 class SATSTAR_NEAR
+    leftover genuine    ( 5632, 3848) peak 140 MJy/sr data peak 180 class SATSTAR_NEAR
+    leftover genuine    ( 5802, 1527) peak 136 MJy/sr data peak 139 class SATSTAR_NEAR
+    leftover genuine    ( 2960, 4353) peak 131 MJy/sr data peak 186 class SATSTAR_NEAR
+    leftover genuine    ( 6089, 2437) peak 121 MJy/sr data peak 165 class SATSTAR_NEAR
+    leftover genuine    ( 7855, 1577) peak 116 MJy/sr data peak 150 class SATSTAR_NEAR
+    leftover genuine    (10777, 2319) peak 114 MJy/sr data peak 148 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 3193, 2916) peak 107 MJy/sr data peak 141 class SATSTAR_NEAR
+    leftover genuine    ( 5398,  231) peak 105 MJy/sr data peak 140 class SATSTAR_NEAR
+    crater   genuine    ( 1626, 2418) depth 3696 MJy/sr depth/model 0.98
+    crater   below_crit ( 3557,  741) depth 2661 MJy/sr depth/model 0.47 | A candidate 3.6 px away: depth 3148, depth/model 0.05
+    crater   below_crit ( 7296,  538) depth 2203 MJy/sr depth/model 0.30 | A candidate 0.0 px away: depth 2119, depth/model 0.29
+    crater   below_crit (  803, 4350) depth 1489 MJy/sr depth/model 0.53 | A candidate 1.0 px away: depth 1460, depth/model 0.16
+    crater   genuine    ( 1374, 2054) depth 1018 MJy/sr depth/model 0.98
+    crater   below_crit ( 8954, 1686) depth 873 MJy/sr depth/model 0.55 | A candidate 2.2 px away: depth 62, depth/model 0.02
+    crater   genuine    ( 1409, 2399) depth 604 MJy/sr depth/model 0.98
+    crater   genuine    ( 7065, 1169) depth 543 MJy/sr depth/model 0.98
+    crater   below_crit ( 3022, 3173) depth 393 MJy/sr depth/model 0.41 | A candidate 0.0 px away: depth 125, depth/model 0.18
+    crater   shifted    ( 3282, 2069) depth 362 MJy/sr depth/model 0.33 | A candidate 4.1 px away: depth 471, depth/model 0.56
+    crater   below_crit ( 7639, 3956) depth 237 MJy/sr depth/model 0.32 | A candidate 0.0 px away: depth 219, depth/model 0.30
+    crater   below_crit ( 1335, 1719) depth 233 MJy/sr depth/model 0.30 | A candidate 0.0 px away: depth 228, depth/model 0.30
+    crater   shifted    ( 3275, 4485) depth 207 MJy/sr depth/model 0.42 | A candidate 6.0 px away: depth 270, depth/model 0.33
+    crater   below_crit (  872, 1357) depth 206 MJy/sr depth/model 0.31 | A candidate 0.0 px away: depth 197, depth/model 0.29
+    crater   genuine    ( 5663, 4038) depth 190 MJy/sr depth/model 0.35
+    crater   below_crit ( 8961, 2974) depth 183 MJy/sr depth/model 0.33 | A candidate 0.0 px away: depth 143, depth/model 0.27
+    crater   below_crit ( 6391,  505) depth 179 MJy/sr depth/model 0.33 | A candidate 0.0 px away: depth 140, depth/model 0.27
+    crater   genuine    ( 2138, 3543) depth 172 MJy/sr depth/model 0.45
+    crater   genuine    ( 2967, 3147) depth 164 MJy/sr depth/model 0.46
+    crater   below_crit ( 1585, 3691) depth 157 MJy/sr depth/model 0.30 | A candidate 0.0 px away: depth 143, depth/model 0.28
+    crater   shifted    ( 8259, 2738) depth 144 MJy/sr depth/model 0.31 | A candidate 3.2 px away: depth 156, depth/model 0.48
+    crater   shifted    ( 7483, 4334) depth 141 MJy/sr depth/model 0.32 | A candidate 6.0 px away: depth 170, depth/model 0.30
+    crater   below_crit ( 8557, 3867) depth 140 MJy/sr depth/model 0.31 | A candidate 0.0 px away: depth 132, depth/model 0.29
+    crater   genuine    ( 9105,  702) depth 139 MJy/sr depth/model 0.37
+    crater   below_crit ( 6394, 2107) depth 133 MJy/sr depth/model 0.32 | A candidate 0.0 px away: depth 118, depth/model 0.29
+    crater   genuine    ( 9136,  725) depth 126 MJy/sr depth/model 0.43
+    crater   genuine    (  814, 1603) depth 123 MJy/sr depth/model 0.40
+    crater   shifted    ( 8204, 3824) depth 111 MJy/sr depth/model 0.35 | A candidate 4.2 px away: depth 140, depth/model 0.32
+    crater   shifted    ( 8737, 1017) depth 105 MJy/sr depth/model 0.64 | A candidate 3.2 px away: depth 77, depth/model 0.53
+    crater   genuine    ( 1371, 2060) depth 105 MJy/sr depth/model 0.39
+    crater   genuine    ( 1528, 1849) depth 104 MJy/sr depth/model 0.49
+    crater   below_crit ( 4794, 3957) depth 100 MJy/sr depth/model 0.43 | A candidate 0.0 px away: depth 55, depth/model 0.29
+    crater   shifted    ( 3856, 2694) depth 100 MJy/sr depth/model 0.44 | A candidate 4.1 px away: depth 116, depth/model 0.42
+    crater   genuine    (  362, 2170) depth 99 MJy/sr depth/model 0.39
+    crater   genuine    (  995, 4056) depth 96 MJy/sr depth/model 0.41
+    crater   genuine    ( 7715, 1041) depth 95 MJy/sr depth/model 0.31
+    crater   below_crit ( 4265,  507) depth 95 MJy/sr depth/model 0.30 | A candidate 0.0 px away: depth 91, depth/model 0.30
+    crater   genuine    ( 3557, 4229) depth 94 MJy/sr depth/model 0.31
+    crater   genuine    ( 9144,  726) depth 92 MJy/sr depth/model 0.42
+    crater   genuine    ( 8093, 2293) depth 91 MJy/sr depth/model 0.42
+    crater   below_crit ( 8771, 2919) depth 90 MJy/sr depth/model 0.36 | A candidate 2.2 px away: depth 109, depth/model 0.29
+    crater   genuine    ( 4805, 3956) depth 88 MJy/sr depth/model 0.36
+    crater   genuine    ( 8082, 2293) depth 86 MJy/sr depth/model 0.41
+    crater   genuine    ( 3957, 4226) depth 82 MJy/sr depth/model 0.43
+    crater   genuine    ( 2183, 2745) depth 76 MJy/sr depth/model 0.37
+    crater   genuine    ( 2055,  182) depth 73 MJy/sr depth/model 0.31
+    crater   shifted    ( 2197, 2747) depth 73 MJy/sr depth/model 0.33 | A candidate 5.4 px away: depth 139, depth/model 0.31
+    crater   below_crit ( 5605, 2008) depth 60 MJy/sr depth/model 0.34 | A candidate 0.0 px away: depth 47, depth/model 0.26
+    crater   genuine    ( 4175, 3020) depth 59 MJy/sr depth/model 0.64
+    crater   genuine    ( 4182, 2372) depth 57 MJy/sr depth/model 0.60
+    crater   below_crit ( 3741, 4016) depth 55 MJy/sr depth/model 0.33 | A candidate 3.6 px away: depth 69, depth/model 0.03
+    crater   below_crit ( 9346, 2006) depth 52 MJy/sr depth/model 0.31 | A candidate 0.0 px away: depth 45, depth/model 0.26
+    crater   below_crit ( 7206, 1959) depth 51 MJy/sr depth/model 0.54 | A candidate 0.0 px away: depth 49, depth/model 0.54
+
+=== prod -> optfin: new leftovers >= 100: 7 (shifted 1, below criteria in A 0, genuine 6); new big craters: 3 (shifted 0, below criteria in A 0, genuine 3)
+    leftover shifted    ( 5805, 2582) peak 269 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+    leftover genuine    ( 9309,  432) peak 248 MJy/sr data peak 249 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 9314,  425) peak 223 MJy/sr data peak 225 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 9314,  441) peak 210 MJy/sr data peak 211 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 9323,  440) peak 178 MJy/sr data peak 179 class NOT_IN_M7_CATALOG
+    leftover genuine    (10777, 2319) peak 114 MJy/sr data peak 148 class NOT_IN_M7_CATALOG
+    leftover genuine    ( 6707,  558) peak 101 MJy/sr data peak 103 class NOT_IN_M7_CATALOG
+    crater   genuine    (  362, 2170) depth 99 MJy/sr depth/model 0.39
+    crater   genuine    ( 6848, 1074) depth 92 MJy/sr depth/model 0.38
+    crater   genuine    ( 6848, 1121) depth 68 MJy/sr depth/model 0.34
+
+=== dq4mkrdncg -> dq4mkrsd1: new leftovers >= 100: 1 (shifted 1, below criteria in A 0, genuine 0); new big craters: 1 (shifted 0, below criteria in A 0, genuine 1)
+    leftover shifted    ( 5805, 2582) peak 269 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+    crater   genuine    ( 2201, 3065) depth 60 MJy/sr depth/model 0.30
+
+=== ee8dq4mkrdncg -> ee8dq4mkrsd1: new leftovers >= 100: 1 (shifted 1, below criteria in A 0, genuine 0); new big craters: 1 (shifted 0, below criteria in A 0, genuine 1)
+    leftover shifted    ( 5805, 2582) peak 269 MJy/sr data peak 294 class SATSTAR_NEAR | A candidate 3.2 px away: peak 414, resid/data 1.00
+    crater   genuine    ( 2201, 3065) depth 60 MJy/sr depth/model 0.30

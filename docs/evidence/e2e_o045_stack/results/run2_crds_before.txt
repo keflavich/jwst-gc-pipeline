@@ -1,0 +1,2 @@
+-rw-r--r-- 1 adamginsburg adamginsburg    5034 2026-11-25 03:04:53.000000000 -0500 /orange/adamginsburg/jwst/crds/config/jwst/bad_files.txt
+-rw-r--r-- 1 adamginsburg adamginsburg 1457934 2026-11-25 03:04:53.000000000 -0500 /orange/adamginsburg/jwst/crds/config/jwst/server_config

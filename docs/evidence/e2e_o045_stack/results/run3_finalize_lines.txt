@@ -1,0 +1,45 @@
+# Lines of the finalize logs of o045 (m7 finalize, F212N and F480M) of the guard arm (job 52894428) and the control arm (job 52894426); both arms run the integration tree of run 2 on the per-frame tables of run 2.
+# The neighbour guard prints one line per call of the satstar replacement in which it keeps at least one pair (kept N of M second-pass pairs).
+# The guard log has 7 such lines, in order of appearance: F212N 25 of 202 and 18 of 161 (the two module merges), F480M 1 of 3, F212N 42 of 356 and F480M 1 of 7 (the merges of the combined catalog),
+# and F212N 2 of 5 and 2 of 7 (two of the cross-band merges).
+## guard arm: neighbour guard lines
+guard: replace_saturated: second-pass neighbour guard kept 25 of 202 daophot row(s) at 0.2 <= flux / satstar flux < 0.8 (a neighbouring star, not the satstar's clipped row); the satstar is appended
+guard: replace_saturated: second-pass neighbour guard kept 18 of 161 daophot row(s) at 0.2 <= flux / satstar flux < 0.8 (a neighbouring star, not the satstar's clipped row); the satstar is appended
+guard: replace_saturated: second-pass neighbour guard kept 1 of 3 daophot row(s) at 0.2 <= flux / satstar flux < 0.8 (a neighbouring star, not the satstar's clipped row); the satstar is appended
+guard: replace_saturated: second-pass neighbour guard kept 42 of 356 daophot row(s) at 0.2 <= flux / satstar flux < 0.8 (a neighbouring star, not the satstar's clipped row); the satstar is appended
+guard: replace_saturated: second-pass neighbour guard kept 1 of 7 daophot row(s) at 0.2 <= flux / satstar flux < 0.8 (a neighbouring star, not the satstar's clipped row); the satstar is appended
+guard: replace_saturated: second-pass neighbour guard kept 2 of 5 daophot row(s) at 0.2 <= flux / satstar flux < 0.8 (a neighbouring star, not the satstar's clipped row); the satstar is appended
+guard: replace_saturated: second-pass neighbour guard kept 2 of 7 daophot row(s) at 0.2 <= flux / satstar flux < 0.8 (a neighbouring star, not the satstar's clipped row); the satstar is appended
+## control arm: number of neighbour guard lines
+control matches: 0
+## m8 dedup and cmd_default lines, control arm then guard arm (N = rows of the table; oksep and cmd_default = rows that pass the cross-band selections of PHOTOMETRY_PIPELINE.md)
+control: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045.fits N=297611 CMDDEF=oksep&n_filt_independent>=2 oksep=93795 cmd_default=58178
+control: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045_qualcuts_oksep10678.fits N=93795 CMDDEF=oksep&n_filt_independent>=2 oksep=93795 cmd_default=58178
+control: [dedup] merged 2403 rows into 2369 primaries; kept 51 components as resolved binaries, 5 as too-large; 297611 -> 295208 rows; 1731 kept rows take at least one band from another row; 119 rows 
+control: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits N=297611 CMDDEF=oksep&n_filt_independent>=2 oksep=93795 cmd_default=58178
+control: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits N=295208 CMDDEF=oksep&n_filt_independent>=2 oksep=92549 cmd_default=58567
+control: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045.fits N=310055 CMDDEF=oksep&n_filt_independent>=2 oksep=96469 cmd_default=58242
+control: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045_qualcuts_oksep10678.fits N=96469 CMDDEF=oksep&n_filt_independent>=2 oksep=96469 cmd_default=58242
+control: [dedup] merged 2657 rows into 2626 primaries; kept 62 components as resolved binaries, 5 as too-large; 310055 -> 307398 rows; 1929 kept rows take at least one band from another row; 133 rows 
+control: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits N=310055 CMDDEF=oksep&n_filt_independent>=2 oksep=96469 cmd_default=58242
+control: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits N=307398 CMDDEF=oksep&n_filt_independent>=2 oksep=95087 cmd_default=58706
+control: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045.fits N=587685 CMDDEF=oksep&n_filt_independent>=2 oksep=187233 cmd_default=113946
+control: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045_qualcuts_oksep10678.fits N=187233 CMDDEF=oksep&n_filt_independent>=2 oksep=187233 cmd_default=113946
+control: [dedup] merged 4651 rows into 4601 primaries; kept 104 components as resolved binaries, 10 as too-large; 587685 -> 583034 rows; 3500 kept rows take at least one band from another row; 247 row
+control: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits N=587685 CMDDEF=oksep&n_filt_independent>=2 oksep=187233 cmd_default=113946
+control: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits N=583034 CMDDEF=oksep&n_filt_independent>=2 oksep=184604 cmd_default=114793
+guard: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045.fits N=297631 CMDDEF=oksep&n_filt_independent>=2 oksep=93813 cmd_default=58178
+guard: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045_qualcuts_oksep10678.fits N=93813 CMDDEF=oksep&n_filt_independent>=2 oksep=93813 cmd_default=58178
+guard: [dedup] merged 2407 rows into 2373 primaries; kept 51 components as resolved binaries, 5 as too-large; 297631 -> 295224 rows; 1735 kept rows take at least one band from another row; 119 rows fl
+guard: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits N=297631 CMDDEF=oksep&n_filt_independent>=2 oksep=93813 cmd_default=58178
+guard: cmd_default: basic_nrca_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits N=295224 CMDDEF=oksep&n_filt_independent>=2 oksep=92565 cmd_default=58569
+guard: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045.fits N=310072 CMDDEF=oksep&n_filt_independent>=2 oksep=96489 cmd_default=58242
+guard: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045_qualcuts_oksep10678.fits N=96489 CMDDEF=oksep&n_filt_independent>=2 oksep=96489 cmd_default=58242
+guard: [dedup] merged 2663 rows into 2632 primaries; kept 62 components as resolved binaries, 5 as too-large; 310072 -> 307409 rows; 1934 kept rows take at least one band from another row; 133 rows fl
+guard: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits N=310072 CMDDEF=oksep&n_filt_independent>=2 oksep=96489 cmd_default=58242
+guard: cmd_default: basic_nrcb_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits N=307409 CMDDEF=oksep&n_filt_independent>=2 oksep=95101 cmd_default=58707
+guard: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045.fits N=587721 CMDDEF=oksep&n_filt_independent>=2 oksep=187271 cmd_default=113946
+guard: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_hybpsf_m7_o045_qualcuts_oksep10678.fits N=187271 CMDDEF=oksep&n_filt_independent>=2 oksep=187271 cmd_default=113946
+guard: [dedup] merged 4661 rows into 4611 primaries; kept 104 components as resolved binaries, 10 as too-large; 587721 -> 583060 rows; 3509 kept rows take at least one band from another row; 247 rows 
+guard: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_o045.fits N=587721 CMDDEF=oksep&n_filt_independent>=2 oksep=187271 cmd_default=113946
+guard: cmd_default: basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o045.fits N=583060 CMDDEF=oksep&n_filt_independent>=2 oksep=184634 cmd_default=114796

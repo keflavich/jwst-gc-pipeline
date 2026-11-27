@@ -1,0 +1,42 @@
+# F480M: box 13 x 13 px, leftover threshold 200 MJy/sr, crater threshold 200 MJy/sr, factor 1.5; mosaic 5640 x 2280 px; source optnm, references ctlfin
+## features of optnm against the extremum of ctlfin in the same box (regressions)
+  leftover: 198 features; ctlfin extremum below the threshold and more than 1.5 times lower: 1; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 183; more than 1.5 times higher: 14
+      (  410, 1680) optnm     214  ctlfin      19  [regression] cls=VETTED_BUT_UNSUBTRACTED
+  crater  : 24 features; ctlfin extremum below the threshold and more than 1.5 times lower: 0; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 22; more than 1.5 times higher: 2
+## features of ctlfin against the extremum of optnm in the same box (improvements)
+  leftover: 212 features; optnm extremum below the threshold and more than 1.5 times lower: 14; more than 1.5 times lower and above the threshold: 3; within a factor 1.5: 181; more than 1.5 times higher: 14
+      (  390,  117) ctlfin    5101  optnm     589  [weak] cls=VETTED_BUT_UNSUBTRACTED
+      ( 5332, 2213) ctlfin    1814  optnm      72  [regression] cls=SATSTAR_NEAR
+      ( 1048,  755) ctlfin     617  optnm     262  [weak] cls=NOT_IN_M7_CATALOG
+      ( 5249, 1623) ctlfin     548  optnm      13  [regression] cls=NOT_IN_M7_CATALOG
+      ( 5254, 1630) ctlfin     543  optnm      15  [regression] cls=NOT_IN_M7_CATALOG
+      ( 2783,  958) ctlfin     444  optnm     201  [weak] cls=NOT_IN_M7_CATALOG
+      ( 2353, 1644) ctlfin     405  optnm      22  [regression] cls=NOT_IN_M7_CATALOG
+      ( 2425,  253) ctlfin     385  optnm      48  [regression] cls=SATSTAR_NEAR
+      (  155,  140) ctlfin     333  optnm      40  [regression] cls=NOT_IN_M7_CATALOG
+      ( 4150, 1256) ctlfin     299  optnm      33  [regression] cls=VETTED_BUT_UNSUBTRACTED
+      ( 1167,  508) ctlfin     241  optnm      48  [regression] cls=SATSTAR_NEAR
+      ( 3327,  723) ctlfin     236  optnm      24  [regression] cls=SATSTAR_NEAR
+      ( 1071,  147) ctlfin     230  optnm      13  [regression] cls=VETTED_BUT_UNSUBTRACTED
+      ( 5524,  883) ctlfin     215  optnm      24  [regression] cls=NOT_IN_M7_CATALOG
+      ( 1420,  275) ctlfin     214  optnm      26  [regression] cls=VETTED_BUT_UNSUBTRACTED
+  crater  : 42 features; optnm extremum below the threshold and more than 1.5 times lower: 13; more than 1.5 times lower and above the threshold: 0; within a factor 1.5: 25; more than 1.5 times higher: 4
+      ( 1099, 1974) ctlfin    2130  optnm      -7  [regression]
+      ( 3408,  858) ctlfin     983  optnm      -5  [regression]
+      ( 3330,  724) ctlfin     814  optnm      -2  [regression]
+      ( 2267, 1747) ctlfin     479  optnm     118  [regression]
+      ( 5336,  750) ctlfin     446  optnm      -7  [regression]
+      ( 4353, 1883) ctlfin     384  optnm     160  [regression]
+      ( 3915,  447) ctlfin     366  optnm     101  [regression]
+      ( 3899,  447) ctlfin     345  optnm      78  [regression]
+      ( 1740, 1974) ctlfin     332  optnm      -8  [regression]
+      (  565,  514) ctlfin     276  optnm      36  [regression]
+      ( 5219, 2166) ctlfin     267  optnm      55  [regression]
+      ( 5427, 1606) ctlfin     263  optnm     131  [regression]
+      ( 1141, 1714) ctlfin     251  optnm      -7  [regression]
+## probe positions: box extremum (maximum for a leftover, depth of the minimum for a crater) in MJy/sr
+  leftover ( 4470,  212) optnm    1792  ctlfin    1780  # listed as new by the 3 px matching in ctlfin:optnm (shifted)
+  leftover ( 5140,  694) optnm    1800  ctlfin    1800  # listed as new by the 3 px matching in ctlfin:optnm (genuine)
+  leftover (  410, 1680) optnm     226  ctlfin      19  # first-run regression (#1366 rescue branch); listed as new by the 3 px matching in ctlfin:optnm (genuine)
+  crater   ( 3701,  498) optnm      60  ctlfin       5  # unexplained dip of the first run; listed as new by the 3 px matching in ctlfin:optnm (genuine)
+  crater   ( 1818, 1303) optnm     267  ctlfin     338  # listed as new by the 3 px matching in ctlfin:optnm (below_crit)

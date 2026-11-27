@@ -1,0 +1,5 @@
+# Grid check of the control render ctlfin against the production render (post job 53020266 of o045): same grid keywords, NaN only in A = pixels NaN in production and finite in ctlfin, NaN only in B = pixels NaN in ctlfin
+o045-prod-vs-ctlfin-F212N: A (4737, 11440) B (4737, 11440); same grid keywords: True
+o045-prod-vs-ctlfin-F212N: NaN only in A 0, NaN only in B 0, NaN in both 2363529, finite in both 51827751; max |A-B| 3.85e+04, px with |A-B| > 1e-3: 50006941
+o045-prod-vs-ctlfin-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o045-prod-vs-ctlfin-F480M: NaN only in A 0, NaN only in B 0, NaN in both 393499, finite in both 12465701; max |A-B| 5.03e+03, px with |A-B| > 1e-3: 11329524

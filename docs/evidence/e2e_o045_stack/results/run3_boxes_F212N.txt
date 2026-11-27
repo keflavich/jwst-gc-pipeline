@@ -1,0 +1,14 @@
+# Extremes (MJy/sr) of the F212N residual i2d in the 13 x 13 pixel box around two positions; NaN counted as 0; positions are mosaic array indices (x, y).
+# opt3cnm and opt3gnm: unmasked renders of the control and the guard arm of run 3; opt2nm: unmasked render of run 2; optnm: unmasked render of run 1; ctlfin: render of the ctl arm of run 1 (no switch, no mask).
+# (8385, 2328): the star of the section on the loss in run 2.  (634, 80): the leftover that the 3 px matching lists as new in the guard render (102 MJy/sr); the control render has a leftover 5 px away at (638, 83), 4 px in x and 3 px in y.
+F212N (8385,2328) opt3cnm   : box max    2663.2  box min    -528.9  NaN px in box 0
+F212N (8385,2328) opt3gnm   : box max      72.8  box min    -143.4  NaN px in box 0
+F212N (8385,2328) opt2nm    : box max    2663.2  box min    -528.9  NaN px in box 0
+F212N (8385,2328) optnm     : box max      53.6  box min    -138.7  NaN px in box 0
+F212N (8385,2328) ctlfin    : box max    2429.6  box min   -2904.3  NaN px in box 0
+F212N (634,80) opt3cnm   : box max    1444.7  box min    -672.1  NaN px in box 0
+F212N (634,80) opt3gnm   : box max     112.6  box min   -1018.8  NaN px in box 0
+F212N (634,80) opt2nm    : box max    1444.7  box min    -672.1  NaN px in box 0
+F212N (638,83) opt3cnm   : box max    1444.7  box min    -672.1  NaN px in box 0
+F212N (638,83) opt3gnm   : box max     112.6  box min   -1018.8  NaN px in box 0
+F212N (638,83) opt2nm    : box max    1444.7  box min    -672.1  NaN px in box 0

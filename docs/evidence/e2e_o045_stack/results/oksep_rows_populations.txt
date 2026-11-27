@@ -1,0 +1,20 @@
+# Investigation of the 48 F212N added rows of run 1 that fail oksep_pass (97 added rows with a cross-band m7 row; group A = far-companion exemption of #1377, group B = relaxed bright window of #1376; the catalogs are those of the opt arm of run 1).
+population                       n   sep (F212N FWHM)   ratio    S/N   F212N flux   m6 F480M within 30 mas   ctl leftover >=100 (row within 0.1")   ctl resid max in 5x5 px (MJy/sr)   forced F480M colour excess (mag, med)
+A fail, neighbour unflagged     20    2.24              11.5    55.0      1379        6                       11                                        122                            0.99
+A fail, neighbour flagged       27    2.16              14.4    56.1      1595       10                       14                                        147                            1.13
+A pass                           6    2.17              11.3    55.4      1275        2                        2                                        118                           -0.50
+B pass                          43    6.41               1.8    62.6      1462       31                       27                                        122                            0.04
+B fail                           1    4.99               3.3    64.8      1579        0                        1                                        139                            0.27
+
+extra detail per population: flagged-neighbour counts and the rows without any support (ctl residual max < 50 MJy/sr and no F480M m6 within 30 mas)
+  A fail, neighbour unflagged    n  20: neighbour gate-rejected 0, near-saturated 0, saturated 0; ctl resid max < 50: 1; no F480M m6 and ctl resid < 50: 1 (idx [11])
+  A fail, neighbour flagged      n  27: neighbour gate-rejected 20, near-saturated 12, saturated 2; ctl resid max < 50: 3; no F480M m6 and ctl resid < 50: 1 (idx [43])
+  A pass                         n   6: neighbour gate-rejected 1, near-saturated 2, saturated 0; ctl resid max < 50: 0; no F480M m6 and ctl resid < 50: 0 (idx [])
+  B pass                         n  43: neighbour gate-rejected 1, near-saturated 10, saturated 9; ctl resid max < 50: 0; no F480M m6 and ctl resid < 50: 0 (idx [])
+  B fail                         n   1: neighbour gate-rejected 0, near-saturated 0, saturated 0; ctl resid max < 50: 0; no F480M m6 and ctl resid < 50: 0 (idx [])
+
+  A fail, neighbour unflagged: n_filt_independent == 2: 6; cmd_default if let into oksep (n_filt_independent >= 2): 6
+  A fail, neighbour flagged: n_filt_independent == 2: 10; cmd_default if let into oksep (n_filt_independent >= 2): 10
+  group A failing, split by separation to the neighbour (F212N FWHM): 1.75-2.0 5, 2.0-2.25 20, 2.25-2.5 22; m6 F480M hits in the same bins 3, 5, 8
+  separation in F480M FWHM (F480M FWHM = 0.163 arcsec; A rows are 0.128-0.183 arcsec from the neighbour): 0.79-1.12, median 1.01
+shows: how the failing exemption rows split by neighbour state and by F480M evidence; does not show a causal link between the neighbour flag and the row

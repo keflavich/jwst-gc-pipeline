@@ -1,0 +1,2 @@
+JobID|JobName|User|State|Start|End|Elapsed|QOS|Partition
+52646573|gctreasury10678-o045-m8-nbrsub|adamginsburg|COMPLETED|2026-11-24T19:17:17|2026-11-24T22:13:37|02:56:20|astronomy-dept-b|hpg-milan

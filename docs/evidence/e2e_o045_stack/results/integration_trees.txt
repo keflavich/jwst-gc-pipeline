@@ -1,0 +1,25 @@
+Integration trees of the two runs (local branches, never pushed). Each line: merge commit, its two parents, subject; the second parent is the head of the PR branch that was merged.
+
+run 1 tree (origin/main 803d0794 plus 17 merges, newest first):
+3d7b94cd 8628e1e1 8a15821b|e2e: merge #1377 companion-keep-far
+8628e1e1 ab67a950 52549326|e2e: merge #1376 relaxed-bright-seeds
+ab67a950 82fcff81 383a1403|e2e: merge #1369 satstar-sidelobe-maskable
+82fcff81 549b2630 3daf043f|e2e: merge #1368 satstar-sidelobe-frac (conflicts with #1371 resolved by keeping both: cache-signature parts and doc rows)
+549b2630 4b4cebb0 60e6f3a0|e2e: merge #1371 satstar-fitter-maxiters
+4b4cebb0 da211400 cf5a29d2|e2e: merge #1366 dedup-nonpositive-winner
+da211400 612fdbed 622fe467|e2e: merge #1365 merge-pair-rescue
+612fdbed d4909331 9733dfc0|e2e: merge #1367 single-exposure-ramp-events (conflicts with #1374 resolved by keeping both: ramp + spike masks)
+d4909331 1f8eec4e 43d61ec7|e2e: merge #1375 footprint-mask-ring-tier2
+1f8eec4e 45ccfa6f 56173877|e2e: merge #1374 positive-spike-pixel-mask
+45ccfa6f 85022d01 9434ba67|e2e: merge #1373 footprint-mask-edge-band
+85022d01 8de68b18 cae05e94|e2e: merge #1372 footprint-mask-dqsat
+8de68b18 373697b6 aaeceeac|e2e: merge #1370 footprint-mask-rejected-satstars
+373697b6 c9bffb7e f095649f|e2e: merge #1364 footprint-mask-ring-zone
+c9bffb7e 6a7394aa 2ebe41c1|e2e: merge #1362 satstar-dao-restore
+6a7394aa 63461a4e 1424a31e|e2e: merge #1361 mergedcat-residual-footprint-mask
+63461a4e 803d0794 d504c167|e2e: merge #1360 mergedcat-residual-guards
+
+run 2 tree (run 1 tree plus 3 merges, newest first):
+dda52d96 4d43b835 14b9308c|Merge origin/relaxed-bright-seeds into the e2e2 integration tree (local only, never pushed)
+4d43b835 b201aec2 a5926b42|Merge origin/companion-keep-far into the e2e2 integration tree (local only, never pushed)
+b201aec2 3d7b94cd 38873cf8|Merge origin/dedup-nonpositive-winner into the e2e2 integration tree (local only, never pushed)
