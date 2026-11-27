@@ -843,21 +843,68 @@ these flag sets would remove the footgun of setting them individually.)*
     rows gives 311 / 202 / 147 / 99 / 22 / 0 and 31 / 19 / 14 / 8 / 2.  Of the 165 F480M
     leftovers above 200 MJy/sr on the shrink-0.3 stack, 36 remain with the footprint mask
     below, so most of them lie inside the mask footprint; the deblend rows change 165 to 156.
-  - A footprint mask (emulation only, not in the pipeline).  Setting NaN in a disk
-    of radius 1.0 x the satstar's saturated-area radius + 2 mosaic pixels around
-    each consolidated satstar row, in the residual i2d, gives for o105 F212N
-    (leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper than
-    50 / 200 / 500 / 1000 / 2000): production 845 / 178 / 133 / 116 / 66 / 18 |
-    489 / 166 / 71 / 37 / 18; the best stack above 752 / 51 / 12 / 9 / 2 / 1 |
-    89 / 35 / 5 / 0 / 0; the best stack with the deblend rows and the 18 supported
-    rows 741 / 46 / 7 / 4 / 2 / 1 | 89 / 35 / 5 / 0 / 0.  o105 F480M production with
-    the mask: 174 / 39 / 10 / 4 / 1 / 1 | 31 / 4 / 2 / 0 / 0 (production without it
-    303 / 168 / 111 / 84 / 24 / 2 | 69 / 28 / 16 / 7 / 1).  With the event mask,
-    negative-pixel mask and shrink 0.3 on, F480M with the mask gives 145 / 36 / 9 / 4 / 1 / 1 |
-    3 / 0 / 0 / 0 / 0, and 141 / 33 / 6 / 1 / 0 / 0 | 4 / 0 / 0 / 0 / 0 with the 36 deblend rows
-    as well.  The mask sets 1.66 % (F212N) and 2.19 % (F480M) of the finite pixels of the
-    residual i2d to NaN.  It hides the model mismatch inside the footprint; it does not make
-    the model fit.
+  - `MERGEDCAT_FOOTPRINT_MASK_KFAC` with `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX`
+    (default 2) and `MERGEDCAT_FOOTPRINT_MASK_PASSES` (default `m7`;
+    `residual_footprint_mask`; off unless `KFAC` is above 0).  After
+    the residual is resampled, the SCI plane of the residual i2d is set to NaN in
+    a disk of radius `KFAC` x sqrt(`sat_area` / pi) native detector pixels +
+    `MARGIN` mosaic pixels around the fitted position of every row of the
+    consolidated satstar catalog that the merge read (the native pixel is 0.031"
+    in the NIRCam short-wave filters, 0.063" in the long-wave ones and 0.11" in
+    MIRI).  A row without a positive `sat_area` has no footprint.  The SCI header
+    records `FPMASKK`, `FPMASKM` and `FPMASKN` (rows masked).  The mask is skipped
+    with a warning, and the image kept, when the consolidated catalog does not
+    exist or lacks `skycoord_fit` or `sat_area`, or when the merge read the NIRCam
+    `merged_i2d` primary catalog, which has no consolidated cache.  The model i2d,
+    the data i2d and the catalogs are as before.  The next phase of a manual run
+    takes its i2d seeds and its smoothed background map from this residual, so a
+    mask in an intermediate pass would change those inputs, and the counts below
+    are for the final residual only.  The mask is therefore applied to the passes
+    that `MERGEDCAT_FOOTPRINT_MASK_PASSES` lists (`m2` ... `m7`, comma- or
+    space-separated; unset or blank gives `m7`, as for `GC_RESID_NAN_SATSTAR_PASSES`)
+    and a run with the switch on prints which pass it left alone; an unknown label
+    raises before any residual is rendered.  `GC_RESID_NAN_SATSTAR_FOOTPRINT`
+    (section 7) blanks the DQ-SATURATED pixels of accepted satstars in the per-frame
+    residuals of a manual pass; this switch acts on the coadd, on a disk with a margin
+    around every consolidated row, and needs no per-frame rerun.  The two have not
+    been compared.  The counts below were measured with an
+    emulation script before the switch existed.  The switch, applied to the same
+    scratch copies of the residual i2d (o105 F212N with the deblend rows and the
+    18 supported rows; o105 F480M with the shrink-0.3 stack, without and with the
+    deblend rows) at `KFAC` 1 and `MARGIN` 2, sets the same pixels to NaN
+    (3,227,541 NaN pixels of the F212N image and 667,561 of the F480M one on both
+    sides, none in only one) and leaves every other pixel unchanged (maximum
+    difference 0), so the counts of those three stacks are those of the switch;
+    the other counts came from the same emulation script.  Counts for o105 F212N
+    (leftovers above 50 / 200 / 500 / 1000 / 2000 / 5000 MJy/sr | craters deeper
+    than 50 / 200 / 500 / 1000 / 2000), without the mask and then with it at `KFAC`
+    1 and `MARGIN` 2:
+    - production 845 / 178 / 133 / 116 / 66 / 18 | 489 / 166 / 71 / 37 / 18; it was
+      not replayed with the mask.
+    - the best stack above (event mask, negative-pixel mask 50, shrink 0.8, vetted
+      catalog with the reconstructed rows) 740 / 72 / 28 / 20 / 16 / 5 |
+      127 / 53 / 23 / 7 / 6; with the mask 752 / 51 / 12 / 9 / 2 / 1 |
+      89 / 35 / 5 / 0 / 0.
+    - the best stack with the deblend rows and the 18 supported rows
+      728 / 60 / 17 / 9 / 7 / 2 | 127 / 53 / 23 / 7 / 6; with the mask
+      741 / 46 / 7 / 4 / 2 / 1 | 89 / 35 / 5 / 0 / 0.
+
+    o105 F212N's count above 50 MJy/sr rises with the mask (740 to 752, 728 to 741);
+    the cause was not examined.  o105 F480M:
+    - production 303 / 168 / 111 / 84 / 24 / 2 | 69 / 28 / 16 / 7 / 1; with the mask
+      174 / 39 / 10 / 4 / 1 / 1 | 31 / 4 / 2 / 0 / 0.
+    - event mask, negative-pixel mask and shrink 0.3 274 / 165 / 110 / 84 / 24 / 2 |
+      30 / 17 / 13 / 7 / 1; with the mask 145 / 36 / 9 / 4 / 1 / 1 | 3 / 0 / 0 / 0 / 0.
+    - the same with the 36 deblend rows 264 / 156 / 101 / 77 / 22 / 0 |
+      34 / 20 / 15 / 8 / 2; with the mask 141 / 33 / 6 / 1 / 0 / 0 |
+      4 / 0 / 0 / 0 / 0.
+
+    The mask sets 1.66 % (F212N) and 2.19 % (F480M) of the finite pixels of the
+    residual i2d to NaN, in disks of median radius 4.7 (F212N) and 6.3 (F480M)
+    mosaic pixels and maximum radius 33.9 and 33.3.  The counts of a masked image
+    leave out whatever lies inside the disks: a leftover or a crater there is not
+    measured.  The mask hides the model mismatch inside the footprint; it does not
+    make the model fit.
   - What is left with the mask (o105 F212N, deblend rows + 18 supported rows).  Seven
     leftovers above 500 MJy/sr.  Three are within 0.22-0.30" of a satstar row and
     within 20 pixels of the left mosaic edge (x = 12-18, y = 1208-1225).  Two have no
@@ -1010,6 +1057,7 @@ consolidated catalog silently goes stale again the next time a frame moves.
 | `MIRI_DAOPHOT_PROM_ROBUST` | 0 | neighbour-robust prominence on the daophot side |
 | `MIRI_EDGE_DETECT_MARGIN` | 8 | detection margin at the detector edge |
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
+| `MERGEDCAT_FOOTPRINT_MASK_KFAC` / `MERGEDCAT_FOOTPRINT_MASK_MARGIN_PX` / `MERGEDCAT_FOOTPRINT_MASK_PASSES` | off / 2 / `m7` | NaN disk of radius KFAC x sqrt(`sat_area` / pi) native pixels + MARGIN mosaic pixels around every row of the consolidated satstar catalog, in the SCI plane of the mergedcat residual i2d of the listed passes (`m2` ... `m7`); off unless KFAC is above 0; the model i2d, the data i2d and the catalogs do not change; a bad value raises before any residual is rendered (guards section) |
 | `SATSTAR_SEED_REQUIRE_DO_NOT_USE` | 0 (**off**) | restrict SEEDING to truly-lost cores (debug only — see §2b) |
 | `SATSTAR_SEVERITY_FLOOR` | per-filter `SAT_SEVERITY_FLOOR` | override the daophot-mask severity floor |
 | `SATSTAR_MIN_LOST_CORE` | 5 | min truly-lost core size (px) |

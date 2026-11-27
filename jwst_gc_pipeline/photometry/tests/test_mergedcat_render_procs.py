@@ -36,10 +36,10 @@ pytestmark = [
 DETECTORS = ['nrcalong', 'nrcblong', 'nrcalong', 'nrcblong']
 
 
-def _setup(root):
+def _setup(root, iteration_label=E2E_ITER):
     """Write the frames, their raw basic residual/model pairs, and the merged
     catalog under ``root``.  Same seed every call, so two calls write the
-    same inputs."""
+    same inputs.  The raw pairs carry the names of ``iteration_label``'s pass."""
     rng = np.random.default_rng(5)
     pipeline_dir = root / 'F480M' / 'pipeline'
     pipeline_dir.mkdir(parents=True)
@@ -67,7 +67,7 @@ def _setup(root):
                       ]).writeto(frame)
         visit, vgroup, exposure, fdet = frame_identity(frame, field=E2E_FIELD)
         tokens = ccl._predict_output_tokens(options, visit, vgroup, exposure,
-                                            E2E_ITER)
+                                            iteration_label)
         stem = (f'{pipeline_dir}/{jw_prefix(E2E_PID)}-o{E2E_FIELD}_t001_'
                 f'{_inst_token("F480M")}_clear-f480m-{fdet}{"".join(tokens)}'
                 f'_daophot_basic')
