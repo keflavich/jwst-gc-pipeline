@@ -1,0 +1,31 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source optnm, references ['ctlfin']
+## features of optnm (n_left 146, n_crater 12) against the ctlfin extremum in the same box (regressions)
+  leftover: 146 features; ctlfin below the threshold and >1.5x lower (regressions): 0; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 134; ctlfin >1.5x higher: 12
+  crater  : 12 features; ctlfin below the threshold and >1.5x lower (regressions): 0; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 11; ctlfin >1.5x higher: 1
+## features of ctlfin (n_left 168, n_crater 38) against the optnm extremum in the same box (improvements)
+  leftover: 168 features; optnm below the threshold and >1.5x lower (improvements): 24; optnm >1.5x lower but above the threshold: 0; within 1.5x: 133; optnm >1.5x higher: 11
+      ( 4547,  659) ctlfin     939  optnm      48  cls=SATSTAR_NEAR d_sat=0.027
+      ( 3312, 1417) ctlfin     905  optnm      38  cls=SATSTAR_NEAR d_sat=0.026
+      ( 5104,  323) ctlfin     869  optnm      29  cls=SATSTAR_NEAR d_sat=0.219
+      (  393,  470) ctlfin     764  optnm      45  cls=VETTED_BUT_UNSUBTRACTED d_sat=4.101
+      (   63, 1971) ctlfin     739  optnm      54  cls=SATSTAR_NEAR d_sat=0.771
+      ( 3036, 1598) ctlfin     607  optnm      17  cls=VETTED_BUT_UNSUBTRACTED d_sat=5.037
+      ( 5117, 2056) ctlfin     444  optnm      34  cls=SATSTAR_NEAR d_sat=0.752
+      ( 3035,  690) ctlfin     432  optnm      34  cls=NOT_IN_M7_CATALOG d_sat=1.668
+      ( 5399, 2253) ctlfin     404  optnm      25  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.423
+      ( 2524,  987) ctlfin     373  optnm      97  cls=NOT_IN_M7_CATALOG d_sat=5.254
+      ( 5015, 1437) ctlfin     367  optnm     169  cls=NOT_IN_M7_CATALOG d_sat=3.181
+      ( 4812, 1939) ctlfin     354  optnm     144  cls=SATSTAR_NEAR d_sat=0.995
+  crater  : 38 features; optnm below the threshold and >1.5x lower (improvements): 13; optnm >1.5x lower but above the threshold: 5; within 1.5x: 17; optnm >1.5x higher: 3
+      ( 4394, 1991) ctlfin     874  optnm      85  d_vet1=0.001 is_sat1=True flux1=22689
+      ( 3096, 2040) ctlfin     773  optnm      -8  d_vet1=0.050 is_sat1=False flux1=15898
+      ( 2064,  585) ctlfin     714  optnm      55  d_vet1=0.016 is_sat1=False flux1=9380
+      ( 5278,  611) ctlfin     323  optnm       3  d_vet1=0.034 is_sat1=False flux1=7673
+      ( 1878,  990) ctlfin     303  optnm      -5  d_vet1=0.025 is_sat1=True flux1=5600
+      (  647,  833) ctlfin     281  optnm      -3  d_vet1=0.024 is_sat1=False flux1=5961
+      ( 3601,  260) ctlfin     267  optnm      33  d_vet1=0.019 is_sat1=False flux1=3515
+      ( 2053, 1749) ctlfin     260  optnm      28  d_vet1=0.027 is_sat1=False flux1=3368
+      ( 5231, 1153) ctlfin     227  optnm      33  d_vet1=0.036 is_sat1=False flux1=4174
+      (  642,  836) ctlfin     224  optnm      -3  d_vet1=0.011 is_sat1=False flux1=4371
+      (  677,  837) ctlfin     221  optnm      24  d_vet1=0.010 is_sat1=False flux1=5316
+      ( 1694, 1852) ctlfin     220  optnm       2  d_vet1=0.030 is_sat1=False flux1=4241

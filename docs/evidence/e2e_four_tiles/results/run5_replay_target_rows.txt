@@ -1,0 +1,16 @@
+# Rows nearest to the six replay target positions of the o105 F480M one-frame replays (pixel positions in the frame): production per-frame m7 table against the replay of the production code (921d1ef9) with the two hand-off settings.
+# flux_fit, qfit, local_bkg, flux_init, x_fit, y_fit are printed with 9 significant digits; diff is the absolute difference of the two values; flags and group_size are the table columns of the same name.
+## frame A (nrcblong exposure 1, jw10678105001_02101_00001_nrcblong)
+target (1193.8,694.9): production row 0.056 px, replay row 0.056 px; flux_fit 44693.5469 vs 44693.5469 (diff 0); qfit 0.0217531919 vs 0.0217531919 (diff 0); local_bkg 2.0877564 vs 2.0877564 (diff 0); flux_init 29463.1914 vs 29463.1914 (diff 0); x_fit 1193.84256 vs 1193.84256 (diff 0); y_fit 694.864061 vs 694.864061 (diff 0)
+   flags 1 vs 1; group_size 1 vs 1
+target (649.2,1732.6): production row 0.030 px, replay row 0.030 px; flux_fit 31691.1836 vs 31691.1836 (diff 0); qfit 0.0356834121 vs 0.0356834121 (diff 0); local_bkg 5.96270609 vs 5.96270609 (diff 0); flux_init 20778.8125 vs 20778.8125 (diff 0); x_fit 649.182484 vs 649.182484 (diff 0); y_fit 1732.624 vs 1732.624 (diff 0)
+   flags 1 vs 1; group_size 1 vs 1
+target (1726.9,332.6): production row 0.061 px, replay row 0.061 px; flux_fit 21785.543 vs 21785.543 (diff 0); qfit 0.0210014768 vs 0.0210014768 (diff 0); local_bkg 1.65103674 vs 1.65103674 (diff 0); flux_init 14133.3623 vs 14133.3623 (diff 0); x_fit 1726.86247 vs 1726.86247 (diff 0); y_fit 332.648472 vs 332.648472 (diff 0)
+   flags 0 vs 0; group_size 1 vs 1
+target (1139.9,1897.9): production row 0.031 px, replay row 0.031 px; flux_fit 13838.4727 vs 13838.4727 (diff 0); qfit 0.0167216603 vs 0.0167216603 (diff 0); local_bkg -1.53059256 vs -1.53059256 (diff 0); flux_init 8870.95312 vs 8870.95312 (diff 0); x_fit 1139.87035 vs 1139.87035 (diff 0); y_fit 1897.91057 vs 1897.91057 (diff 0)
+   flags 0 vs 0; group_size 1 vs 1
+target (1246.9,1211.0): production row 0.049 px, replay row 0.049 px; flux_fit 11341.1621 vs 11341.1621 (diff 0); qfit 0.052113127 vs 0.052113127 (diff 0); local_bkg 2.95656967 vs 2.95656967 (diff 0); flux_init 7357.34521 vs 7357.34521 (diff 0); x_fit 1246.93065 vs 1246.93065 (diff 0); y_fit 1210.96145 vs 1210.96145 (diff 0)
+   flags 1 vs 1; group_size 2 vs 2
+## frame B (nrcalong exposure 2, jw10678105001_02101_00002_nrcalong)
+target (864.5,1646.9): production row 0.032 px, replay row 0.032 px; flux_fit 52256.8398 vs 52256.8398 (diff 0); qfit 0.0252567176 vs 0.0252567176 (diff 0); local_bkg 2.42608929 vs 2.42608929 (diff 0); flux_init 34509.0547 vs 34509.0547 (diff 0); x_fit 864.49243 vs 864.49243 (diff 0); y_fit 1646.86903 vs 1646.86903 (diff 0)
+   flags 0 vs 0; group_size 1 vs 1

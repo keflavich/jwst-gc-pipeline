@@ -1,0 +1,20 @@
+Population numbers behind the satstar gate of feature 5 (F480M).
+
+1. Per-frame satstar tables of o105 F480M nrcblong exposure 2, production and run, accepted and rejected rows together.
+   rows: production 743 (accepted 522, rejected 221); run 743 (accepted 510, rejected 233)
+   mutual nearest neighbours within 0.05 arcsec with finite implied peaks: 734 rows
+   implied peak, run over production                    median 0.9550, 16th to 84th percentile 0.9359 to 0.9674
+   fitted flux, run over production                     median 0.9844, 16th to 84th percentile 0.9625 to 0.9959
+   implied peak per unit flux, run over production      median 0.9707, 16th to 84th percentile 0.9676 to 0.9742
+   production rows with implied peak 2500 to 2700: 24, all accepted in production (24); 23 of them have a match in the run and 13 of those are accepted in the run
+   gate: reject when the implied peak is below 0.5 times the saturation floor (5000 in F480M, so 2500) and the observed peak is below 2500
+
+2. Consolidated F480M satstar catalogs of the four tiles, production and run; a row is lost when no row of the other catalog lies within 0.15 arcsec.
+   tile  rows_prod rows_run lost median_flux_of_lost gained
+   o105       1703     1688   19                28711      4
+   o118        669      660   11                28406      2
+   o130        531      521   16                28597      6
+   o138        596      584   15                28612      3
+   total lost 61, gained 15
+
+3. Stars handed from the saturated-star channel to the daophot channel by the gate, per frame: 105 in production and 111 in the run in nrcalong exposure 1 of o105; 183 and 193 in nrcblong exposure 6.

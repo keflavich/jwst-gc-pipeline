@@ -1,0 +1,12 @@
+tile band | rows added (A exempt / B relaxed) | with an opt merged raw row | with an opt merged vetted row | of those, with a production merged vetted row | with no opt merged vetted row
+o105 F212N | 81 (42 / 39) | 80 | 80 | 7 | 1
+o118 F212N | 16 (5 / 11) | 16 | 16 | 1 | 0
+o130 F212N | 12 (3 / 9) | 12 | 11 | 1 | 1
+o138 F212N | 45 (16 / 29) | 45 | 45 | 4 | 0
+o105 F480M | 6 (0 / 6) | 6 | 6 | 0 | 0
+o118 F480M | 10 (0 / 10) | 10 | 10 | 0 | 0
+o130 F480M | 3 (0 / 3) | 3 | 3 | 0 | 0
+o138 F480M | 2 (0 / 2) | 2 | 2 | 0 | 0
+all four F212N | 154 (66 / 88) | 153 | 152 | 13 | 2
+all four F480M | 21 (0 / 21) | 21 | 21 | 0 | 0
+keys of the summary (o105 F212N): ['A exempt|both', 'A exempt|nrca', 'A exempt|nrcb', 'B relaxed|both', 'B relaxed|nrca', 'B relaxed|nrcb', 'all|both', 'all|nrca', 'all|nrcb']

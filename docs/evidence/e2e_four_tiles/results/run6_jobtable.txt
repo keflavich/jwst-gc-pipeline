@@ -1,0 +1,7 @@
+| job name | completed jobs | all COMPLETED 0:0 | CPUs per job | requested memory | elapsed per job (h) | peak RSS (GB) | first start | last end |
+| :--- | ---: | :--- | ---: | :--- | ---: | ---: | :--- | :--- |
+| `e6f-o105-fin` | 1 | yes | 4 | 128G | 1.86 | 12.4 | 2026-11-27T10:00:08 | 2026-11-27T11:51:58 |
+| `e6f-o105-fan` | 8 | yes | 2 | 32G | 1.69 to 2.52 | 17.6 | 2026-11-27T07:28:37 | 2026-11-27T10:00:05 |
+| `e6p-o105` | 1 | yes | 5 | 96G | 0.12 | 1.7 | 2026-11-27T11:52:00 | 2026-11-27T11:59:03 |
+
+jobs in total: 10 ; all COMPLETED 0:0: True

@@ -1,0 +1,24 @@
+# o105 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source ctlfin, references ['prod5']
+## features of ctlfin (n_left 176, n_crater 152) against the prod5 extremum in the same box (regressions)
+  leftover: 176 features; prod5 below the threshold and >1.5x lower (regressions): 2; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 166; prod5 >1.5x higher: 8
+      ( 4245,  955) ctlfin    1275  prod5     104  cls=SATSTAR_NEAR d_sat=0.011
+      ( 3403, 3362) ctlfin     484  prod5      68  cls=NOT_IN_M7_CATALOG d_sat=1.811
+  crater  : 152 features; prod5 below the threshold and >1.5x lower (regressions): 6; prod5 >1.5x lower but above the threshold: 3; within 1.5x: 123; prod5 >1.5x higher: 20
+      (  992, 2398) ctlfin    4599  prod5      44  d_vet1=0.003 is_sat1=True flux1=47667
+      (  870, 2063) ctlfin    1459  prod5       9  d_vet1=0.016 is_sat1=True flux1=18825
+      ( 6480,  597) ctlfin     520  prod5      37  d_vet1=0.013 is_sat1=False flux1=5827
+      ( 6941, 4037) ctlfin     378  prod5       7  d_vet1=0.018 is_sat1=False flux1=4599
+      ( 2980, 1987) ctlfin     289  prod5     168  d_vet1=0.017 is_sat1=False flux1=3256
+      ( 1019,  960) ctlfin     263  prod5      82  d_vet1=0.013 is_sat1=False flux1=3177
+## features of prod5 (n_left 178, n_crater 166) against the ctlfin extremum in the same box (improvements)
+  leftover: 178 features; ctlfin below the threshold and >1.5x lower (improvements): 3; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 167; ctlfin >1.5x higher: 8
+      ( 1968, 2403) prod5     544  ctlfin      25  cls=SATSTAR_NEAR d_sat=0.033
+      ( 6760,  471) prod5     269  ctlfin      16  cls=SATSTAR_NEAR d_sat=0.918
+      (  869, 2061) prod5     261  ctlfin     113  cls=SATSTAR_NEAR d_sat=0.110
+  crater  : 166 features; ctlfin below the threshold and >1.5x lower (improvements): 6; ctlfin >1.5x lower but above the threshold: 3; within 1.5x: 138; ctlfin >1.5x higher: 19
+      ( 2827, 2060) prod5    2570  ctlfin      12  d_vet1=0.009 is_sat1=True flux1=27526
+      ( 8997, 3120) prod5    1875  ctlfin      -1  d_vet1=0.025 is_sat1=False flux1=42902
+      (   91,  492) prod5    1700  ctlfin      -8  d_vet1=0.008 is_sat1=False flux1=28354
+      ( 1747, 2062) prod5    1325  ctlfin      16  d_vet1=0.004 is_sat1=True flux1=13559
+      ( 7799, 2170) prod5     701  ctlfin     151  d_vet1=0.032 is_sat1=True flux1=56990
+      ( 3105, 2596) prod5     260  ctlfin      15  d_vet1=0.004 is_sat1=False flux1=2815

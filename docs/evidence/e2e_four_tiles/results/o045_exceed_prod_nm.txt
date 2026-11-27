@@ -1,0 +1,8 @@
+# o045: features of optnm with S > 1.5 x the production extremum R in the same 13 x 13 px box; threshold 200 MJy/sr; S and R in MJy/sr
+## F212N: optnm leftovers >= 200: 46, craters >= 200: 56
+  crater   ( 6903, 2173) larger optnm    6433 prod5    3204 ctlfin    6426 optfin      -0  d_vet1=0.013 is_sat1=True flux1=309402
+  crater   ( 7065, 1169) absent optnm     543 prod5      17 ctlfin     535 optfin      -0  d_vet1=0.207 is_sat1=True flux1=38949
+  1 absent in production, 1 larger than in production
+## F480M: optnm leftovers >= 200: 164, craters >= 200: 25
+  crater   ( 4985, 1426) larger optnm    1485 prod5     348 ctlfin    1461 optfin      -0  d_vet1=0.268 is_sat1=True flux1=1255756
+  0 absent in production, 1 larger than in production

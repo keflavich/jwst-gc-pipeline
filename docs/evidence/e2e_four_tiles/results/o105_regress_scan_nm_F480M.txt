@@ -1,0 +1,31 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source optnm, references ['prod5']
+## features of optnm (n_left 146, n_crater 12) against the prod5 extremum in the same box (regressions)
+  leftover: 146 features; prod5 below the threshold and >1.5x lower (regressions): 2; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 129; prod5 >1.5x higher: 15
+      ( 2614, 1826) optnm     904  prod5      29  cls=SATSTAR_NEAR d_sat=0.384
+      ( 4452,  858) optnm     403  prod5      30  cls=NOT_IN_M7_CATALOG d_sat=3.905
+  crater  : 12 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 11; prod5 >1.5x higher: 1
+## features of prod5 (n_left 168, n_crater 28) against the optnm extremum in the same box (improvements)
+  leftover: 168 features; optnm below the threshold and >1.5x lower (improvements): 22; optnm >1.5x lower but above the threshold: 0; within 1.5x: 131; optnm >1.5x higher: 15
+      ( 4547,  659) prod5     931  optnm      48  cls=SATSTAR_NEAR d_sat=0.027
+      ( 5104,  323) prod5     870  optnm      29  cls=SATSTAR_NEAR d_sat=0.219
+      (  393,  470) prod5     763  optnm      45  cls=VETTED_BUT_UNSUBTRACTED d_sat=4.101
+      (   63, 1971) prod5     738  optnm      54  cls=SATSTAR_NEAR d_sat=0.770
+      ( 3036, 1598) prod5     607  optnm      17  cls=VETTED_BUT_UNSUBTRACTED d_sat=5.038
+      ( 5117, 2056) prod5     443  optnm      34  cls=SATSTAR_NEAR d_sat=0.751
+      ( 3035,  690) prod5     432  optnm      34  cls=NOT_IN_M7_CATALOG d_sat=1.669
+      ( 5399, 2253) prod5     404  optnm      25  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.435
+      ( 2524,  987) prod5     373  optnm      97  cls=NOT_IN_M7_CATALOG d_sat=5.254
+      ( 5015, 1437) prod5     367  optnm     169  cls=NOT_IN_M7_CATALOG d_sat=3.181
+      ( 4812, 1939) prod5     354  optnm     144  cls=SATSTAR_NEAR d_sat=0.995
+      ( 2370,  906) prod5     352  optnm      20  cls=NOT_IN_M7_CATALOG d_sat=2.193
+  crater  : 28 features; optnm below the threshold and >1.5x lower (improvements): 10; optnm >1.5x lower but above the threshold: 2; within 1.5x: 16; optnm >1.5x higher: 0
+      ( 4394, 1991) prod5     868  optnm      85  d_vet1=0.002 is_sat1=True flux1=22293
+      ( 3096, 2040) prod5     773  optnm      -8  d_vet1=0.050 is_sat1=False flux1=15894
+      ( 2064,  585) prod5     722  optnm      55  d_vet1=0.016 is_sat1=False flux1=9439
+      ( 5278,  611) prod5     323  optnm       3  d_vet1=0.034 is_sat1=False flux1=7671
+      ( 1878,  990) prod5     316  optnm      -5  d_vet1=0.024 is_sat1=True flux1=5746
+      (  785,  220) prod5     299  optnm      50  d_vet1=0.026 is_sat1=False flux1=5467
+      ( 4838, 1634) prod5     292  optnm      80  d_vet1=0.270 is_sat1=True flux1=227803
+      ( 2053, 1749) prod5     253  optnm      28  d_vet1=0.027 is_sat1=False flux1=3377
+      ( 5231, 1153) prod5     229  optnm      33  d_vet1=0.036 is_sat1=False flux1=4172
+      ( 2335,  437) prod5     219  optnm      30  d_vet1=0.030 is_sat1=False flux1=3178

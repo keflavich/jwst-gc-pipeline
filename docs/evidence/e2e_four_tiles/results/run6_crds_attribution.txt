@@ -1,0 +1,20 @@
+listing before the control arm (taken at submission): modification time 2026-11-27 06:04:36; bad_files.txt 5034 bytes; server_config 1457934 bytes
+listing taken by the o105 control post job: modification time 2026-11-27 11:20:13; bad_files.txt 5034 bytes; server_config 1457934 bytes
+sizes equal before and after: True
+logs scanned: 31 (logs of the control arms, and of the fan and finalize jobs of the o045 opt arm); CRDS client or PARS-RESAMPLESTEP lines: 27
+lines within 100 s of the modification time: 2
+  2026-11-27 11:20:24 e6f-o045-fin_53020241_4294967294.log: 2026-11-27 11:20:24,581 - stpipe.step - INFO - PARS-RESAMPLESTEP parameters found: /orange/adamginsb
+  2026-11-27 11:21:10 e6f-o045-fin_53020241_4294967294.log: 2026-11-27 11:21:10,662 - stpipe.step - INFO - PARS-RESAMPLESTEP parameters found: /orange/adamginsb
+jobs of the account running at 2026-11-27 11:20:13: this run 7, other 217
+    other: 51 x v13p2L2b
+    other: 49 x gctreasury10678-peppar-nanfix
+    other: 33 x g0full
+    other: 16 x crowded_l39438-m3-fanout
+    other: 10 x ngc63347213-m6-fanout
+    other: 10 x g0549438-m12-fanout
+    other: 8 x m41979-m7-fanout
+    other: 8 x m921334-m5-fanout
+    other: 6 x g0289438-m7-fanout
+    other: 1 x interactive
+    other: 1 x w516151-m7-fanout
+    other: 1 x g0419438-m12-finalize

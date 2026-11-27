@@ -1,0 +1,46 @@
+integration tree of the four-tile run and of the o045 re-runs (local branch e2e4-integration-local in a scratch worktree, never pushed): HEAD 42655da6; base origin/main 8df42918 at the time of this listing (2026-11-27 08:01 EST); merge base with origin/main 803d0794
+ (against 803d0794)  173 files changed, 25741 insertions(+), 82 deletions(-)
+merge commits of the tree (first parent, newest first):
+  42655da6 Merge origin/mergedcat-residual-guards into the e2e4 integration tree (local only, never pushed)
+  996e9682 Merge origin/companion-keep-far into the e2e4 integration tree (local only, never pushed)
+  5af07981 Merge origin/relaxed-bright-seeds into the e2e4 integration tree (local only, never pushed)
+  cb68e5a9 Merge origin/dedup-nonpositive-winner into the e2e4 integration tree (local only, never pushed)
+  dda52d96 Merge origin/relaxed-bright-seeds into the e2e2 integration tree (local only, never pushed)
+  4d43b835 Merge origin/companion-keep-far into the e2e2 integration tree (local only, never pushed)
+  b201aec2 Merge origin/dedup-nonpositive-winner into the e2e2 integration tree (local only, never pushed)
+  3d7b94cd e2e: merge #1377 companion-keep-far
+  8628e1e1 e2e: merge #1376 relaxed-bright-seeds
+  ab67a950 e2e: merge #1369 satstar-sidelobe-maskable
+  82fcff81 e2e: merge #1368 satstar-sidelobe-frac (conflicts with #1371 resolved by keeping both: cache-signature parts and doc rows)
+  549b2630 e2e: merge #1371 satstar-fitter-maxiters
+  4b4cebb0 e2e: merge #1366 dedup-nonpositive-winner
+  da211400 e2e: merge #1365 merge-pair-rescue
+  612fdbed e2e: merge #1367 single-exposure-ramp-events (conflicts with #1374 resolved by keeping both: ramp + spike masks)
+  d4909331 e2e: merge #1375 footprint-mask-ring-tier2
+  1f8eec4e e2e: merge #1374 positive-spike-pixel-mask
+  45ccfa6f e2e: merge #1373 footprint-mask-edge-band
+  85022d01 e2e: merge #1372 footprint-mask-dqsat
+  8de68b18 e2e: merge #1370 footprint-mask-rejected-satstars
+  373697b6 e2e: merge #1364 footprint-mask-ring-zone
+  c9bffb7e e2e: merge #1362 satstar-dao-restore
+  6a7394aa e2e: merge #1361 mergedcat-residual-footprint-mask
+  63461a4e e2e: merge #1360 mergedcat-residual-guards
+PR heads (gh pr view, 2026-11-27) and whether each head is an ancestor of the tree HEAD:
+  #1360 head 675ed9a6 ancestor of the tree: yes
+  #1361 head 1424a31e ancestor of the tree: yes
+  #1362 head 2ebe41c1 ancestor of the tree: yes
+  #1364 head f095649f ancestor of the tree: yes
+  #1370 head aaeceeac ancestor of the tree: yes
+  #1372 head cae05e94 ancestor of the tree: yes
+  #1373 head 9434ba67 ancestor of the tree: yes
+  #1374 head 56173877 ancestor of the tree: yes
+  #1375 head 43d61ec7 ancestor of the tree: yes
+  #1367 head 9733dfc0 ancestor of the tree: yes
+  #1365 head 622fe467 ancestor of the tree: yes
+  #1366 head 459ad0aa ancestor of the tree: yes
+  #1371 head 60e6f3a0 ancestor of the tree: yes
+  #1368 head 3daf043f ancestor of the tree: yes
+  #1369 head 383a1403 ancestor of the tree: yes
+  #1376 head 770a1a5c ancestor of the tree: yes
+  #1377 head 1553ed42 ancestor of the tree: yes
+#1380 and #1383 are documentation only and are not in the tree.

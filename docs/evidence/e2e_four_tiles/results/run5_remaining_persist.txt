@@ -1,0 +1,23 @@
+The 16 leftovers >= 200 MJy/sr of the masked renders (optfin) and the leftover of the same star in the production render (prod5) and the unmasked render (optnm)
+residual peaks in MJy/sr; a leftover of a render counts as the same when it lies within 4 pixels of the position in the first columns; "none" = no leftover at >= 50 MJy/sr within 4 pixels
+
+tile band      x      y  optfin  prod5  optnm  prod5/optfin
+o105 F212N    434   3684     358    358    358   0.999
+o105 F212N   5368   4587     345    345    344   0.999
+o105 F212N  11052   3798     336    334    336   0.995
+o105 F212N   7030   3275     254    255    255   1.005
+o105 F212N   6529   3558     245    245    245   1.002
+o105 F212N   3245   3878     209    212    209   1.014
+o105 F212N   1660    341     205    206    205   1.007
+o105 F212N   9362   1291     201    202    201   1.003
+o118 F212N    330    111     939    939    939   1.000
+o118 F212N    220   4407     423    423    423   0.999
+o118 F212N    637   3732     308  none  none   none
+o118 F212N    641   3740     203  none  none   none
+o130 F212N   5065     68    1241   1244   1241   1.003
+o138 F212N   7366   4240     287    287    287   0.999
+o118 F480M    368    334     253    253    253   1.001
+o130 F480M   1932    146     359    359    359   0.999
+
+Leftovers whose production-render peak is within 10 % of the optfin peak: 14 of 16
+The two others are o118 F212N (637, 3732) and (641, 3740): in the production render and in the unmasked render the star next to them is one leftover of 30152 MJy/sr at (645, 3733) (data peak 30156, model peak 5); in the masked render that star is NaN and its wing is left.

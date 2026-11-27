@@ -1,0 +1,33 @@
+Masked area of the F480M renders of the four tiles: optfin (mask values of the run, the F212N values), mk4f and mk3f (F480M values, KFAC 4 and 3), optnm (no mask)
+
+o105 F480M optfin  finite data px  12464795  masked   2907644  =  23.33 % of the data footprint
+o105 F480M mk4f    finite data px  12464795  masked   2839722  =  22.78 % of the data footprint
+o105 F480M mk3f    finite data px  12464795  masked   1868158  =  14.99 % of the data footprint
+o105 F480M optnm   finite data px  12464795  masked         5  =   0.00 % of the data footprint
+o105 F480M NaN only in optfin:     67922  NaN only in mk4f:         0
+o105 F480M NaN only in mk4f:    971564  NaN only in mk3f:         0
+o105 F480M NaN only in optfin:   1039486  NaN only in mk3f:         0
+
+o118 F480M optfin  finite data px  12470721  masked   1424840  =  11.43 % of the data footprint
+o118 F480M mk4f    finite data px  12470721  masked   1359313  =  10.90 % of the data footprint
+o118 F480M mk3f    finite data px  12470721  masked    905845  =   7.26 % of the data footprint
+o118 F480M optnm   finite data px  12470721  masked         4  =   0.00 % of the data footprint
+o118 F480M NaN only in optfin:     65527  NaN only in mk4f:         0
+o118 F480M NaN only in mk4f:    453468  NaN only in mk3f:         0
+o118 F480M NaN only in optfin:    518995  NaN only in mk3f:         0
+
+o130 F480M optfin  finite data px  12472748  masked   1042721  =   8.36 % of the data footprint
+o130 F480M mk4f    finite data px  12472748  masked    978387  =   7.84 % of the data footprint
+o130 F480M mk3f    finite data px  12472748  masked    668767  =   5.36 % of the data footprint
+o130 F480M optnm   finite data px  12472748  masked         7  =   0.00 % of the data footprint
+o130 F480M NaN only in optfin:     64334  NaN only in mk4f:         0
+o130 F480M NaN only in mk4f:    309620  NaN only in mk3f:         0
+o130 F480M NaN only in optfin:    373954  NaN only in mk3f:         0
+
+o138 F480M optfin  finite data px  12472006  masked   1270606  =  10.19 % of the data footprint
+o138 F480M mk4f    finite data px  12472006  masked   1206958  =   9.68 % of the data footprint
+o138 F480M mk3f    finite data px  12472006  masked    805725  =   6.46 % of the data footprint
+o138 F480M optnm   finite data px  12472006  masked         0  =   0.00 % of the data footprint
+o138 F480M NaN only in optfin:     63648  NaN only in mk4f:         0
+o138 F480M NaN only in mk4f:    401233  NaN only in mk3f:         0
+o138 F480M NaN only in optfin:    464881  NaN only in mk3f:         0

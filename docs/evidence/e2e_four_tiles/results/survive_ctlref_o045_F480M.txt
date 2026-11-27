@@ -1,0 +1,29 @@
+o045 F480M nrca: opt seed 118515 rows, production seed 118513 rows; 2 rows only in opt, 0 only in production
+o045 F480M nrcb: opt seed 117768 rows, production seed 117766 rows; 2 rows only in opt, 0 only in production
+added rows by (module, seed_origin, seed_round_bright): {('nrca', 'i2d', True): 2, ('nrcb', 'i2d', True): 2}
+opt nrca raw   : 81808 rows
+opt nrca vetted: 73613 rows
+opt nrcb raw   : 82016 rows
+opt nrcb vetted: 74517 rows
+opt merged raw   : 160976 rows
+opt merged vetted: 145383 rows
+ctl nrca raw   : 81728 rows
+ctl nrca vetted: 73572 rows
+ctl nrcb raw   : 81934 rows
+ctl nrcb vetted: 74473 rows
+ctl merged raw   : 160814 rows
+ctl merged vetted: 145301 rows
+
+group      mod      n | optRaw optVet | ctlRaw ctlVet | new in raw new in vet | merged: optRaw optVet ctlVet
+B relaxed  nrca     2 |      2      2 |      0      0 |          2          2 |              2      2      0   (new in merged vetted 2; ctl merged raw 0)
+B relaxed  nrcb     2 |      2      2 |      0      0 |          2          2 |              2      2      0   (new in merged vetted 2; ctl merged raw 0)
+B relaxed  both     4 |      4      4 |      0      0 |          4          4 |              4      4      0   (new in merged vetted 4; ctl merged raw 0)
+all        nrca     2 |      2      2 |      0      0 |          2          2 |              2      2      0   (new in merged vetted 2; ctl merged raw 0)
+all        nrcb     2 |      2      2 |      0      0 |          2          2 |              2      2      0   (new in merged vetted 2; ctl merged raw 0)
+all        both     4 |      4      4 |      0      0 |          4          4 |              4      4      0   (new in merged vetted 4; ctl merged raw 0)
+
+opt merged-module raw rows within the radius of an added row that are absent from the vetted catalog (simple tests of the raw row):
+  A exempt: 0 rows; S/N median nan, qfit median nan, flags>0 0, nmatch<=2 0, S/N<5 0, qfit>0.2 0
+  B relaxed: 0 rows; S/N median nan, qfit median nan, flags>0 0, nmatch<=2 0, S/N<5 0, qfit>0.2 0
+
+wrote <scratch>/e2e6/survive_ctlref/survive_o045_F480M.json

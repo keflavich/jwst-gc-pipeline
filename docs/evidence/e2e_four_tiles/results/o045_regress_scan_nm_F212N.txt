@@ -1,0 +1,32 @@
+# o045 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source optnm, references ['prod5']
+## features of optnm (n_left 46, n_crater 56) against the prod5 extremum in the same box (regressions)
+  leftover: 46 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 36; prod5 >1.5x higher: 10
+  crater  : 56 features; prod5 below the threshold and >1.5x lower (regressions): 1; prod5 >1.5x lower but above the threshold: 1; within 1.5x: 47; prod5 >1.5x higher: 7
+      ( 7065, 1169) optnm     543  prod5      17  d_vet1=0.207 is_sat1=True flux1=38949
+## features of prod5 (n_left 190, n_crater 220) against the optnm extremum in the same box (improvements)
+  leftover: 190 features; optnm below the threshold and >1.5x lower (improvements): 140; optnm >1.5x lower but above the threshold: 5; within 1.5x: 39; optnm >1.5x higher: 6
+      ( 6443,  197) prod5   15349  optnm      16  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.707
+      ( 5164,  948) prod5   12991  optnm      19  cls=SATSTAR_NEAR d_sat=0.482
+      ( 6296, 2636) prod5   10826  optnm      24  cls=NOT_IN_M7_CATALOG d_sat=1.070
+      ( 7954, 1717) prod5    9864  optnm     162  cls=SATSTAR_NEAR d_sat=0.110
+      ( 4563, 4180) prod5    7860  optnm      20  cls=SATSTAR_NEAR d_sat=0.837
+      (10685, 3269) prod5    6838  optnm      28  cls=SATSTAR_NEAR d_sat=0.068
+      (11273, 3602) prod5    6764  optnm      21  cls=SATSTAR_NEAR d_sat=0.713
+      (  544, 1981) prod5    5936  optnm      33  cls=NOT_IN_M7_CATALOG d_sat=1.671
+      ( 9708, 3426) prod5    5857  optnm      13  cls=NOT_IN_M7_CATALOG d_sat=1.167
+      ( 7840, 3229) prod5    5457  optnm      35  cls=NOT_IN_M7_CATALOG d_sat=1.386
+      ( 6136, 4124) prod5    5357  optnm      32  cls=SATSTAR_NEAR d_sat=0.603
+      ( 7120, 2278) prod5    5306  optnm      19  cls=SATSTAR_NEAR d_sat=0.366
+  crater  : 220 features; optnm below the threshold and >1.5x lower (improvements): 102; optnm >1.5x lower but above the threshold: 16; within 1.5x: 80; optnm >1.5x higher: 22
+      ( 4949, 3839) prod5    8884  optnm     143  d_vet1=0.013 is_sat1=True flux1=104734
+      ( 9183, 2694) prod5    5426  optnm      -4  d_vet1=0.010 is_sat1=True flux1=58463
+      ( 2823, 3145) prod5    3352  optnm      34  d_vet1=0.008 is_sat1=True flux1=37497
+      ( 2112,  533) prod5    2821  optnm       1  d_vet1=0.017 is_sat1=True flux1=32827
+      ( 4852, 4202) prod5    2590  optnm      -4  d_vet1=0.154 is_sat1=False flux1=182
+      ( 4073, 4192) prod5    2433  optnm       0  d_vet1=0.045 is_sat1=False flux1=396
+      ( 3295, 4182) prod5    2328  optnm      -1  d_vet1=0.218 is_sat1=False flux1=1003
+      ( 1318, 2407) prod5    2319  optnm     139  d_vet1=0.001 is_sat1=True flux1=25314
+      (10309, 3202) prod5    2283  optnm      78  d_vet1=0.017 is_sat1=True flux1=28839
+      ( 2083, 2072) prod5    2138  optnm      45  d_vet1=0.012 is_sat1=True flux1=24425
+      ( 4861, 3856) prod5    2116  optnm       2  d_vet1=0.117 is_sat1=False flux1=257
+      ( 3198, 1235) prod5    1897  optnm     161  d_vet1=0.008 is_sat1=False flux1=23961

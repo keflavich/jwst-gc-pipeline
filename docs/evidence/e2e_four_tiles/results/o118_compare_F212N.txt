@@ -1,0 +1,130 @@
+o118 F212N: matching radius 3 px of 0.031223 arcsec = 0.094 arcsec; leftovers >= 100 MJy/sr in the pair tables
+
+tag                      L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50   >=200  >=500 
+prod5                         199      105       82       72       65               308     93     33
+optnm                          92       18        7        3        1                74     26      2
+optfin                         79       16        4        1        0                 5      0      0
+
+prod5                    >=200 by class: NOT_IN_M7_CATALOG 22, SATSTAR_NEAR 22, VETTED_BUT_UNSUBTRACTED 14, VETTED_OUT 24
+optnm                    >=200 by class: NOT_IN_M7_CATALOG 1, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+optfin                   >=200 by class: NOT_IN_M7_CATALOG 2, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 0, VETTED_OUT 0
+
+16 added seed rows (survive file <scratch>/e2e5/results/survive_o118_F212N.json): {'A exempt': 5, 'B relaxed': 11}
+
+=== prod5 -> optfin: leftovers >= 100: 105 -> 16; cleared 95, reduced <0.5x 0, unchanged 10, worse >1.5x 0; new (no counterpart in prod5) 6
+    cleared >= 200: 80 of 82; >= 500: 71 of 72; >= 1000: 65 of 65
+    cleared by class: NOT_IN_M7_CATALOG 28, SATSTAR_NEAR 25, VETTED_BUT_UNSUBTRACTED 16, VETTED_OUT 26
+    new by class: NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 2
+    cleared  (  645, 3733) NOT_IN_M7_CATALOG          30152 ->       0
+    cleared  ( 1086, 4503) VETTED_OUT                 17415 ->       0
+    cleared  (10748, 1490) NOT_IN_M7_CATALOG          16405 ->       0
+    cleared  ( 5576, 2407) VETTED_BUT_UNSUBTRACTED    16089 ->       0
+    cleared  ( 6633, 3998) VETTED_OUT                  8427 ->       0
+    cleared  (  163, 2127) VETTED_BUT_UNSUBTRACTED     8098 ->       0
+    cleared  ( 6841,  160) VETTED_OUT                  6181 ->       0
+    cleared  ( 7213, 3989) VETTED_OUT                  5854 ->       0
+    cleared  ( 8917, 1412) NOT_IN_M7_CATALOG           5562 ->       0
+    cleared  ( 9504, 4625) NOT_IN_M7_CATALOG           5288 ->       0
+    cleared  ( 8355, 1769) VETTED_OUT                  5127 ->       0
+    cleared  ( 9397, 3084) VETTED_BUT_UNSUBTRACTED     4708 ->       0
+    new      (  637, 3732) NOT_IN_M7_CATALOG                       308
+    new      (  641, 3740) NOT_IN_M7_CATALOG                       203
+    new      (  641, 3725) NOT_IN_M7_CATALOG                       186
+    new      (  648, 3740) SATSTAR_NEAR                            160
+    new      (  648, 3724) NOT_IN_M7_CATALOG                       158
+    new      (  653, 3731) SATSTAR_NEAR                            149
+    added rows with a prod5 leftover >= 100 within 0.1": {'A exempt': 2, 'B relaxed': 4}; of those the leftover is cleared in optfin for {'A exempt': 2, 'B relaxed': 4}
+    cleared leftovers by nearest added row: {'none': 89, 'A exempt': 2, 'B relaxed': 4}
+    big craters: 308 -> 5; gone 305 (>= 200: 93), new 2 (>= 200: 0)
+    crater new  ( 1581,   65) depth 176 model_peak 557 depth_over_model 0.316 nearest vetted row 0.024"
+    crater new  ( 6441, 3999) depth 104 model_peak 323 depth_over_model 0.322 nearest vetted row 0.022"
+    crater gone ( 6395, 4028) depth 9330 model_peak 13561 depth_over_model 0.688 nearest vetted row 0.005"
+    crater gone ( 2373, 3424) depth 4137 model_peak 5740 depth_over_model 0.721 nearest vetted row 0.006"
+    crater gone ( 2329, 4123) depth 2766 model_peak 9133 depth_over_model 0.303 nearest vetted row 0.009"
+    crater gone ( 4863, 3856) depth 2321 model_peak 2 depth_over_model 1071.293 nearest vetted row 0.080"
+    crater gone ( 4854, 4201) depth 2320 model_peak 0 depth_over_model 6286.291 nearest vetted row 0.262"
+    crater gone ( 3307, 3836) depth 2188 model_peak 2 depth_over_model 1065.084 nearest vetted row 0.236"
+    crater gone ( 4085, 3846) depth 1865 model_peak 4 depth_over_model 417.039 nearest vetted row 0.207"
+    crater gone ( 1951, 2062) depth 1846 model_peak 1850 depth_over_model 0.998 nearest vetted row 0.014"
+    crater gone ( 1564, 1208) depth 1561 model_peak 4191 depth_over_model 0.372 nearest vetted row 0.016"
+    crater gone ( 5744, 4324) depth 1543 model_peak 3019 depth_over_model 0.511 nearest vetted row 0.009"
+    crater gone ( 3297, 4182) depth 1421 model_peak 2 depth_over_model 905.673 nearest vetted row 0.151"
+    crater gone ( 6401, 4042) depth 1292 model_peak 2924 depth_over_model 0.442 nearest vetted row 0.015"
+
+=== prod5 -> optnm: leftovers >= 100: 105 -> 18; cleared 87, reduced <0.5x 0, unchanged 18, worse >1.5x 0; new (no counterpart in prod5) 0
+    cleared >= 200: 75 of 82; >= 500: 69 of 72; >= 1000: 64 of 65
+    cleared by class: NOT_IN_M7_CATALOG 25, SATSTAR_NEAR 22, VETTED_BUT_UNSUBTRACTED 14, VETTED_OUT 26
+    new by class: 
+    cleared  ( 1086, 4503) VETTED_OUT                 17415 ->       0
+    cleared  (10748, 1490) NOT_IN_M7_CATALOG          16405 ->       0
+    cleared  ( 5576, 2407) VETTED_BUT_UNSUBTRACTED    16089 ->       0
+    cleared  ( 6633, 3998) VETTED_OUT                  8427 ->       0
+    cleared  (  163, 2127) VETTED_BUT_UNSUBTRACTED     8098 ->       0
+    cleared  ( 6841,  160) VETTED_OUT                  6181 ->       0
+    cleared  ( 7213, 3989) VETTED_OUT                  5854 ->       0
+    cleared  ( 8917, 1412) NOT_IN_M7_CATALOG           5562 ->       0
+    cleared  ( 9504, 4625) NOT_IN_M7_CATALOG           5288 ->       0
+    cleared  ( 8355, 1769) VETTED_OUT                  5127 ->       0
+    cleared  ( 9397, 3084) VETTED_BUT_UNSUBTRACTED     4708 ->       0
+    cleared  ( 4961, 2157) NOT_IN_M7_CATALOG           4494 ->       0
+    added rows with a prod5 leftover >= 100 within 0.1": {'A exempt': 2, 'B relaxed': 4}; of those the leftover is cleared in optnm for {'A exempt': 2, 'B relaxed': 4}
+    cleared leftovers by nearest added row: {'none': 81, 'A exempt': 2, 'B relaxed': 4}
+    big craters: 308 -> 74; gone 242 (>= 200: 67), new 8 (>= 200: 3)
+    crater new  ( 4975, 3325) depth 316 model_peak 999 depth_over_model 0.316 nearest vetted row 0.504"
+    crater new  ( 1129, 2936) depth 239 model_peak 784 depth_over_model 0.305 nearest vetted row 0.189"
+    crater new  ( 6397, 4036) depth 211 model_peak 684 depth_over_model 0.309 nearest vetted row 0.206"
+    crater new  ( 1151, 4537) depth 150 model_peak 488 depth_over_model 0.308 nearest vetted row 0.488"
+    crater new  ( 5444, 4080) depth 98 model_peak 312 depth_over_model 0.315 nearest vetted row 0.384"
+    crater new  ( 2823, 2212) depth 63 model_peak 104 depth_over_model 0.604 nearest vetted row 0.405"
+    crater new  ( 4460, 1740) depth 59 model_peak 193 depth_over_model 0.306 nearest vetted row 0.506"
+    crater new  ( 3715, 4105) depth 56 model_peak 186 depth_over_model 0.301 nearest vetted row 0.495"
+    crater gone ( 6395, 4028) depth 9330 model_peak 13561 depth_over_model 0.688 nearest vetted row 0.005"
+    crater gone ( 2373, 3424) depth 4137 model_peak 5740 depth_over_model 0.721 nearest vetted row 0.006"
+    crater gone ( 2329, 4123) depth 2766 model_peak 9133 depth_over_model 0.303 nearest vetted row 0.009"
+    crater gone ( 4863, 3856) depth 2321 model_peak 2 depth_over_model 1071.293 nearest vetted row 0.080"
+    crater gone ( 4854, 4201) depth 2320 model_peak 0 depth_over_model 6286.291 nearest vetted row 0.262"
+    crater gone ( 3307, 3836) depth 2188 model_peak 2 depth_over_model 1065.084 nearest vetted row 0.236"
+    crater gone ( 4085, 3846) depth 1865 model_peak 4 depth_over_model 417.039 nearest vetted row 0.207"
+    crater gone ( 1564, 1208) depth 1561 model_peak 4191 depth_over_model 0.372 nearest vetted row 0.016"
+    crater gone ( 5744, 4324) depth 1543 model_peak 3019 depth_over_model 0.511 nearest vetted row 0.009"
+    crater gone ( 3297, 4182) depth 1421 model_peak 2 depth_over_model 905.673 nearest vetted row 0.151"
+    crater gone ( 6401, 4042) depth 1292 model_peak 2924 depth_over_model 0.442 nearest vetted row 0.015"
+    crater gone ( 9215,  901) depth 1188 model_peak 2642 depth_over_model 0.450 nearest vetted row 0.010"
+
+=== optnm -> optfin: leftovers >= 100: 18 -> 16; cleared 8, reduced <0.5x 0, unchanged 10, worse >1.5x 0; new (no counterpart in optnm) 6
+    cleared >= 200: 5 of 7; >= 500: 2 of 3; >= 1000: 1 of 1
+    cleared by class: NOT_IN_M7_CATALOG 3, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 2
+    new by class: NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 2
+    cleared  (  645, 3733) NOT_IN_M7_CATALOG          30151 ->       0
+    cleared  ( 3320, 4580) VETTED_BUT_UNSUBTRACTED      532 ->       0
+    cleared  ( 1397, 3986) SATSTAR_NEAR                 430 ->       0
+    cleared  ( 6180, 2545) SATSTAR_NEAR                 285 ->       0
+    cleared  ( 9263, 4702) VETTED_BUT_UNSUBTRACTED      213 ->       0
+    cleared  ( 1992, 4571) NOT_IN_M7_CATALOG            182 ->       0
+    cleared  ( 7476, 1917) SATSTAR_NEAR                 114 ->       0
+    cleared  (10645, 4718) NOT_IN_M7_CATALOG            113 ->       0
+    new      (  637, 3732) NOT_IN_M7_CATALOG                       308
+    new      (  641, 3740) NOT_IN_M7_CATALOG                       203
+    new      (  641, 3725) NOT_IN_M7_CATALOG                       186
+    new      (  648, 3740) SATSTAR_NEAR                            160
+    new      (  648, 3724) NOT_IN_M7_CATALOG                       158
+    new      (  653, 3731) SATSTAR_NEAR                            149
+    added rows with a optnm leftover >= 100 within 0.1": {}; of those the leftover is cleared in optfin for {}
+    cleared leftovers by nearest added row: {'none': 8}
+    big craters: 74 -> 5; gone 71 (>= 200: 26), new 2 (>= 200: 0)
+    crater new  ( 1581,   65) depth 176 model_peak 557 depth_over_model 0.316 nearest vetted row 0.024"
+    crater new  ( 6441, 3999) depth 104 model_peak 323 depth_over_model 0.322 nearest vetted row 0.022"
+    crater gone ( 9074,  779) depth 579 model_peak 1475 depth_over_model 0.392 nearest vetted row 0.496"
+    crater gone ( 2700, 4571) depth 508 model_peak 1515 depth_over_model 0.336 nearest vetted row 0.024"
+    crater gone ( 5989, 1347) depth 489 model_peak 2 depth_over_model 298.635 nearest vetted row 0.213"
+    crater gone (11131,  927) depth 487 model_peak 1510 depth_over_model 0.322 nearest vetted row 0.260"
+    crater gone (  146, 4520) depth 464 model_peak 1268 depth_over_model 0.365 nearest vetted row 0.329"
+    crater gone ( 9154,  780) depth 439 model_peak 1424 depth_over_model 0.308 nearest vetted row 0.136"
+    crater gone ( 5520, 4543) depth 413 model_peak 2 depth_over_model 227.931 nearest vetted row 0.404"
+    crater gone ( 4993, 3298) depth 410 model_peak 1295 depth_over_model 0.317 nearest vetted row 0.516"
+    crater gone ( 5998, 3955) depth 404 model_peak 1231 depth_over_model 0.328 nearest vetted row 0.484"
+    crater gone ( 2125, 3145) depth 404 model_peak 1210 depth_over_model 0.334 nearest vetted row 0.181"
+    crater gone (11128,  927) depth 398 model_peak 1285 depth_over_model 0.309 nearest vetted row 0.284"
+    crater gone ( 6394, 4016) depth 392 model_peak 1168 depth_over_model 0.336 nearest vetted row 0.342"
+
+wrote <scratch>/e2e5/results/o118_compare_F212N.json

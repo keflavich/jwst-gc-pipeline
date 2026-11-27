@@ -1,0 +1,65 @@
+# Difference between the integration tree of run 2 of #1383 (tip dda52d96) and the tree of this run (tip 42655da6).
+# git log --no-merges --oneline dda52d96..42655da6
+675ed9a6 Record the end-to-end o045 F212N result of the second-pass neighbour guard (docs only)
+459ad0aa Describe the fitted-position rule of the duplicate-survivor drop in the manual
+69a647b9 Count only the fitted position of a stronger row in the duplicate-survivor rule
+770a1a5c Evidence: tile-level A/B of the relaxed bright window on o105, o118, o130 and o138 F480M
+1553ed42 Evidence: tile-level A/B of the far-companion exemption on o105, o118, o130 and o138 F480M
+
+# git diff --name-status dda52d96 42655da6
+M	PHOTOMETRY_PIPELINE.md
+M	SATURATED_PIXEL_HANDLING.md
+M	docs/evidence/bright_seed_roundness/README.md
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o045_F480M_notin.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o105_F480M_attribution.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o105_F480M_counts.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o105_F480M_craters.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o105_F480M_notin.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o105_F480M_replay_state.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o105_F480M_survival.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o118_F480M_attribution.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o118_F480M_counts.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o118_F480M_craters.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o118_F480M_notin.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o118_F480M_replay_state.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o118_F480M_survival.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o130_F480M_attribution.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o130_F480M_counts.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o130_F480M_craters.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o130_F480M_notin.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o130_F480M_replay_state.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o130_F480M_survival.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o138_F480M_attribution.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o138_F480M_counts.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o138_F480M_craters.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o138_F480M_notin.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o138_F480M_replay_state.txt
+A	docs/evidence/bright_seed_roundness/results/tile_ab_o138_F480M_survival.txt
+M	docs/evidence/m7_companion_keep/README.md
+A	docs/evidence/m7_companion_keep/results/tile_ab_o045_F480M_notin.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o105_F480M_attribution.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o105_F480M_counts.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o105_F480M_craters.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o105_F480M_notin.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o105_F480M_replay_state.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o105_F480M_survival.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o118_F480M_attribution.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o118_F480M_counts.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o118_F480M_craters.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o118_F480M_notin.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o118_F480M_replay_state.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o118_F480M_survival.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o130_F480M_attribution.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o130_F480M_counts.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o130_F480M_craters.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o130_F480M_notin.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o130_F480M_replay_state.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o130_F480M_survival.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o138_F480M_attribution.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o138_F480M_counts.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o138_F480M_craters.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o138_F480M_notin.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o138_F480M_replay_state.txt
+A	docs/evidence/m7_companion_keep/results/tile_ab_o138_F480M_survival.txt
+M	jwst_gc_pipeline/photometry/cataloging.py
+M	jwst_gc_pipeline/photometry/tests/test_dedup_nonpositive.py

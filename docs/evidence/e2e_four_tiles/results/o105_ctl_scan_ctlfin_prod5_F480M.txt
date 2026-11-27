@@ -1,0 +1,20 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source ctlfin, references ['prod5']
+## features of ctlfin (n_left 168, n_crater 38) against the prod5 extremum in the same box (regressions)
+  leftover: 168 features; prod5 below the threshold and >1.5x lower (regressions): 2; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 152; prod5 >1.5x higher: 14
+      ( 2614, 1826) ctlfin     904  prod5      29  cls=SATSTAR_NEAR d_sat=0.384
+      ( 4452,  858) ctlfin     403  prod5      30  cls=NOT_IN_M7_CATALOG d_sat=3.905
+  crater  : 38 features; prod5 below the threshold and >1.5x lower (regressions): 10; prod5 >1.5x lower but above the threshold: 1; within 1.5x: 24; prod5 >1.5x higher: 3
+      ( 1295, 1152) ctlfin    2143  prod5     130  d_vet1=0.024 is_sat1=False flux1=27310
+      ( 1205,  451) ctlfin    1662  prod5      94  d_vet1=0.033 is_sat1=False flux1=23851
+      ( 4143, 1264) ctlfin    1169  prod5      84  d_vet1=0.023 is_sat1=False flux1=15467
+      ( 4127, 1255) ctlfin     728  prod5      91  d_vet1=0.028 is_sat1=False flux1=9596
+      (  647,  833) ctlfin     281  prod5      13  d_vet1=0.024 is_sat1=False flux1=5961
+      ( 3601,  260) ctlfin     267  prod5      53  d_vet1=0.019 is_sat1=False flux1=3515
+      ( 1175,  460) ctlfin     242  prod5      38  d_vet1=0.012 is_sat1=False flux1=5227
+      (  642,  836) ctlfin     224  prod5      13  d_vet1=0.011 is_sat1=False flux1=4371
+      (  677,  837) ctlfin     221  prod5     123  d_vet1=0.010 is_sat1=False flux1=5316
+      ( 1694, 1852) ctlfin     220  prod5       6  d_vet1=0.030 is_sat1=False flux1=4241
+## features of prod5 (n_left 168, n_crater 28) against the ctlfin extremum in the same box (improvements)
+  leftover: 168 features; ctlfin below the threshold and >1.5x lower (improvements): 0; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 153; ctlfin >1.5x higher: 15
+  crater  : 28 features; ctlfin below the threshold and >1.5x lower (improvements): 1; ctlfin >1.5x lower but above the threshold: 2; within 1.5x: 25; ctlfin >1.5x higher: 0
+      ( 4838, 1634) prod5     292  ctlfin      80  d_vet1=0.270 is_sat1=True flux1=227803

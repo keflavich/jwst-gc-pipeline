@@ -1,0 +1,30 @@
+# o118 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source optfin, references ['prod5']
+## features of optfin (n_left 4, n_crater 0) against the prod5 extremum in the same box (regressions)
+  leftover: 4 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 2; prod5 >1.5x higher: 2
+## features of prod5 (n_left 82, n_crater 93) against the optfin extremum in the same box (improvements)
+  leftover: 82 features; optfin below the threshold and >1.5x lower (improvements): 79; optfin >1.5x lower but above the threshold: 1; within 1.5x: 2; optfin >1.5x higher: 0
+      ( 1086, 4503) prod5   17415  optfin      13  cls=VETTED_OUT d_sat=1.675
+      (10748, 1490) prod5   16405  optfin       6  cls=NOT_IN_M7_CATALOG d_sat=2.690
+      ( 5576, 2407) prod5   16089  optfin       3  cls=VETTED_BUT_UNSUBTRACTED d_sat=4.397
+      ( 6633, 3998) prod5    8427  optfin       5  cls=VETTED_OUT d_sat=1.504
+      (  163, 2127) prod5    8098  optfin      16  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.227
+      ( 6841,  160) prod5    6181  optfin       5  cls=VETTED_OUT d_sat=1.373
+      ( 7213, 3989) prod5    5854  optfin       5  cls=VETTED_OUT d_sat=3.510
+      ( 8917, 1412) prod5    5562  optfin       6  cls=NOT_IN_M7_CATALOG d_sat=1.460
+      ( 9504, 4625) prod5    5288  optfin       8  cls=NOT_IN_M7_CATALOG d_sat=2.383
+      ( 8355, 1769) prod5    5127  optfin       5  cls=VETTED_OUT d_sat=1.359
+      ( 9397, 3084) prod5    4708  optfin       7  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.757
+      ( 4961, 2157) prod5    4494  optfin       6  cls=NOT_IN_M7_CATALOG d_sat=2.613
+  crater  : 93 features; optfin below the threshold and >1.5x lower (improvements): 93; optfin >1.5x lower but above the threshold: 0; within 1.5x: 0; optfin >1.5x higher: 0
+      ( 6395, 4028) prod5    9330  optfin      -0  d_vet1=0.005 is_sat1=False flux1=105705
+      ( 2373, 3424) prod5    4137  optfin      -0  d_vet1=0.006 is_sat1=True flux1=62362
+      ( 2329, 4123) prod5    2766  optfin      -0  d_vet1=0.009 is_sat1=False flux1=28707
+      ( 4863, 3856) prod5    2321  optfin       2  d_vet1=0.080 is_sat1=False flux1=57
+      ( 4854, 4201) prod5    2320  optfin       2  d_vet1=0.262 is_sat1=False flux1=250
+      ( 3307, 3836) prod5    2188  optfin      -2  d_vet1=0.236 is_sat1=False flux1=4409
+      ( 4085, 3846) prod5    1865  optfin      -1  d_vet1=0.207 is_sat1=False flux1=10805
+      ( 1951, 2062) prod5    1846  optfin      -0  d_vet1=0.014 is_sat1=True flux1=20739
+      ( 1564, 1208) prod5    1561  optfin      -0  d_vet1=0.016 is_sat1=False flux1=28001
+      ( 5744, 4324) prod5    1543  optfin      -0  d_vet1=0.009 is_sat1=True flux1=26071
+      ( 3297, 4182) prod5    1421  optfin      -1  d_vet1=0.151 is_sat1=False flux1=161
+      ( 6401, 4042) prod5    1292  optfin      -0  d_vet1=0.015 is_sat1=False flux1=20257

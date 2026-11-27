@@ -1,0 +1,20 @@
+Check of the production tree after the four-tile run (read only; started 2026-11-27 08:13:17 EST)
+marker = submission time of the first job 2026-11-26T23:28:52; run window 2026-11-26T23:28:54 to 2026-11-27T06:12:19 (Slurm accounting)
+Command (read only): lfs find DIR --maxdepth 1 --newermt MARKER, one directory at a time (the directory itself is listed when it is newer)
+== offsets: entries newer than the marker: 0; with o105/o118/o130/o138 in the name: 0; error lines: 0; listing took 0 s
+== psfs: entries newer than the marker: 0; with o105/o118/o130/o138 in the name: 0; error lines: 0; listing took 0 s
+== astrometry_checkpoints: entries newer than the marker: 0; with o105/o118/o130/o138 in the name: 0; error lines: 0; listing took 41 s
+== F480M/pipeline: entries newer than the marker: 0; with o105/o118/o130/o138 in the name: 0; error lines: 0; listing took 265 s
+== catalogs: entries newer than the marker: 0; with o105/o118/o130/o138 in the name: 0; error lines: 0; listing took 4 s
+== F212N/pipeline: entries newer than the marker: 0; with o105/o118/o130/o138 in the name: 0; error lines: 0; listing took 1128 s
+o105 F212N: 153 symlinks
+o105 F480M: 45 symlinks
+o118 F212N: 153 symlinks
+o118 F480M: 45 symlinks
+o130 F212N: 153 symlinks
+o130 F480M: 45 symlinks
+o138 F212N: 153 symlinks
+o138 F480M: 45 symlinks
+symlinks in total: 792; newest target modification time 2026-11-10 10:57:23; targets modified after the marker: 0
+finished 2026-11-27 08:37:56 EST
+rc=0

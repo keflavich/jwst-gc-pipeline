@@ -1,0 +1,29 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source optfin, references ['prod5']
+## features of optfin (n_left 0, n_crater 0) against the prod5 extremum in the same box (regressions)
+## features of prod5 (n_left 168, n_crater 28) against the optfin extremum in the same box (improvements)
+  leftover: 168 features; optfin below the threshold and >1.5x lower (improvements): 167; optfin >1.5x lower but above the threshold: 0; within 1.5x: 1; optfin >1.5x higher: 0
+      ( 5014,  145) prod5    5668  optfin       0  cls=SATSTAR_NEAR d_sat=0.757
+      ( 3331,  655) prod5    5410  optfin       0  cls=SATSTAR_NEAR d_sat=0.542
+      ( 4182, 1959) prod5    4303  optfin       0  cls=SATSTAR_NEAR d_sat=0.402
+      ( 4759,  923) prod5    3882  optfin       0  cls=SATSTAR_NEAR d_sat=0.003
+      ( 1998, 1328) prod5    3203  optfin       0  cls=SATSTAR_NEAR d_sat=0.210
+      (   81, 1884) prod5    2978  optfin       0  cls=SATSTAR_NEAR d_sat=0.479
+      ( 3223,  509) prod5    2803  optfin       0  cls=SATSTAR_NEAR d_sat=0.382
+      (  140, 1928) prod5    2709  optfin       0  cls=SATSTAR_NEAR d_sat=0.420
+      (   29,  404) prod5    2625  optfin       0  cls=SATSTAR_NEAR d_sat=0.404
+      (   89, 1891) prod5    2577  optfin       0  cls=SATSTAR_NEAR d_sat=0.458
+      (   32,  399) prod5    2527  optfin       0  cls=SATSTAR_NEAR d_sat=0.404
+      (   74, 1894) prod5    2471  optfin       0  cls=SATSTAR_NEAR d_sat=0.510
+  crater  : 28 features; optfin below the threshold and >1.5x lower (improvements): 28; optfin >1.5x lower but above the threshold: 0; within 1.5x: 0; optfin >1.5x higher: 0
+      ( 4716, 2096) prod5    6421  optfin      -0  d_vet1=0.222 is_sat1=True flux1=1135037
+      ( 4518,   45) prod5    1602  optfin      -0  d_vet1=0.023 is_sat1=True flux1=54997
+      ( 5187, 1854) prod5    1355  optfin      -0  d_vet1=0.280 is_sat1=True flux1=882930
+      ( 4496, 1547) prod5    1230  optfin      -0  d_vet1=0.046 is_sat1=True flux1=40757
+      ( 5397,  455) prod5    1229  optfin      -0  d_vet1=0.061 is_sat1=False flux1=23273
+      ( 5191, 1856) prod5    1226  optfin      -0  d_vet1=0.249 is_sat1=True flux1=882930
+      ( 1103, 1498) prod5    1172  optfin      -0  d_vet1=0.040 is_sat1=True flux1=37914
+      ( 3309,   40) prod5     876  optfin      -0  d_vet1=0.074 is_sat1=True flux1=33929
+      ( 2491, 1870) prod5     870  optfin      -0  d_vet1=0.041 is_sat1=True flux1=37185
+      ( 4394, 1991) prod5     868  optfin      -0  d_vet1=0.002 is_sat1=True flux1=22293
+      ( 3034,  382) prod5     844  optfin      -0  d_vet1=0.067 is_sat1=True flux1=24928
+      ( 5307, 1088) prod5     822  optfin      -0  d_vet1=0.277 is_sat1=True flux1=557788

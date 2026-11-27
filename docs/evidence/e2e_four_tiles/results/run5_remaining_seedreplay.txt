@@ -1,0 +1,14 @@
+Replay of the m7 band-seed builder for o105 F212N (own band F212N, companion cut 2.5 FWHM and flux ratio 0.1, exemption S/N 50) with the companion keep radius of the run (1.75 FWHM) and 1.5 FWHM
+inputs: the run catalogs of o105 (vetted m6 tables of the two modules and the cross-band seed of the run); the replay output tables are not kept
+rows = rows of the seed table of the module; NCOMPAN = rows tested by the companion cut; NCOMPKEP = rows the exemption keeps
+
+keep radius 1.75 FWHM nrca: rows 297160  NCOMPAN 11249  NCOMPKEP 15
+keep radius  1.5 FWHM nrca: rows 297163  NCOMPAN 11246  NCOMPKEP 18
+  rows added by 1.5 over 1.75 in nrca: 3
+keep radius 1.75 FWHM nrcb: rows 310587  NCOMPAN 12360  NCOMPKEP 27
+keep radius  1.5 FWHM nrcb: rows 310595  NCOMPAN 12352  NCOMPKEP 35
+  rows added by 1.5 over 1.75 in nrcb: 8
+
+seed rows within 0.05 arcsec of the two leftovers (index 6 = o105 F212N (1660, 341), index 2 = o105 F212N (11052, 3798)); none exists with keep radius 1.75:
+  keep radius 1.5:   [6] seed within 0.05": own_m6 flux 2197 sep 0.012"
+  keep radius 1.5:   [2] seed within 0.05": own_m6 flux 3527 sep 0.009"
