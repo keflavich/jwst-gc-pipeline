@@ -1,0 +1,7 @@
+# Pixels that are NaN in the residual i2d and finite in the data i2d, as a fraction of the finite data pixels (merged mosaics, K=4 footprint mask recipe).
+o045 F212N optfin  finite data px  51827751  masked   8119129  =  15.67 % of the data footprint
+o045 F212N optnm   finite data px  51827751  masked        16  =   0.00 % of the data footprint
+o045 F212N prod    finite data px  51827751  masked         0  =   0.00 % of the data footprint
+o045 F480M optfin  finite data px  12465701  masked   3034817  =  24.35 % of the data footprint
+o045 F480M optnm   finite data px  12465701  masked         0  =   0.00 % of the data footprint
+o045 F480M prod    finite data px  12465701  masked         0  =   0.00 % of the data footprint

@@ -1,0 +1,18 @@
+listing taken by the post job of the o045 control arm: modification time 2026-11-27 11:20:13; bad_files.txt 5034 bytes; server_config 1457934 bytes
+listing taken by the post job of the o045 opt arm: modification time 2026-11-27 15:53:45; bad_files.txt 5034 bytes; server_config 1457934 bytes
+sizes equal before and after: True
+logs scanned: 32 (logs of the control arms, and of the fan, finalize and post jobs of the o045 opt arm); CRDS client or PARS-RESAMPLESTEP lines: 31
+lines within 100 s of the modification time: 0
+jobs of the account running at 2026-11-27 15:53:45: this run 1, other 277
+    other: 148 x g0full
+    other: 51 x v13p2L2b
+    other: 8 x m921334-m6-fanout
+    other: 8 x y15-fan
+    other: 8 x n1x-both-fan
+    other: 8 x n1x-near-fan
+    other: 6 x gctreasury10678-peppar-nanfix
+    other: 6 x crowded_l39438-m3-fanout
+    other: 6 x data-qa-refresh-issue
+    other: 1 x interactive
+    other: 1 x ngc63347213-m6-finalize
+    other: 1 x w516151-m7-finalize
