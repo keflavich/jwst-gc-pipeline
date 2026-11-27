@@ -67,12 +67,15 @@ y = 630 to 636:
 |---|---|---|---|---|---|---|---|
 | production | 1264.4819 | 634.4405 | (1264, 634) | 2.000 | 1.5807 | yes | yes |
 | integration branch | 1264.542203 | 634.433635 | (1265, 634) | 1.000 | 1.5209 | no | yes |
+| replay with the gate switch | 1264.510691 | 634.433584 | (1265, 634) | 1.000 | 1.5511 | no | yes |
 
 There the shift of 0.060 px comes from the group fit when the neighbouring star is
-handed to the daophot channel by the implied-peak gate (a separate opt-in switch), and it
-carries the fit across the half-pixel boundary at 1264.5.  With the continuous rule the
-fit is 1.52 px from the blob and is kept whichever channel the neighbouring star is in.
-The leftover at pixel (4452, 858) of the render is that row.
+handed to the daophot channel by the implied-peak gate (`SATSTAR_GATE_EPSF_CORE_SCALE`,
+its own switch), and it carries the fit across the half-pixel boundary at 1264.5.  With the
+gate switch the star stays in the satstar channel and the row moves by 0.029 px, which is
+still across the boundary.  With the continuous rule the fit is 1.52 or 1.55 px from the
+blob and is kept whichever channel the neighbouring star is in.  The leftover at pixel
+(4452, 858) of the render is that row.
 
 ## The switch
 
@@ -121,6 +124,55 @@ The leftover at pixel (4452, 858) of the render is that row.
 * the switch is off unless set, is ignored for MIRI, raises on an unreadable value, and
   `_manual_phot_pass` hands it to the filter: a synthetic star 1.24 px from a saturated
   pixel is dropped with the switch off and kept, at its true position, with it on.
+
+## One-frame replays
+
+The m7 pass of two o105 F480M frames was replayed with the integration code plus the two
+opt-in switches (ePSF core on, every other setting that of the end-to-end control run), with
+four arms: no switch (control), `SATSTAR_GATE_EPSF_CORE_SCALE` alone, this switch alone and
+both.  The rows are those of the final daophot table, after the near-saturation filter,
+within 3 px of the position.
+
+Frame `nrcblong` exposure 6: the neighbour at (1264.5, 634.4) of the F5 star (1268.97, 632.68).
+
+| arm | neighbour, daophot row (x_fit, flux, flags) | star |
+|---|---|---|
+| production (STPSF only) | 1264.4819, 5232.8, 1 | satstar row, flux 29125.9 |
+| control | none | daophot row, flux 23597.7; satstar row rejected by the gate |
+| gate switch | none | satstar row, flux 28636.7 |
+| this switch | 1264.5422, 5360.7, 0 | daophot row, flux 23597.7; satstar row rejected by the gate |
+| both | 1264.5107, 5291.3, 1 | satstar row, flux 28636.7 |
+
+Frame `nrcalong` exposure 1: the F4 row at (1834.5, 1633.2).
+
+| arm | daophot row (x_fit, y_fit, flux, flags) |
+|---|---|
+| production | 1834.5003, 1633.1601, 13850.3, 1 |
+| control | none |
+| gate switch | none |
+| this switch | 1834.4991, 1633.1712, 13502.2, 1 |
+| both | 1834.4991, 1633.1712, 13502.2, 1 |
+
+This switch alone returns both rows, and the gate switch returns neither.  The replay F4
+row has `flux_fit` 13502.2 against the production 13850.3 (2.5 % lower), and the F5
+neighbour 5360.7 (this switch alone) or 5291.3 (both) against 5232.8.
+
+The census line of the filter, and the size of the change, in the same frames.  "Flagged" is
+the number of fits within the distance before the exemptions (protect circles, seeded
+companions); "dropped" is the number of the usual log line, after them.
+
+| frame | arm | flagged, continuous rule | flagged, rounded rule | kept only by the continuous rule | dropped only by it | dropped (control) | daophot rows (control) |
+|---|---|---|---|---|---|---|---|
+| `nrcalong` exposure 1 | this switch | 376 | 414 | 39 | 1 | 142 (178) | 54086 (54060) |
+| `nrcalong` exposure 1 | both | 368 | 405 | 38 | 1 | 141 (178) | 54073 (54060) |
+| `nrcblong` exposure 6 | this switch | 663 | 755 | 95 | 3 | 276 (366) | 53057 (52982) |
+| `nrcblong` exposure 6 | both | 657 | 750 | 96 | 3 | 276 (366) | 53050 (52982) |
+
+The rule therefore keeps about 40 to 100 more fits per frame, of about 54,000 rows, and
+drops 1 to 3 that the rounded rule keeps.  The control arm reproduces the daophot table of
+the earlier control replay of each frame (54060 and 52982 rows; `x_fit`, `y_fit`,
+`flux_fit`, `flags` and `qfit` identical in every row), so a run without the switches is
+unchanged.
 
 ## Limits of this change
 
