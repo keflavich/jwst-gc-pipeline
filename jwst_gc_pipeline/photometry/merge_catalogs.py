@@ -1215,7 +1215,9 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     newtbl['nmatch_good'] = nmatch_good
     if n_partial_box_row is not None:
         # nmatch_good still counts these rows; this is how many of them the
-        # averages below leave out (merge_partial_box)
+        # averages below leave out (merge_partial_box).  The table this function
+        # returns has the column; merge_frames_for_observation writes a fixed
+        # column list, so the written catalogues do not.
         newtbl['n_partial_box_dropped'] = n_partial_box_row
         newtbl.meta['PBOXDROP'] = n_partial_box_dropped
     # nmatch_good == nmatch on a fallback row, the same as on a row with no

@@ -13,9 +13,13 @@ either of them.  This change adds an opt-in switch that leaves such rows out.
 | `MERGE_PARTIAL_BOX_FRAC_MIN` | unset (off) | a row whose `n_pixels_fit` is below this fraction of the fit box is left out of the flux and position averages of its star, when the star has a kept row at or above the fraction.  Range (0, 1]; 0 or blank is off; other values raise `ValueError` naming the variable |
 | `MERGE_PARTIAL_BOX_ZMAX` | unset | only with the first variable: leave out only the partial rows whose flux differs from the inverse-variance mean of the star's rows at or above the fraction by more than this many standard deviations of the difference |
 
-With the switch on, the merged catalogue carries the column
-`n_partial_box_dropped` (rows left out of each star) and the header keyword
-`PBOXDROP` (their total).  With it off, the output is unchanged
+With the switch on, the table that `combine_singleframe` returns carries the
+column `n_partial_box_dropped` (rows left out of each star) and the header
+keyword `PBOXDROP` (their total).  `merge_frames_for_observation` writes its
+catalogues from a fixed list of columns, so neither reaches the written raw
+or vetted catalogues; the log line `Phase 1: MERGE_PARTIAL_BOX_FRAC_MIN=...:
+left N row(s) of M source(s) out of the averages` is the record of a run.
+With the switch off, the output is unchanged
 (`tests/test_combine_singleframe_partial_box.py` pins this).  The code is in
 `merge_partial_box.py`; the hook in `combine_singleframe` sits between the
 sigma clip and the weighted averages, so the position average, the flux
@@ -195,3 +199,143 @@ reduces the number of stars changed by a factor of 9 - 13 in F212N (268
 against 2523 in o105, 103 against 1205 in o130) and keeps the stars whose
 partial row disagrees with the full-box rows.  Both settings are environment
 variables, so a different value needs no code change.
+
+## Tile test
+
+The finished e2e5 tile trees (`$SCR/e2e5/<tile>`; the masked product is the
+`optfin` render, the unmasked re-render is `optnm`) were copied, the m7
+finalize (modules nrca, nrcb and merged, both bands) was re-run with the
+switch set and nothing else changed, and both residual renders were produced
+again.  Arms: `a` = `MERGE_PARTIAL_BOX_FRAC_MIN=0.5` on o130 and o105, `z` =
+`MERGE_PARTIAL_BOX_FRAC_MIN=0.5` with `MERGE_PARTIAL_BOX_ZMAX=3` on o130.
+The counting is the one of the e2e5 four-tile runs: a leftover is a residual group with
+residual / data above 0.7 and a residual peak at or above the stated value; a
+crater is a negative residual group with depth above 50 MJy/sr and depth /
+model peak above 0.3; a feature of one run and a feature of another are the
+same when they lie within 3 pixels (0.094 arcsec).
+
+Leftovers with a residual peak of at least 50 / 100 / 200 / 500 / 1000 MJy/sr
+and craters at least 50 / 200 / 500 MJy/sr deep, e2e5 against the arm:
+
+| run, band | render | leftovers e2e5 | leftovers arm | craters e2e5 | craters arm |
+|---|---|---|---|---|---|
+| o130 `a`, F212N | unmasked | 73 / 16 / 13 / 6 / 3 | 71 / 14 / 11 / 4 / 2 | 56 / 14 / 3 | 56 / 14 / 3 |
+| o130 `a`, F212N | masked | 52 / 3 / 1 / 1 / 1 | 51 / 2 / 0 / 0 / 0 | 5 / 0 / 0 | 5 / 0 / 0 |
+| o130 `z`, F212N | unmasked | 73 / 16 / 13 / 6 / 3 | 71 / 14 / 11 / 4 / 2 | 56 / 14 / 3 | 56 / 14 / 3 |
+| o130 `z`, F212N | masked | 52 / 3 / 1 / 1 / 1 | 51 / 2 / 0 / 0 / 0 | 5 / 0 / 0 | 5 / 0 / 0 |
+| o130 `a` and `z`, F480M | unmasked | 85 / 28 / 19 / 14 / 11 | 85 / 28 / 19 / 14 / 11 | 1 / 0 / 0 | 1 / 0 / 0 |
+| o130 `a` and `z`, F480M | masked | 56 / 7 / 1 / 0 / 0 | 56 / 7 / 1 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| o105 `a`, F212N | unmasked | 610 / 118 / 38 / 13 / 8 | 609 / 119 / 38 / 13 / 8 | 102 / 44 / 18 | 102 / 44 / 18 |
+| o105 `a`, F212N | masked | 475 / 52 / 8 / 0 / 0 | 474 / 52 / 8 / 0 / 0 | 10 / 0 / 0 | 10 / 0 / 0 |
+| o105 `a`, F480M | unmasked | 221 / 155 / 146 / 104 / 78 | 220 / 154 / 145 / 103 / 78 | 20 / 12 / 8 | 20 / 12 / 8 |
+| o105 `a`, F480M | masked | 49 / 2 / 0 / 0 / 0 | 49 / 2 / 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+
+Each e2e5 render was compared with the arm render of the same kind (12 pairs:
+o130 F212N and F480M, masked and unmasked, arms `a` and `z`; o105 F212N and
+F480M, masked and unmasked, arm `a`).  In all 12 pairs the number of arm
+leftovers at or above 100 MJy/sr without an e2e5 leftover within 3 pixels is
+0, the number of e2e5 leftovers at or above 100 MJy/sr that grew by more than
+1.5 times is 0, and no crater appears or disappears (crater counts at 50
+MJy/sr and above are equal in every pair).  The one total that goes up (o105
+F212N unmasked, 118 to 119 leftovers at 100 MJy/sr and above) is an arm
+leftover that has an e2e5 leftover within 3 pixels.  A scan of 13 x 13 pixel
+boxes at the threshold 200 MJy/sr finds, in all 12 renders, no box where the
+arm has a leftover or crater extremum above the threshold while the e2e5
+extremum is below the threshold and more than 1.5 times lower.
+
+Leftovers that the switch clears, named by mosaic pixel (x, y) with the
+residual peak in the e2e5 render and the arm render:
+
+| star | render | e2e5 | arm |
+|---|---|---|---|
+| o130 F212N (5065, 68) | masked and unmasked, arms `a` and `z` | 1241 | 0 (largest value 9 in the 13 x 13 pixel box around it) |
+| o130 F212N (1700, 4566) | unmasked, arms `a` and `z` | 597 | 0 (largest value 31 in the 13 x 13 pixel box) |
+| o130 F212N (5578, 380) | masked and unmasked, arms `a` and `z` | 2250 | 23 in the 13 x 13 pixel box (data peak 3779; model peak 1450 in e2e5, 3726 in the arm) |
+| o105 F480M (496, 13) | unmasked, arm `a` | 785 | 0 |
+
+The star at (5578, 380) is not counted as a leftover by the scoring, because
+its residual / data is 0.60, below the 0.7 threshold.  The finalize residual
+mosaics of o130 F212N differ in 217576 pixels (arm `a`) and 29680 pixels (arm
+`z`) by more than 0.001 MJy/sr; the largest differences are (5578, 380)
+2250 to -64, (5065, 68) 1244 to -5 and (25, 1514) 110 to -5.  The finalize
+mosaics of the other runs differ by at most 73.0 MJy/sr (o130 F480M, 69100
+pixels in arm `a`, 35106 in `z`), 83.9 MJy/sr (o105 F212N, 416898 pixels) and
+27.8 MJy/sr (o105 F480M, 96156 pixels).
+
+### Rows that changed
+
+Vetted catalogue rows matched on the sky (mutual nearest neighbours within 0.2
+arcsec), flux or position changed; fractions are arm flux / e2e5 flux - 1:
+
+| run, band | rows | changed | flux change above 1 % / 10 % / 30 % | up / down (above 1 %) | position change, median / 90th percentile / maximum (arcsec) |
+|---|---|---|---|---|---|
+| o130 `a`, F212N | 252597 | 1137 | 604 / 76 / 17 | 330 / 274 | 0.0004 / 0.0063 / 0.048 |
+| o130 `z`, F212N | 252597 | 90 | 86 / 37 / 13 | 61 / 25 | 0.0018 / 0.0226 / 0.048 |
+| o130 `a`, F480M | 140067 | 686 | 378 / 46 / 8 | 145 / 233 | 0.0007 / 0.0102 / 0.048 |
+| o130 `z`, F480M | 140067 | 260 | 215 / 39 / 6 | 70 / 145 | 0.0005 / 0.0134 / 0.040 |
+| o105 `a`, F212N | 523550 | 2286 | 1166 / 143 / 18 | 540 / 626 | 0.0003 / 0.0053 / 0.046 |
+| o105 `a`, F480M | 146308 | 683 | 382 / 70 / 16 | 110 / 272 | 0.0007 / 0.0109 / 0.049 |
+
+In the 5 x 5 pixel cutouts of the finalize residual mosaic (the masked
+render) around the rows whose flux changed by more than 10 % (o130 `a` F212N 76
+rows, o105 `a` F212N 143 rows), the median of the largest |residual| goes from
+7.1 to 6.8 MJy/sr (o130) and from 10.4 to 9.8 MJy/sr (o105), e2e5 to arm; the largest |residual|
+shrinks by more than a factor of 2 for 7 rows of o130 and 6 rows of o105 and
+grows by more than a factor of 2 for none, and the rows with a cutout
+|residual| above 200 MJy/sr go from 2 to 0 (o130) and stay 0 (o105).  The
+F480M cutouts of the masked render are zero for the median row (0.0 in both
+runs), so they carry no information.
+
+### Vetted membership
+
+A few rows enter or leave the vetted catalogue; every one of them stays in the
+raw catalogue.  Rows with no vetted partner within 0.05 arcsec, lost / gained
+by the arm: o130 `a` F212N 19 / 4 (of 252597 rows), `z` F212N 2 / 1, `a` F480M
+4 / 3 (of 140067), `z` F480M 1 / 0, o105 `a` F212N 33 / 6 (of 523550), `a`
+F480M 7 / 1 (of 146308).  Every one of the 66 lost and 15 gained rows has a raw
+row of the other run within 0.05 arcsec.  The merged `qfit` of the arm is
+higher than the e2e5 value for 63 of the 66 lost rows and 14 of the 15 gained
+rows (median |change| 0.03 to 0.14 for the six groups of lost rows), and the merged `flags` of the
+arm is lower for 45 of the 66 lost rows: the columns that the vetting reads
+are averaged with the same weights as the flux, so they move when a row
+leaves the average.  The 19 rows lost from the vetted catalogue of o130 `a`
+F212N have e2e5 fluxes of 33 to 1185 MJy/sr.
+
+### A case where the full-box row is uninformative
+
+The largest of those flux changes is the row at 266.756173, -28.367515 (o130
+F212N mosaic pixel (7787, 131)), a companion at 0.088 arcsec of a star with a
+saturated core (21 of the 49 pixels of the 7 x 7 pixel cutout are NaN in the
+data).  In e2e5 its two per-frame rows merge to flux 1185 with `flux_err_prop`
+36.7.  In arm `a` the row with a partial box is left out and the merged flux
+is 221.5 with `flux_err_prop` 492.9: the one row that remains has at least 13
+fitted pixels and an error 13 times larger.  The difference of the e2e5
+merged flux and the arm `a` flux is 1.95 combined standard deviations, below
+the `ZMAX` of 3, so arm `z` keeps both rows and the merged row is unchanged
+(1185, 36.7).  The largest unmasked residual in the 7 x 7 pixel box around the
+row is 973 MJy/sr in e2e5, 813 in arm `a` and 812 in arm `z`.  The residual
+does not separate the two rules, because the bright neighbour at 0.088 arcsec
+changes in the same way in both arms (7875 to 9364 MJy/sr).
+
+### What the test does not show
+
+- The residual counts of the F480M runs do not change and the largest
+  difference of the finalize residual mosaic is 73 MJy/sr (o130) and 28
+  MJy/sr (o105); the F480M flux changes (62 to 71 % down) are not tested by the
+  data here.
+- In o105 the leftover and crater counts do not change at any threshold,
+  although 2286 vetted F212N rows changed; the switch fixes a few stars and
+  leaves the rest as it was.
+- One tile per band in o130 and one in o105 was run, and each changed row has
+  one residual cutout.  The rule leaves out the rows with 12 pixels or fewer.
+  Rows with 13 to 16 pixels also disagree with the full-box rows by more than
+  the baseline (robust standard deviation of z 1.51 to 1.73 against 1.17 to
+  1.26, see the agreement table above) and stay in the averages.
+
+### Setting to use
+
+`MERGE_PARTIAL_BOX_FRAC_MIN=0.5` with `MERGE_PARTIAL_BOX_ZMAX=3`: in o130 it
+gives the same leftover and crater counts as `MERGE_PARTIAL_BOX_FRAC_MIN=0.5`
+alone, clears the same named stars, changes 12.6 times fewer vetted F212N rows
+(90 against 1137) and 2.6 times fewer F480M rows (260 against 686), loses 2
+rather than 19 vetted F212N rows and keeps the row of the case above.
