@@ -1,0 +1,33 @@
+{
+ "tile": "o130",
+ "band": "F480M",
+ "n_frames": 12,
+ "masked_off": 8026,
+ "masked_on": 8053,
+ "frames_changed": [
+  {
+   "frame": "jw10678130001_02101_00003_nrcalong_destreak_o130_crf.fits",
+   "masked_off": 658,
+   "masked_on": 676,
+   "added": 18,
+   "bbox": [
+    759,
+    1526,
+    140,
+    304
+   ]
+  },
+  {
+   "frame": "jw10678130001_02101_00004_nrcalong_destreak_o130_crf.fits",
+   "masked_off": 599,
+   "masked_on": 608,
+   "added": 9,
+   "bbox": [
+    759,
+    761,
+    302,
+    304
+   ]
+  }
+ ]
+}

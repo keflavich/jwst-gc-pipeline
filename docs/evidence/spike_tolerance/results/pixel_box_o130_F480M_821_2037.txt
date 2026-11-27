@@ -1,0 +1,12 @@
+frame jw10678130001_02101_00004_nrcblong_destreak_o130_crf.fits, pixel (x, y) = (821, 2037)
+SCI of the 3x3 box, MJy/sr (top row y+1, bottom row y-1; left column x-1):
+      59.8     30.6     50.7
+      56.7   3359.7     51.5
+       9.8     32.6     83.7
+DQ of the 3x3 box (1 DO_NOT_USE, 2 SATURATED, 4 JUMP_DET):
+         2        4        4
+         4        4        4
+         4        4        4
+find_positive_spikes, max_unusable=0: does not return the pixel
+find_positive_spikes, max_unusable=1: does not return the pixel
+SATURATED flag cleared in the eight neighbours, max_unusable=0: returns the pixel {'x': 821.0, 'y': 2037.0, 'peak': 3359.67041015625, 'excess': 3331.794948577881, 'bkg': 27.87546157836914, 'sigma': 22.188094726753235, 'neighbour': 55.82503128051758}

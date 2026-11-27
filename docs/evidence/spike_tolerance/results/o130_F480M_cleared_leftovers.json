@@ -1,0 +1,40 @@
+{
+ "tile": "o130",
+ "band": "F480M",
+ "source": "leftovers of the masked render without the switch (optfin) that have no leftover within 3 pixels in the masked render with POSITIVE_SPIKE_MASK_MAX_UNUSABLE=1 (zon)",
+ "n_leftovers_ge50": {
+  "without": 56,
+  "with_switch": 53
+ },
+ "cleared": [
+  {
+   "x": 1932,
+   "y": 146,
+   "resid_peak": 358.78436279296875,
+   "model_peak": 4.947089672088623,
+   "data_peak": 361.26568603515625,
+   "cls": "VETTED_BUT_UNSUBTRACTED",
+   "d_vet": 0.016716709595419578,
+   "vet_flux": 21.855831146240234
+  },
+  {
+   "x": 774,
+   "y": 312,
+   "resid_peak": 159.75830078125,
+   "model_peak": 4.451797008514404,
+   "data_peak": 162.55117797851562,
+   "cls": "VETTED_BUT_UNSUBTRACTED",
+   "d_vet": 0.030230986738055354,
+   "vet_flux": 17.578969955444336
+  },
+  {
+   "x": 1161,
+   "y": 314,
+   "resid_peak": 83.77208709716797,
+   "model_peak": 2.813279151916504,
+   "data_peak": 84.81825256347656,
+   "cls": "NOT_IN_M7_CATALOG",
+   "d_vet": 0.1960006147471845
+  }
+ ]
+}

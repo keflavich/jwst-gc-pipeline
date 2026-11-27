@@ -1,0 +1,23 @@
+F480M masked render, switch unset (zctl) against e2e5 masked render (optfin): shape (2280, 5640), finite A 11430027 (88.8860 %), finite B 11430027 (88.8860 %)
+  NaN pattern differs at 0 px (finite only in A 0, only in B 0); finite values differ at 0 of 11430027 common px
+F480M masked render, switch 1 (zon) against e2e5 masked render (optfin): shape (2280, 5640), finite A 11430027 (88.8860 %), finite B 11430027 (88.8860 %)
+  NaN pattern differs at 0 px (finite only in A 0, only in B 0); finite values differ at 49 of 11430027 common px
+  max |A-B| over differing common px 360.622, median 0.0328
+  3 connected groups of differing px (first 25: y0:y1, x0:x1, n_px):
+    144:149, 1931:1935, 19
+    310:314, 773:777, 15
+    312:316, 1159:1163, 15
+F480M unmasked render, switch 1 (zonnm) against e2e5 unmasked render (optnm): shape (2280, 5640), finite A 12472741 (96.9947 %), finite B 12472741 (96.9947 %)
+  NaN pattern differs at 0 px (finite only in A 0, only in B 0); finite values differ at 49 of 12472741 common px
+  max |A-B| over differing common px 360.622, median 0.0328
+  3 connected groups of differing px (first 25: y0:y1, x0:x1, n_px):
+    144:149, 1931:1935, 19
+    310:314, 773:777, 15
+    312:316, 1159:1163, 15
+F212N masked render, switch unset (zctl) against e2e5 masked render (optfin): shape (4737, 11440), finite A 49472138 (91.2917 %), finite B 49472138 (91.2917 %)
+  NaN pattern differs at 0 px (finite only in A 0, only in B 0); finite values differ at 0 of 49472138 common px
+F212N masked render, switch 1 (zon) against e2e5 masked render (optfin): shape (4737, 11440), finite A 49472138 (91.2917 %), finite B 49472138 (91.2917 %)
+  NaN pattern differs at 0 px (finite only in A 0, only in B 0); finite values differ at 0 of 49472138 common px
+F212N unmasked render, switch 1 (zonnm) against e2e5 unmasked render (optnm): shape (4737, 11440), finite A 51826691 (95.6366 %), finite B 51826691 (95.6366 %)
+  NaN pattern differs at 0 px (finite only in A 0, only in B 0); finite values differ at 0 of 51826691 common px
+done

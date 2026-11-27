@@ -309,11 +309,11 @@ def test_spike_tolerance_leaves_a_clean_spike_alone(tmp_path, monkeypatch, capsy
     plain = L.single_exposure_event_masks(files)[files[1]].copy()
     plain_out = capsys.readouterr().out
     L._EVENT_MASK_CACHE.clear()
-    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, '3')
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, '1')
     tolerant = L.single_exposure_event_masks(files)[files[1]]
     tolerant_out = capsys.readouterr().out
     assert (tolerant == plain).all()
-    assert 'POSITIVE_SPIKE_MASK_MAX_UNUSABLE=3: 0 of the spikes have a missing neighbour' in tolerant_out
+    assert 'POSITIVE_SPIKE_MASK_MAX_UNUSABLE=1: 0 of the spikes have a missing neighbour' in tolerant_out
     assert (tolerant_out.split('positive spikes:')[1].split('(')[0]
             == plain_out.split('positive spikes:')[1].split('(')[0])
 
@@ -325,9 +325,10 @@ def test_spike_tolerance_without_the_spike_switch_warns_and_does_nothing(tmp_pat
     assert f'{se.ENV_SPIKE_UNUSABLE}=1 has no effect while {se.ENV_SPIKE} is off' in capsys.readouterr().out
 
 
-def test_spike_tolerance_typo_raises_naming_the_variable(tmp_path, monkeypatch):
+@pytest.mark.parametrize('value', ['one', '2'])
+def test_spike_tolerance_typo_or_above_the_limit_raises_naming_the_variable(tmp_path, monkeypatch, value):
     monkeypatch.setenv(se.ENV_SPIKE, '300')
-    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, 'one')
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, value)
     with pytest.raises(ValueError, match=se.ENV_SPIKE_UNUSABLE):
         L.single_exposure_event_masks([str(tmp_path / 'x.fits')])
 

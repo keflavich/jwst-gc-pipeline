@@ -867,6 +867,26 @@ these flag sets would remove the footgun of setting them individually.)*
     F212N leftovers above 200 MJy/sr remain within 3 mosaic pixels of a pixel at 300 MJy/sr
     or more whose brightest neighbour stands at 0.38-0.45 of its excess, which fails (2):
     o130 (1892, 681) at 236 and (5980, 3928) at 467, o138 (2368, 1325) at 248.
+  - `POSITIVE_SPIKE_MASK_MAX_UNUSABLE` (0 or 1; blank or 0 is off; any other value raises
+    before any frame is read, naming the variable; it has an effect only while
+    `POSITIVE_SPIKE_MASK_MIN_EXCESS` is on, and the render logs a warning otherwise).  Lets a
+    spike of `find_positive_spikes` have that many of its eight neighbours unusable, that
+    is not finite, DO_NOT_USE or outside the array, which the bullet above does not judge.
+    A SATURATED neighbour is never tolerated, the isolation test of 0.15 is applied to the
+    usable neighbours, and the 3x3 box, the unusable neighbour included, is masked in the
+    same two places.  The limit of 1 (`SPIKE_MAX_UNUSABLE_LIMIT`) comes from the star cores
+    of the eight tile-bands of o105, o118, o130 and o138: with the brightest neighbour of
+    each core removed, no core that another frame confirms (half of its excess or more at
+    the same sky position) passes the isolation test, and one such core passes with the two
+    brightest removed.  At tolerance 1 the scan finds 15 spikes more than the 291 of the
+    shipped finder, 2 in F212N and 13 in F480M, each with a NaN neighbour that carries
+    DO_NOT_USE, and no other frame holds more than 0.043 of the excess at any of them.  On
+    the o130 F480M tile test it adds 3 spikes and 27 masked pixels, and clears 3 leftovers
+    above 50 MJy/sr, 2 of them above 100 and 1 above 200 with a residual peak of 358.8
+    MJy/sr at mosaic pixel (1932, 146), with no new leftover and no crater.  On o130 F212N
+    it adds 1 spike that the ramp-event mask already covers, and the renders do not change.
+    Evidence, scripts and the open case of a spike beside a SATURATED pixel:
+    `docs/evidence/spike_tolerance/README.md`.
   - `SATSTAR_SECOND_PASS_NEIGHBOUR_FRAC_MIN` / `_MAX` (merge time,
     `replace_saturated`; off unless `_MIN` is above 0, `_MAX` defaults to 0.8).
     The mutual-nearest second pass pairs a satstar with the nearest daophot row

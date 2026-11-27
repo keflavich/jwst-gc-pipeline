@@ -62,7 +62,11 @@ lower left neighbour NaN with DO_NOT_USE).  Env ``POSITIVE_SPIKE_MASK_MAX_UNUSAB
 eight neighbours be missing: non-finite, DO_NOT_USE or outside the array.  The
 isolation is then judged on the remaining usable neighbours, whose brightest must stay
 below ``SPIKE_ISOLATION`` of the excess as before.  A SATURATED neighbour is never
-tolerated: a pixel beside a saturated core is the rim of a star or a snowball.
+tolerated: a pixel beside a saturated core is the rim of a star or a snowball.  The
+tolerance is at most ``SPIKE_MAX_UNUSABLE_LIMIT``, one, so a pixel needs seven usable
+neighbours: with the brightest neighbours of the star cores of eight tile-bands removed,
+the first star that another frame confirms passes the isolation test when two are removed
+(``docs/evidence/spike_tolerance/README.md``).
 """
 import os
 from dataclasses import dataclass, field
@@ -88,11 +92,15 @@ ENV_SPIKE = 'POSITIVE_SPIKE_MASK_MIN_EXCESS'
 #: as shipped) unless set
 ENV_SPIKE_UNUSABLE = 'POSITIVE_SPIKE_MASK_MAX_UNUSABLE'
 
-#: the most neighbours a candidate may lack: it keeps two usable neighbours to be judged on.
-#: A Gaussian star of PSF sigma 0.95 pixel (F212N) on a pixel corner has 0.33 of its peak
-#: pixel in the second faintest neighbour and 0.109 in the faintest, below ``SPIKE_ISOLATION``,
-#: so a candidate that has only the faintest neighbour left can be a star.
-SPIKE_MAX_UNUSABLE_LIMIT = 6
+#: the most neighbours a candidate may lack.  Over the 8 tile-bands of o105, o118, o130 and
+#: o138 (F212N and F480M, every frame), no star core that another frame confirms (half of
+#: its excess or more at the same sky position) passes the isolation test with its brightest
+#: neighbour removed; one such core passes with its two brightest removed (o138 F480M,
+#: brightest neighbours at 0.363 and 0.183 of the excess), and 62 do with three removed
+#: (``docs/evidence/spike_tolerance/README.md``).  A Gaussian star of PSF sigma 0.95 pixel
+#: on a pixel corner looks isolated only when seven neighbours are gone (second faintest
+#: 0.33 of the peak pixel, faintest 0.109), a weaker bound than the data give.
+SPIKE_MAX_UNUSABLE_LIMIT = 1
 
 #: the brightest neighbour of a spike rises at most this fraction of the spike's own
 #: excess over the local background; the brightest neighbour of a star is at 0.3 or
@@ -421,7 +429,7 @@ def positive_spike_min_excess():
 def positive_spike_max_unusable():
     """``POSITIVE_SPIKE_MASK_MAX_UNUSABLE``: 0 (all eight neighbours of a spike must be
     usable, the finder as shipped) when unset or blank; otherwise the number of
-    neighbours that may be unusable (0 to ``SPIKE_MAX_UNUSABLE_LIMIT``, six).  A value that
+    neighbours that may be unusable (0 to ``SPIKE_MAX_UNUSABLE_LIMIT``, one).  A value that
     is not an integer in that range raises ``ValueError`` naming the variable, so a
     typo is not read as 0."""
     raw = os.environ.get(ENV_SPIKE_UNUSABLE)

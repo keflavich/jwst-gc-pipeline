@@ -435,7 +435,8 @@ def test_find_positive_spikes_default_pin_is_not_empty():
 
 
 @pytest.mark.parametrize('seed', range(8))
-def test_find_positive_spikes_tolerance_only_adds_pixels_beside_missing_ones(seed):
+def test_find_positive_spikes_tolerance_only_adds_pixels_beside_missing_ones(seed, monkeypatch):
+    monkeypatch.setattr(se, 'SPIKE_MAX_UNUSABLE_LIMIT', 3)       # the mechanism, beyond the shipped limit
     sci, dq = _messy_frame(seed)
     shipped = {(s['x'], s['y']): s for s in se.find_positive_spikes(sci, dq, 300.0)}
     for k in (1, 2, 3):
@@ -465,7 +466,6 @@ def test_find_positive_spikes_tolerates_the_missing_neighbour_of_the_o130_f480m_
     assert s['excess'] / s['sigma'] == pytest.approx(738.0, abs=1.0)
     assert s['neighbour'] == pytest.approx(8.668, abs=0.005)       # the brightest usable neighbour: 0.0055 of the excess
     assert s['neighbour'] / s['excess'] < 0.006
-    assert [(t['x'], t['y']) for t in se.find_positive_spikes(sci, dq, 300.0, max_unusable=2)] == [(8.0, 8.0)]
     assert se.find_positive_spikes(sci, dq, 3000.0, max_unusable=1) == []
 
 
@@ -473,15 +473,16 @@ def test_find_positive_spikes_does_not_tolerate_a_saturated_neighbour():
     sci, dq = _flat()
     sci[20, 20] = 2010.0
     dq[20, 21] = se.SATURATED
-    for k in (0, 1, 6):
+    for k in (0, 1):
         assert se.find_positive_spikes(sci, dq, 300.0, max_unusable=k) == []
     dq[20, 21] = se.SATURATED | se.DO_NOT_USE
-    assert se.find_positive_spikes(sci, dq, 300.0, max_unusable=6) == []
+    assert se.find_positive_spikes(sci, dq, 300.0, max_unusable=1) == []
     dq[20, 21] = se.DO_NOT_USE                   # dropped, not saturated: tolerated
     assert [(s['x'], s['y']) for s in se.find_positive_spikes(sci, dq, 300.0, max_unusable=1)] == [(20.0, 20.0)]
 
 
-def test_find_positive_spikes_counts_the_missing_neighbours_of_each_pixel():
+def test_find_positive_spikes_counts_the_missing_neighbours_of_each_pixel(monkeypatch):
+    monkeypatch.setattr(se, 'SPIKE_MAX_UNUSABLE_LIMIT', 2)       # the mechanism, beyond the shipped limit
     sci, dq = _flat()
     sci[20, 20] = 2010.0
     sci[10, 10] = 2010.0
@@ -494,13 +495,15 @@ def test_find_positive_spikes_counts_the_missing_neighbours_of_each_pixel():
     assert found(2) == {(20.0, 20.0): 1, (10.0, 10.0): 2}
 
 
-def test_find_positive_spikes_counts_the_array_edge_as_missing():
+def test_find_positive_spikes_counts_the_array_edge_as_missing(monkeypatch):
+    monkeypatch.setattr(se, 'SPIKE_MAX_UNUSABLE_LIMIT', 5)       # the mechanism, beyond the shipped limit
     sci, dq = _flat()
     sci[0, 20] = 2010.0                          # top row: three neighbours are outside the array
     sci[39, 10] = 2010.0                         # bottom row, three
     sci[20, 0] = 2010.0                          # first column, three
     sci[0, 0] = 2010.0                           # a corner: five
     found = lambda k: sorted((s['x'], s['y'], s['unusable']) for s in se.find_positive_spikes(sci, dq, 300.0, max_unusable=k))
+    assert found(1) == []                        # the shipped limit: an edge pixel lacks three neighbours
     assert found(2) == []
     assert found(3) == [(0.0, 20.0, 3), (10.0, 39.0, 3), (20.0, 0.0, 3)]
     assert (0.0, 0.0, 5) in found(5)
@@ -518,15 +521,17 @@ def _star_and_neighbours(offset, sigma):
     return sci, dq, (iy, ix), nbrs
 
 
+@pytest.mark.parametrize('limit', [1, 6])
 @pytest.mark.parametrize('sigma', [0.95, 1.1])
 @pytest.mark.parametrize('offset', [(0.0, 0.0), (0.25, 0.1), (0.5, 0.0), (0.3, 0.3), (0.45, 0.45),
                                     (0.5, 0.5)])
-def test_a_star_whose_brightest_neighbours_are_missing_is_not_a_spike(offset, sigma):
+def test_a_star_whose_brightest_neighbours_are_missing_is_not_a_spike(offset, sigma, limit, monkeypatch):
     """The worst case of the tolerance: the n brightest neighbours of the brightest pixel of a
     Gaussian star (PSF sigma 0.95 pixel is F212N, 1.1 pixel F480M) are the missing ones, for
-    every n up to the largest tolerance."""
+    every n up to the shipped limit (1) and up to the six that a Gaussian star would allow."""
+    monkeypatch.setattr(se, 'SPIKE_MAX_UNUSABLE_LIMIT', limit)
     sci, dq0, (iy, ix), nbrs = _star_and_neighbours(offset, sigma)
-    for n_missing in range(0, se.SPIKE_MAX_UNUSABLE_LIMIT + 1):
+    for n_missing in range(0, limit + 1):
         dq = dq0.copy()
         for _, (yy, xx) in nbrs[:n_missing]:
             dq[yy, xx] = se.DO_NOT_USE
@@ -534,20 +539,22 @@ def test_a_star_whose_brightest_neighbours_are_missing_is_not_a_spike(offset, si
         assert (float(ix), float(iy)) not in [(f['x'], f['y']) for f in found], (offset, sigma, n_missing)
 
 
-def test_the_tolerance_stops_where_a_star_corner_pixel_would_look_isolated():
+def test_the_shipped_limit_is_inside_the_bound_of_a_gaussian_star():
     """A star of PSF sigma 0.95 pixel on a pixel corner: its brightest pixel has three
     neighbours at 1.0 of its value, four at 0.33 and the corner pixel at 0.109.  With six
     neighbours missing the brightest one left is at 0.33; with seven it is the corner pixel,
-    below the isolation of 0.15.  The tolerance therefore ends at six."""
+    below the isolation of 0.15.  A Gaussian star bounds the tolerance at six.  The shipped
+    limit is one, from the star cores of eight tile-bands (``docs/evidence/spike_tolerance``)."""
     sci, _, (iy, ix), nbrs = _star_and_neighbours((0.5, 0.5), 0.95)
     ratios = [(v - 10.0) / (sci[iy, ix] - 10.0) for v, _ in nbrs]
     assert ratios[6] == pytest.approx(0.33, abs=0.01)
     assert ratios[7] == pytest.approx(0.109, abs=0.005)
     assert ratios[6] > se.SPIKE_ISOLATION > ratios[7]
-    assert se.SPIKE_MAX_UNUSABLE_LIMIT == 6
+    assert se.SPIKE_MAX_UNUSABLE_LIMIT == 1
+    assert se.SPIKE_MAX_UNUSABLE_LIMIT <= max(k for k, r in enumerate(ratios) if r > se.SPIKE_ISOLATION)
 
 
-@pytest.mark.parametrize('k', [-1, 7, 8, 100])
+@pytest.mark.parametrize('k', [-1, 2, 3, 6, 7, 8, 100])
 def test_find_positive_spikes_max_unusable_out_of_range_raises(k):
     sci, dq = _flat()
     with pytest.raises(ValueError, match='max_unusable'):
@@ -555,7 +562,7 @@ def test_find_positive_spikes_max_unusable_out_of_range_raises(k):
 
 
 @pytest.mark.parametrize('value, expected', [
-    (None, 0), ('', 0), ('  ', 0), ('0', 0), ('1', 1), (' 2 ', 2), ('6', 6),
+    (None, 0), ('', 0), ('  ', 0), ('0', 0), ('1', 1), (' 1 ', 1),
 ])
 def test_positive_spike_max_unusable_values(monkeypatch, value, expected):
     if value is None:
@@ -565,7 +572,7 @@ def test_positive_spike_max_unusable_values(monkeypatch, value, expected):
     assert se.positive_spike_max_unusable() == expected
 
 
-@pytest.mark.parametrize('value', ['abc', 'nan', '-1', '7', '8', '1.5', '1 pixel', '1e0'])
+@pytest.mark.parametrize('value', ['abc', 'nan', '-1', '2', '6', '7', '8', '1.5', '1 pixel', '1e0'])
 def test_positive_spike_max_unusable_typo_raises_naming_the_variable(monkeypatch, value):
     monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, value)
     with pytest.raises(ValueError, match=se.ENV_SPIKE_UNUSABLE):

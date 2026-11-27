@@ -1,0 +1,22 @@
+{
+ "tile": "o130",
+ "band": "F212N",
+ "frame": "jw10678130001_02101_00004_nrca2_destreak_o130_crf.fits",
+ "x": 1819,
+ "y": 1980,
+ "event_px_in_box": 0,
+ "events_near": [],
+ "ramp_px_in_box": 9,
+ "ramp_events_near": [
+  {
+   "x": 1819.0,
+   "y": 1980.0,
+   "area": 1,
+   "peak": 603.95458984375,
+   "excess": 599.3702455806666,
+   "n_others": 0,
+   "in_box": true
+  }
+ ],
+ "negative_px_in_box": 0
+}
