@@ -132,6 +132,13 @@ LAYERS = {
         f'{BUILD_ROOT}/jwst_gc_treasury_f212n_peppar_residual_hips',
     'jwst_gc_treasury_f480m_peppar_residual_hips':
         f'{BUILD_ROOT}/jwst_gc_treasury_f480m_peppar_residual_hips',
+    # PEPPAR v3.0 twins of the two layers above (PEPPAR's NaN-blanking fix, rerun on
+    # every tile; data-qa combine_peppar_residuals.py --peppar-version v3 --restore-sky),
+    # on the jicama zero point.  Diagnostic; same maintainer OK as the layers above.
+    'jwst_gc_treasury_f212n_peppar3_residual_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_f212n_peppar3_residual_hips',
+    'jwst_gc_treasury_f480m_peppar3_residual_hips':
+        f'{BUILD_ROOT}/jwst_gc_treasury_f480m_peppar3_residual_hips',
     # NIRCam-only colour composite, R=F480M G=mean B=F212N, reprojected by
     # astropy like the 770-480-212 mosaic; it covers all of the NIRCam sky.
     # The residual twin is built from the same DAOPHOT residual mosaics as
