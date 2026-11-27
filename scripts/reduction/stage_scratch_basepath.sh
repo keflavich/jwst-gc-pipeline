@@ -16,10 +16,20 @@
 #     and the `data_i2d` grids.
 #   * A final self-check FAILS the stage if any symlink under SCRATCH resolves
 #     into REAL while matching a known output pattern.
+#   * The Detector1 `*_ramp.fits` (ZEROFRAME + GROUPDQ) are read-only INPUTS and
+#     are linked next to the `*_cal.fits`.  The saturated-star ZEROFRAME anchor /
+#     deblend (SATFITSW 'zf...') and the G1-only DQ look the ramp up beside the
+#     frame and silently fall back to the un-anchored fit ('sq') when it is
+#     absent, so a scratch tree without them does NOT reproduce a run that has
+#     them.  Any staged `_cal` without a sibling ramp is reported as a WARNING.
+#     Like the `_cal` links, the ramp links are inputs only while the reduction
+#     runs with -s (skip_step1and2): a run that re-fits stage 1/2 regenerates
+#     `_ramp.fits` and `_cal.fits` under these names, which the output-pattern
+#     self-check below does not cover.
 #
 # Usage: stage_scratch_basepath.sh <REAL_BASEPATH> <SCRATCH_BASEPATH> <MODE> <SUFFIX> <FILTER...>
-#   MODE = reduce  -> only *_cal.fits linked (crf/i2d are OUTPUTS of the reduction)
-#   MODE = catalog -> *_<SUFFIX>.fits (crf) + *_cal.fits linked, data_i2d copied
+#   MODE = reduce  -> only *_cal.fits (+ *_ramp.fits) linked (crf/i2d are OUTPUTS of the reduction)
+#   MODE = catalog -> *_<SUFFIX>.fits (crf) + *_cal.fits + *_ramp.fits linked, data_i2d copied
 #   e.g. stage_scratch_basepath.sh /orange/adamginsburg/jwst/w51 \
 #          /orange/adamginsburg/jwst-craterexp/w51 reduce align_o001_crf F480M
 set -u
@@ -55,12 +65,33 @@ copy_glob () {  # srcdir dstdir pattern   (COPY things the pipeline may overwrit
   for f in "$sd"/$pat; do cp -f "$f" "$dd/$(basename "$f")" && n=$((n+1)); done
   shopt -u nullglob; echo "    copied $n  ($pat)"
 }
+warn_missing_ramps () {  # realdir filter   (a _cal with no sibling _ramp.fits runs un-anchored)
+  local rd="$1" filt="$2" ncal=0 nmiss=0 f b stem
+  [ -d "$rd" ] || return 0
+  shopt -s nullglob
+  for f in "$rd"/*_cal.fits; do
+    b=$(basename "$f"); ncal=$((ncal+1))
+    # same stem the ramp lookup uses: jw<prog>_<visit>_<exp>_<detector>
+    [[ $b =~ ^(jw[0-9]+_[0-9]+_[0-9]+_[a-z0-9]+) ]] || continue
+    [ -e "$rd/${BASH_REMATCH[1]}_ramp.fits" ] || nmiss=$((nmiss+1))
+  done
+  shopt -u nullglob
+  if [ "$nmiss" -gt 0 ]; then
+    echo "  WARNING [$filt]: $nmiss of $ncal staged *_cal.fits have no sibling _ramp.fits in $rd" >&2
+    echo "    -> the saturated-star ZEROFRAME anchor/deblend and the G1-only DQ are OFF for those frames;" >&2
+    echo "       output will differ from a run whose frames had ramps (compare the SATFITSW header: 'sq' vs 'zf...')." >&2
+  fi
+}
 
 # --- per-filter pipeline INPUTS (ALLOWLIST) ---
 for FILT in $FILTERS; do
   rp="$REAL/$FILT/pipeline"; sp="$SCRATCH/$FILT/pipeline"
   echo "  [$FILT] staging ($MODE) -> $sp"
   link_glob "$rp" "$sp" "*_cal.fits"                       # reduction input (both modes)
+  # Detector1 ramp (ZEROFRAME + GROUPDQ): read-only input of the satstar anchor/deblend
+  # and of the G1-only DQ, looked up beside the frame.  LINK (113 MB per frame), never copy.
+  link_glob "$rp" "$sp" "*_ramp.fits"
+  warn_missing_ramps "$rp" "$FILT"
   if [ "$MODE" = "catalog" ]; then
     link_glob "$rp" "$sp" "*_${SUFFIX}.fits"               # crf: cataloging input
     # data_i2d = deep-coadd astrometric/seed reference the m2 checkpoint reads.

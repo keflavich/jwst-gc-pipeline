@@ -49,6 +49,7 @@ def _build_real(real: Path):
     # read-only INPUTS
     _touch(pl / 'jw06151001001_03109_00001_nrcblong_align_o001_crf.fits')
     _touch(pl / 'jw06151001001_03109_00001_nrcblong_cal.fits')
+    _touch(pl / 'jw06151001001_03109_00001_nrcblong_ramp.fits')   # Detector1 ZEROFRAME + GROUPDQ
     _touch(pl / 'jw06151-o001_t001_nircam_clear-f480m-merged_data_i2d.fits')
     # OUTPUTS the pipeline writes with overwrite=True -- must NEVER be symlinked
     for out in ('jw06151-o001_t001_nircam_clear-f480m-merged_i2d.fits',
@@ -129,5 +130,76 @@ def test_staging_never_symlinks_outputs_into_real(mode):
         assert not (scratch / 'catalogs' / 'f480m_consolidated_satstar_catalog.fits').exists()
         partner = scratch / 'catalogs' / 'f405n_consolidated_satstar_catalog.fits'
         assert partner.exists() and not partner.is_symlink(), "partner seed must be COPIED"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+# ---- Detector1 ramps ------------------------------------------------------
+# The saturated-star ZEROFRAME anchor/deblend (SATFITSW 'zf...') and the G1-only
+# DQ read the sibling `<frame>_ramp.fits` and silently fall back to the
+# un-anchored fit ('sq') when it is absent.  A scratch tree that omits them
+# therefore does not reproduce a run that has them (sgrb2 5365 F212N: 192 ramps
+# in the production tree, 0 in a scratch tree staged without them).
+def _stage(real, scratch, mode):
+    return subprocess.run(
+        ['bash', str(SCRIPT), str(real), str(scratch), mode,
+         'align_o001_crf', 'F480M'],
+        capture_output=True, text=True)
+
+
+@pytest.mark.parametrize('mode', ['reduce', 'catalog'])
+def test_staging_links_ramps_as_readonly_inputs(mode):
+    root = _underscore_free_root()
+    try:
+        real = Path(root) / 'realbase' / 'w51'
+        scratch = Path(root) / 'scratchbase' / 'w51'
+        _build_real(real)
+        r = _stage(real, scratch, mode)
+        assert r.returncode == 0, f"stage failed:\n{r.stdout}\n{r.stderr}"
+
+        name = 'jw06151001001_03109_00001_nrcblong_ramp.fits'
+        ramp = scratch / 'F480M' / 'pipeline' / name
+        assert ramp.is_symlink(), "ramp must be LINKED (113 MB per frame), not copied"
+        assert os.path.realpath(ramp) == os.path.realpath(real / 'F480M' / 'pipeline' / name)
+        # every _cal has its ramp, so there is nothing to warn about
+        assert 'WARNING' not in r.stderr, r.stderr
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize('mode', ['reduce', 'catalog'])
+def test_staging_warns_when_a_frame_has_no_ramp(mode):
+    root = _underscore_free_root()
+    try:
+        real = Path(root) / 'realbase' / 'w51'
+        scratch = Path(root) / 'scratchbase' / 'w51'
+        _build_real(real)
+        # a second exposure whose Detector1 ramp was never saved
+        _touch(real / 'F480M' / 'pipeline' / 'jw06151001001_03109_00002_nrcblong_cal.fits')
+        r = _stage(real, scratch, mode)
+        # a warning, not a failure: fields that never had ramps are legitimate
+        assert r.returncode == 0, f"stage failed:\n{r.stdout}\n{r.stderr}"
+        assert 'WARNING [F480M]: 1 of 2 staged *_cal.fits have no sibling _ramp.fits' in r.stderr, r.stderr
+        assert 'SATFITSW' in r.stderr
+        # the frame that does have a ramp is still staged with it
+        assert (scratch / 'F480M' / 'pipeline'
+                / 'jw06151001001_03109_00001_nrcblong_ramp.fits').is_symlink()
+        assert not (scratch / 'F480M' / 'pipeline'
+                    / 'jw06151001001_03109_00002_nrcblong_ramp.fits').exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_staging_warns_when_no_ramps_at_all():
+    root = _underscore_free_root()
+    try:
+        real = Path(root) / 'realbase' / 'w51'
+        scratch = Path(root) / 'scratchbase' / 'w51'
+        _build_real(real)
+        (real / 'F480M' / 'pipeline' / 'jw06151001001_03109_00001_nrcblong_ramp.fits').unlink()
+        r = _stage(real, scratch, 'catalog')
+        assert r.returncode == 0, f"stage failed:\n{r.stdout}\n{r.stderr}"
+        assert 'WARNING [F480M]: 1 of 1 staged *_cal.fits have no sibling _ramp.fits' in r.stderr, r.stderr
+        assert not list((scratch / 'F480M' / 'pipeline').glob('*_ramp.fits'))
     finally:
         shutil.rmtree(root, ignore_errors=True)
