@@ -855,3 +855,277 @@ def test_cli_ref_average_duplicates_flag(monkeypatch):
     monkeypatch.setattr(sys, 'argv', base + ['--ref-average-duplicates', '0'])
     with pytest.raises(SystemExit):
         btp.main()
+
+
+# --- tile-frame alignment of the duplicates (tile_offsets, anchor) ----------------------------
+
+def _write_offsets(path, fields, tiles=(0, 1, 2), x0=-100.0, y0=-100.0, pix=1.0, **over):
+    """A tile-frame-error file: ``fields`` (n_tiles, 2, ny, nx) mas about CENTER."""
+    kw = dict(fields=np.asarray(fields, float), tiles=np.asarray(tiles), origin_deg=np.array([CENTER.ra.deg, CENTER.dec.deg]),
+              x0=x0, y0=y0, pixel_arcsec=pix)
+    kw.update(over)
+    np.savez(path, **{k: v for k, v in kw.items() if v is not None})
+    return str(path)
+
+
+def _const_fields(per_tile, ny=200, nx=200):
+    """Per-tile constant (east, north) mas fields on the default grid."""
+    return np.broadcast_to(np.asarray(per_tile, float)[:, :, None, None], (len(per_tile), 2, ny, nx)).copy()
+
+
+def test_load_tile_frame_offsets_reads_the_fields_and_refuses_bad_files(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import load_tile_frame_offsets
+    good = _write_offsets(tmp_path / 'offs.npz', _const_fields([(0, 0), (2, -1), (-1, 3)]))
+    off = load_tile_frame_offsets(good)
+    assert off['fields'].shape == (3, 2, 200, 200) and off['tiles'].tolist() == [0, 1, 2]
+    assert off['file'] == 'offs.npz' and len(off['sha256']) == 16
+    assert off['x0'] == -100.0 and off['pixel_arcsec'] == 1.0
+    with pytest.raises(ValueError, match='lacks'):
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'a.npz', _const_fields([(0, 0)] * 3), x0=None))
+    with pytest.raises(ValueError, match='fields must be'):
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'b.npz', _const_fields([(0, 0)] * 3), tiles=(0, 1)))
+    with pytest.raises(ValueError, match='fields must be'):
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'c.npz', _const_fields([(0, 0)] * 3)[:, :1]))
+    with pytest.raises(ValueError, match='duplicate tile'):
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'd.npz', _const_fields([(0, 0)] * 3), tiles=(0, 1, 1)))
+    bad = _const_fields([(0, 0)] * 3)
+    bad[1, 0, 5, 5] = np.nan
+    with pytest.raises(ValueError, match='non-finite'):
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'e.npz', bad))
+    with pytest.raises(ValueError, match='pixel_arcsec'):
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'f.npz', _const_fields([(0, 0)] * 3), pix=0.0))
+
+
+def _sc_arr(dx_mas, dy_mas):
+    ra = CENTER.ra.deg + np.asarray(dx_mas, float) / 1e3 / 3600 / np.cos(CENTER.dec.rad)
+    return SkyCoord(ra * u.deg, (CENTER.dec.deg + np.asarray(dy_mas, float) / 1e3 / 3600) * u.deg)
+
+
+def test_tile_frame_shift_is_the_field_difference_between_the_tiles(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import load_tile_frame_offsets, tile_frame_shift
+    ny = nx = 200
+    xc = -100.0 + (np.arange(nx) + 0.5)
+    F = _const_fields([(1.0, -2.0), (0.0, 0.0), (0.0, 0.0)])
+    F[1, 0] = 0.1 * xc[None, :]                     # tile 1: east error grows 0.1 mas per arcsec of east
+    F[1, 1] = 0.05 * xc[:, None]                    # ... and north error 0.05 mas per arcsec of north (rows = y)
+    off = load_tile_frame_offsets(_write_offsets(tmp_path / 'offs.npz', F))
+    x, y = np.array([-12.3, 0.0, 7.77, 30.0]), np.array([5.0, -40.0, 0.25, 12.5])
+    sc = _sc_arr(x * 1e3, y * 1e3)
+    n = len(x)
+    e, nn = tile_frame_shift(off, sc, np.full(n, 1), np.full(n, 0))     # tile 1 -> tile 0: F_0 - F_1
+    np.testing.assert_allclose(e, 1.0 - 0.1 * x, atol=2e-3)
+    np.testing.assert_allclose(nn, -2.0 - 0.05 * y, atol=2e-3)
+    e2, n2 = tile_frame_shift(off, sc, np.full(n, 0), np.full(n, 1))    # the opposite move
+    np.testing.assert_allclose([e2, n2], [-e, -nn], atol=1e-12)
+    e3, n3 = tile_frame_shift(off, sc, np.full(n, 1), np.full(n, 1))    # same tile: nothing moves
+    assert (e3 == 0).all() and (n3 == 0).all()
+    # copies of one star in different tiles each move with their own tile pair
+    e4, n4 = tile_frame_shift(off, sc[:2], np.array([1, 2]), np.array([0, 0]))
+    np.testing.assert_allclose(e4, [1.0 - 0.1 * x[0], 1.0], atol=2e-3)
+    # beyond the grid the edge value holds (east edge pixel centre at +99.5")
+    far = _sc_arr([150e3], [0.0])
+    np.testing.assert_allclose(tile_frame_shift(off, far, np.array([1]), np.array([0]))[0], 1.0 - 0.1 * 99.5, atol=2e-3)
+    with pytest.raises(ValueError, match='covers observations'):
+        tile_frame_shift(off, sc[:1], np.array([1]), np.array([7]))
+
+
+def _three_stars(F):
+    """A (tiles 0, 1; the tile-1 copy has more frames), B (tile 2 alone), C (tiles 0, 1, 2, equal frames), each
+    seen at its true position plus the tile's constant frame error F[t] (mas); returns rows and the true positions."""
+    x = [(0.0, 0.0), (10_000.0, 0.0), (0.0, 10_000.0)]
+    rows = [dict(obs=0, dx=x[0][0] + F[0][0], dy=x[0][1] + F[0][1], frames=2),
+            dict(obs=1, dx=x[0][0] + F[1][0], dy=x[0][1] + F[1][1], frames=4),
+            dict(obs=2, dx=x[1][0] + F[2][0], dy=x[1][1] + F[2][1])]
+    rows += [dict(obs=t, dx=x[2][0] + F[t][0], dy=x[2][1] + F[t][1], frames=3) for t in (0, 1, 2)]
+    return rows, _sc_arr([p[0] for p in x], [p[1] for p in x])
+
+
+def _offset_from_truth(truth, sc, i):
+    dlon, dlat = truth[i].spherical_offsets_to(sc[i])
+    return dlon.to_value(u.mas), dlat.to_value(u.mas)
+
+
+def test_average_ref_duplicates_with_tile_offsets_averages_in_the_anchor_frame(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates, load_tile_frame_offsets
+    F = [(0.0, 0.0), (2.0, -1.0), (-1.0, 3.0)]
+    off = load_tile_frame_offsets(_write_offsets(tmp_path / 'offs.npz', _const_fields(F)))
+    rows, truth = _three_stars(F)
+    ref = _ref_dict(rows)
+    plain, _ = average_ref_duplicates(ref, 0.020)
+    # no alignment: the frame-weighted mean of the tiles' frames (A: 2:4 frames, C: equal)
+    np.testing.assert_allclose(_offset_from_truth(truth, plain['sc'], 0), [4 / 6 * 2.0, -4 / 6 * 1.0], atol=2e-3)
+    np.testing.assert_allclose(_offset_from_truth(truth, plain['sc'], 2), [1 / 3, 2 / 3], atol=2e-3)
+    out, info = average_ref_duplicates(ref, 0.020, tile_offsets=off)
+    assert out['n'] == 3 and out['n_merged'].tolist() == [2, 1, 3]
+    # default anchor = the primary copy: A -> tile 1 (most frames), C -> tile 0 (equal frames, lowest observation)
+    np.testing.assert_allclose(_offset_from_truth(truth, out['sc'], 0), [2.0, -1.0], atol=2e-3)
+    np.testing.assert_allclose(_offset_from_truth(truth, out['sc'], 2), [0.0, 0.0], atol=2e-3)
+    # the row without duplicates is not touched (bit for bit)
+    assert out['sc'].ra.deg[1] == ref['sc'].ra.deg[2] and out['sc'].dec.deg[1] == ref['sc'].dec.deg[2]
+    # everything but the position is the plain average's
+    for k in ('ex', 'ey', 'flux', 'mag', 'sat', 'obs_index', 'row', 'n_frames', 'n_merged'):
+        np.testing.assert_array_equal(out[k], plain[k], err_msg=k)
+    ti = info['tile_offsets']
+    assert ti['file'] == 'offs.npz' and ti['anchor'] == 'primary copy' and ti['n_copies_shifted'] == 3
+    assert ti['anchor_tile_counts'] == {0: 1, 1: 1}
+    # shifted copies: A's tile-0 copy by F_1 - F_0 = (2, -1); C's tile-1 and tile-2 copies by F_0 - F_1 = (-2, 1), F_0 - F_2 = (1, -3)
+    np.testing.assert_allclose(ti['rms_shift_mas'], [np.sqrt((4 + 4 + 1) / 3), np.sqrt((1 + 1 + 9) / 3)], rtol=1e-6)
+    json.dumps(info)
+    assert 'tile_offsets' not in average_ref_duplicates(ref, 0.020)[1]
+
+
+def test_average_ref_duplicates_anchor_flags_choose_the_frame(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates, load_tile_frame_offsets
+    F = [(0.0, 0.0), (2.0, -1.0), (-1.0, 3.0)]
+    off = load_tile_frame_offsets(_write_offsets(tmp_path / 'offs.npz', _const_fields(F)))
+    rows, truth = _three_stars(F)
+    ref = _ref_dict(rows)
+    flag = np.zeros(len(rows), bool)
+    flag[0] = True                      # A: the tile-0 copy, although the tile-1 copy is the primary
+    flag[5] = True                      # C: the tile-2 copy
+    out, info = average_ref_duplicates(ref, 0.020, tile_offsets=off, anchor=flag)
+    np.testing.assert_allclose(_offset_from_truth(truth, out['sc'], 0), [0.0, 0.0], atol=2e-3)
+    np.testing.assert_allclose(_offset_from_truth(truth, out['sc'], 2), [-1.0, 3.0], atol=2e-3)
+    ti = info['tile_offsets']
+    assert ti['anchor'] == 'flagged copy, else primary'
+    assert (ti['n_groups_one_flagged_copy'], ti['n_groups_several_flagged_copies'], ti['n_groups_no_flagged_copy']) == (2, 0, 0)
+    assert ti['anchor_tile_counts'] == {0: 1, 2: 1}
+    # several flagged copies: the first in primary order (A: the tile-1 copy); C unflagged: its primary
+    flag = np.zeros(len(rows), bool)
+    flag[[0, 1]] = True
+    out, info = average_ref_duplicates(ref, 0.020, tile_offsets=off, anchor=flag)
+    np.testing.assert_allclose(_offset_from_truth(truth, out['sc'], 0), [2.0, -1.0], atol=2e-3)
+    np.testing.assert_allclose(_offset_from_truth(truth, out['sc'], 2), [0.0, 0.0], atol=2e-3)
+    ti = info['tile_offsets']
+    assert (ti['n_groups_one_flagged_copy'], ti['n_groups_several_flagged_copies'], ti['n_groups_no_flagged_copy']) == (0, 1, 1)
+    # nothing flagged: every group falls back to its primary copy
+    out, info = average_ref_duplicates(ref, 0.020, tile_offsets=off, anchor=np.zeros(len(rows), bool))
+    np.testing.assert_allclose(_offset_from_truth(truth, out['sc'], 0), [2.0, -1.0], atol=2e-3)
+    assert info['tile_offsets']['n_groups_no_flagged_copy'] == 2
+    with pytest.raises(ValueError, match='needs tile_offsets'):
+        average_ref_duplicates(ref, 0.020, anchor=flag)
+
+
+def test_average_ref_duplicates_zero_tile_offsets_change_nothing(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates, load_tile_frame_offsets
+    off = load_tile_frame_offsets(_write_offsets(tmp_path / 'zero.npz', _const_fields([(0, 0)] * 3)))
+    rng = np.random.default_rng(11)
+    rows = [dict(obs=k % 3, dx=x, dy=y, flux=10 ** rng.uniform(-5, -4), frames=int(rng.integers(1, 5)))
+            for k, (x, y) in enumerate(rng.uniform(-30_000, 30_000, (200, 2)))]
+    for k in (3, 10, 17):
+        rows.append(dict(obs=(k + 1) % 3, dx=rows[k]['dx'] + 4, dy=rows[k]['dy'] - 2, flux=rows[k]['flux'], frames=2))
+    ref = _ref_dict(rows)
+    plain, info0 = average_ref_duplicates(ref, 0.020)
+    zero, info1 = average_ref_duplicates(ref, 0.020, tile_offsets=off)
+    assert info0['n_groups'] == 3
+    np.testing.assert_array_equal(zero['sc'].ra.deg, plain['sc'].ra.deg)
+    np.testing.assert_array_equal(zero['sc'].dec.deg, plain['sc'].dec.deg)
+    assert info1['tile_offsets']['n_copies_shifted'] == 3 and info1['tile_offsets']['max_abs_shift_mas'] == 0.0
+
+
+def test_average_ref_duplicates_tile_offsets_without_duplicates_and_with_a_missing_tile(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates, load_tile_frame_offsets
+    off = load_tile_frame_offsets(_write_offsets(tmp_path / 'offs.npz', _const_fields([(0, 0), (2, 0)]), tiles=(0, 1)))
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=900, dy=0)])
+    out, info = average_ref_duplicates(ref, 0.020, tile_offsets=off)
+    assert out['n'] == 2 and info['tile_offsets']['n_copies_shifted'] == 0 and info['n_groups'] == 0
+    np.testing.assert_array_equal(out['sc'].ra.deg, ref['sc'].ra.deg)
+    # a duplicate group that uses a tile the file lacks is refused rather than left unaligned
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=2, dx=4, dy=0)])
+    with pytest.raises(ValueError, match='covers observations'):
+        average_ref_duplicates(ref, 0.020, tile_offsets=off)
+
+
+def test_read_anchor_keys_and_ref_anchor_mask(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import read_anchor_keys, ref_anchor_mask
+    ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=4, dy=0), dict(obs=1, dx=900, dy=0), dict(obs=2, dx=-900, dy=0)])
+    Table(dict(ref_obs_index=np.array([1, 2, 1, -1, 0]), ref_row=np.array([101, 103, 101, -1, 100]))).write(tmp_path / 'rec.fits')
+    keys = read_anchor_keys(str(tmp_path / 'rec.fits'))
+    assert len(keys) == 3                          # (-1, -1) dropped, the repeated (1, 101) once
+    assert ref_anchor_mask(ref, keys).tolist() == [True, True, False, True]
+    Table(dict(ref_obs_index=np.array([2]), ref_row=np.array([999]))).write(tmp_path / 'other.fits')
+    with pytest.raises(ValueError, match='none of the anchor table'):
+        ref_anchor_mask(ref, read_anchor_keys(str(tmp_path / 'other.fits')))
+    Table(dict(ref_row=np.array([1]))).write(tmp_path / 'bad.fits')
+    with pytest.raises(ValueError, match='lacks'):
+        read_anchor_keys(str(tmp_path / 'bad.fits'))
+
+
+def test_build_aligns_cross_tile_duplicates_with_tile_offsets_only_when_asked(tmp_path):
+    pytest.importorskip('flystar')
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    src, refs, member, n_all = _two_tile_field(tmp_path, np.random.default_rng(43))
+    kw = dict(verbose=False, emit_rows=True, ref_average_duplicates=0.030)
+    path = lambda name: str(tmp_path / name)      # noqa: E731
+    zero = _write_offsets(tmp_path / 'zero.npz', _const_fields([(0, 0), (0, 0)]), tiles=(0, 1))
+    shift = _write_offsets(tmp_path / 'shift.npz', _const_fields([(0, 0), (2.0, 0.0)]), tiles=(0, 1))
+    plain = btp.build([src], refs, 'f212n', 2024.7, 2026.7, path('plain.fits'), verbose=False, emit_rows=True)
+    base = btp.build([src], refs, 'f212n', 2024.7, 2026.7, path('base.fits'), **kw)
+    with0 = btp.build([src], refs, 'f212n', 2024.7, 2026.7, path('zero.fits'), ref_dup_tile_offsets=zero, **kw)
+    for c in ('src_row', 'ref_row', 'ref_obs_index', 'pm_ra', 'pm_dec', 'pm_ra_err', 'trustworthy'):
+        assert np.asarray(with0[c]).tolist() == np.asarray(base[c]).tolist(), c
+    assert json.loads(with0.meta['ref_dup_avg_json'])['tile_offsets']['file'] == 'zero.npz'
+    assert 'tile_offsets' not in json.loads(base.meta['ref_dup_avg_json'])
+    # tile 1's frame is 2 mas east of tile 0's: with the primary (equal frames: tile 0) as the anchor the tile-1 copy moves
+    # 2 mas west and the mean 1 mas west, i.e. pm_ra changes by -1/dt mas/yr for a merged star and not for the others
+    dt = 2026.7 - 2024.7
+    prim = btp.build([src], refs, 'f212n', 2024.7, 2026.7, path('prim.fits'), ref_dup_tile_offsets=shift, **kw)
+    assert (np.asarray(prim['src_row']) == np.asarray(base['src_row'])).all()
+    d_ra = np.asarray(prim['pm_ra']) - np.asarray(base['pm_ra'])
+    merged = np.asarray(base['ref_n_merged']) == 2
+    assert merged.sum() > 100
+    np.testing.assert_allclose(d_ra[merged], -1.0 / dt, atol=0.02 * 1.0 / dt)
+    assert np.abs(d_ra[~merged]).max() < 1e-9
+    # an east-only shift leaves pm_dec alone up to the round-off of positions held in float64 degrees (~2e-7 mas)
+    np.testing.assert_allclose(np.asarray(prim['pm_dec']), np.asarray(base['pm_dec']), atol=1e-6)
+    # the anchor table: a star whose plain pairing used a tile-1 copy is aligned to tile 1 (the mean moves 1 mas east)
+    anch = btp.build([src], refs, 'f212n', 2024.7, 2026.7, path('anch.fits'), ref_dup_tile_offsets=shift,
+                     ref_dup_anchor_table=path('plain.fits'), **kw)
+    assert (np.asarray(anch['src_row']) == np.asarray(base['src_row'])).all()
+    d_anch = np.asarray(anch['pm_ra']) - np.asarray(base['pm_ra'])
+    first = dict(zip(np.asarray(plain['src_row']).tolist(), np.asarray(plain['ref_obs_index']).tolist()))
+    used1 = np.array([first.get(s, -1) == 1 for s in np.asarray(base['src_row']).tolist()])
+    in_plain = np.array([s in first for s in np.asarray(base['src_row']).tolist()])
+    sel = merged & in_plain
+    assert (sel & used1).sum() > 20 and (sel & ~used1).sum() > 20
+    assert np.abs(d_anch[sel & used1] - 1.0 / dt).max() < 0.02 / dt
+    assert np.abs(d_anch[sel & ~used1] + 1.0 / dt).max() < 0.02 / dt
+    info = json.loads(anch.meta['ref_dup_avg_json'])['tile_offsets']
+    assert info['anchor_table'] == 'plain.fits' and len(info['anchor_table_sha256']) == 16
+    assert info['n_groups_one_flagged_copy'] > 0
+
+
+def test_build_rejects_tile_offsets_without_duplicate_averaging_before_reading_anything():
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    args = (['no_such_src.fits'], ['no_such_ref.fits'], 'f212n', 2024.7, 2026.7, 'o.fits')
+    with pytest.raises(ValueError, match='need ref_average_duplicates'):
+        btp.build(*args, ref_dup_tile_offsets='no_such_offsets.npz')
+    with pytest.raises(ValueError, match='need ref_average_duplicates'):
+        btp.build(*args, ref_dup_anchor_table='no_such_table.fits')
+    with pytest.raises(ValueError, match='needs ref_dup_tile_offsets'):
+        btp.build(*args, ref_average_duplicates=0.02, ref_dup_anchor_table='no_such_table.fits')
+
+
+def test_cli_ref_dup_tile_offsets_flags(monkeypatch):
+    import sys
+    from jwst_gc_pipeline.astrometry import build_treasury_pm as btp
+    seen = {}
+    monkeypatch.setattr(btp, 'build', lambda *a, **k: seen.update(k) or None)
+    base = ['x', '--src', 's.fits', '--src-epoch', '2024.7', '--ref', 'r.fits', '--ref-epoch', '2026.7',
+            '--filter', 'f212n', '--out', 'o.fits']
+    monkeypatch.setattr(sys, 'argv', base)
+    btp.main()
+    assert seen['ref_dup_tile_offsets'] is None and seen['ref_dup_anchor_table'] is None
+    monkeypatch.setattr(sys, 'argv', base + ['--ref-average-duplicates', '0.02', '--ref-dup-tile-offsets', 'f.npz'])
+    btp.main()
+    assert seen['ref_dup_tile_offsets'] == 'f.npz' and seen['ref_dup_anchor_table'] is None
+    monkeypatch.setattr(sys, 'argv', base + ['--ref-average-duplicates', '0.02', '--ref-dup-tile-offsets', 'f.npz',
+                                             '--ref-dup-anchor-table', 't.fits'])
+    btp.main()
+    assert seen['ref_dup_anchor_table'] == 't.fits'
+    monkeypatch.setattr(btp, 'build', lambda *a, **k: pytest.fail('build must not run'))
+    for extra in (['--ref-dup-tile-offsets', 'f.npz'], ['--ref-dup-anchor-table', 't.fits'],
+                  ['--ref-average-duplicates', '0.02', '--ref-dup-anchor-table', 't.fits']):
+        monkeypatch.setattr(sys, 'argv', base + extra)
+        with pytest.raises(SystemExit):
+            btp.main()

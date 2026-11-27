@@ -39,6 +39,13 @@ frame-count-weighted row before the src-ref pairing, and the output gains ref_n_
 average_ref_duplicates for what is and is not reduced (independent per-frame noise yes; errors the tiles share no).
 Without the option the build is the build without it.
 
+Optional tile-frame alignment of the duplicates (--ref-dup-tile-offsets NPZ [--ref-dup-anchor-table FITS], needs
+--ref-average-duplicates; default off): each tile's tied positions carry a frame error of its own that varies over the
+overlap (a few mas), so the plain average of the copies of a star sits between the frames of its tiles.  With a
+tile-frame-error file (see load_tile_frame_offsets) every copy is first moved into the frame of one anchor copy of its
+group, then averaged; rows without duplicates are not touched.  The anchor is the copy a previous PM table matched
+(--ref-dup-anchor-table, by its ref_obs_index/ref_row), else the group's primary copy.  See average_ref_duplicates.
+
 Example:
     python -m jwst_gc_pipeline.astrometry.build_treasury_pm \\
         --src /orange/.../sgrb2/catalogs/f212n_..._vetted.fits --src-epoch 2024.684 \\
@@ -466,6 +473,94 @@ _REF_ARRAY_KEYS = ('ex', 'ey', 'flux', 'mag', 'sat', 'flux_noise', 'obs_index', 
                    'n_frames')
 
 
+#: Key of a ref row in the anchor-table lookup: observation * this + catalogue row.
+_REF_ROW_KEY = 10 ** 9
+
+
+def _file_sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def load_tile_frame_offsets(path):
+    """Read the per-tile frame-error fields that ``average_ref_duplicates(tile_offsets=...)`` aligns the copies with.
+
+    An ``.npz`` holding ``fields`` (n_tiles, 2, ny, nx; mas): the frame error F_t of every tile on a pixel-centre grid,
+    axis 1 = east, north (the tied position of a star at x in tile t is x + F_t(x) + noise); ``tiles`` (n_tiles): the
+    ref ``obs_index`` of each field; ``origin_deg`` (2): ra, dec of the tangent-plane origin; ``x0``, ``y0`` (arcsec):
+    east, north tangent offset of the grid's lower-left corner; ``pixel_arcsec``.  Only differences between tiles are
+    used, so the additive gauge of the fields does not matter.  Returns a dict carrying the arrays, the file's base name
+    and a short sha256 for provenance.
+    """
+    with np.load(path, allow_pickle=False) as z:
+        missing = [k for k in ('fields', 'tiles', 'origin_deg', 'x0', 'y0', 'pixel_arcsec') if k not in z.files]
+        if missing:
+            raise ValueError(f'{os.path.basename(path)}: tile-offset file lacks {missing}')
+        off = dict(fields=np.asarray(z['fields'], float), tiles=np.asarray(z['tiles'], np.int64),
+                   origin_deg=(float(z['origin_deg'][0]), float(z['origin_deg'][1])),
+                   x0=float(z['x0']), y0=float(z['y0']), pixel_arcsec=float(z['pixel_arcsec']))
+    f = off['fields']
+    if f.ndim != 4 or f.shape[1] != 2 or f.shape[0] != len(off['tiles']) or min(f.shape[2:]) < 1:
+        raise ValueError(f'{os.path.basename(path)}: fields must be (n_tiles, 2, ny, nx) with one tile index each, '
+                         f'got {f.shape} and {len(off["tiles"])} tiles')
+    if len(set(off['tiles'].tolist())) != len(off['tiles']):
+        raise ValueError(f'{os.path.basename(path)}: duplicate tile indices {off["tiles"].tolist()}')
+    if not np.isfinite(f).all():
+        raise ValueError(f'{os.path.basename(path)}: fields hold non-finite values')
+    if not off['pixel_arcsec'] > 0:
+        raise ValueError(f'{os.path.basename(path)}: pixel_arcsec must be positive')
+    off['file'] = os.path.basename(path)
+    off['sha256'] = _file_sha256(path)
+    return off
+
+
+def tile_frame_shift(offsets, sc, from_tile, to_tile):
+    """(east, north) shifts in mas that move positions ``sc`` seen in the frame of tile ``from_tile`` into the frame of
+    ``to_tile`` (``obs_index`` arrays): ``F_to - F_from`` at the position, from the fields of ``offsets``
+    (bilinear between pixel centres; the edge value beyond the grid)."""
+    from scipy.ndimage import map_coordinates
+    from_tile, to_tile = np.asarray(from_tile, np.int64), np.asarray(to_tile, np.int64)
+    used = np.unique(np.concatenate([from_tile, to_tile]))
+    index = {int(t): k for k, t in enumerate(offsets['tiles'])}
+    absent = [int(t) for t in used if int(t) not in index]
+    if absent:
+        raise ValueError(f'the tile-offset file covers observations {sorted(index)}, the duplicates also use {absent}')
+    origin = SkyCoord(offsets['origin_deg'][0] * u.deg, offsets['origin_deg'][1] * u.deg)
+    east, north = origin.spherical_offsets_to(sc)
+    cx = (east.to_value(u.arcsec) - offsets['x0']) / offsets['pixel_arcsec'] - 0.5
+    cy = (north.to_value(u.arcsec) - offsets['y0']) / offsets['pixel_arcsec'] - 0.5
+    shift = np.zeros((2, len(cx)))
+    for t in used:
+        field = np.stack([map_coordinates(offsets['fields'][index[int(t)], ax], [cy, cx], order=1, mode='nearest')
+                          for ax in (0, 1)])
+        shift += field * (to_tile == t) - field * (from_tile == t)
+    return shift[0], shift[1]
+
+
+def read_anchor_keys(path):
+    """Sorted unique keys (observation * _REF_ROW_KEY + row) of the ref rows a PM table matched, from its
+    ``ref_obs_index`` and ``ref_row`` columns (rows without a ref row, index < 0, are ignored)."""
+    t = Table.read(path)
+    absent = [c for c in ('ref_obs_index', 'ref_row') if c not in t.colnames]
+    if absent:
+        raise ValueError(f'{os.path.basename(path)}: anchor table lacks {absent}')
+    obs, row = np.asarray(t['ref_obs_index'], np.int64), np.asarray(t['ref_row'], np.int64)
+    ok = (obs >= 0) & (row >= 0)
+    return np.unique(obs[ok] * _REF_ROW_KEY + row[ok])
+
+
+def ref_anchor_mask(ref, keys):
+    """Boolean mask over the rows of ``ref``: the rows named by ``keys`` (``read_anchor_keys``)."""
+    mask = np.isin(np.asarray(ref['obs_index'], np.int64) * _REF_ROW_KEY + np.asarray(ref['row'], np.int64), keys)
+    if not mask.any():
+        raise ValueError('none of the anchor table\'s ref_obs_index/ref_row pairs is a row of the ref catalogs')
+    return mask
+
+
 def _nearest_per_key(key, sep):
     """Boolean mask over edges: True for the smallest-``sep`` edge of each distinct ``key``."""
     if not len(key):
@@ -525,8 +620,23 @@ def ref_duplicate_groups(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
     return label, is_group, int(len(i))
 
 
+def _anchor_rows(rows, lab, is_primary, n_comp, anchor):
+    """Ref row of the anchor copy of each group (``rows``/``lab`` sorted by group, primary copy first in each) and the number
+    of flagged copies per group: the first copy ``anchor`` flags, else the primary."""
+    anchor_row = np.full(n_comp, -1, np.int64)
+    anchor_row[lab[is_primary]] = rows[is_primary]
+    n_flagged = np.zeros(n_comp, np.int64)
+    if anchor is not None:
+        flagged = np.flatnonzero(np.asarray(anchor, bool)[rows])
+        n_flagged = np.bincount(lab[flagged], minlength=n_comp)
+        first = np.ones(len(flagged), bool)
+        first[1:] = lab[flagged][1:] != lab[flagged][:-1]
+        anchor_row[lab[flagged][first]] = rows[flagged][first]
+    return anchor_row, n_flagged
+
+
 def average_ref_duplicates(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
-                           flux_gate_chi2=REF_AVG_FLUX_GATE_CHI2):
+                           flux_gate_chi2=REF_AVG_FLUX_GATE_CHI2, tile_offsets=None, anchor=None):
     """Replace the rows of every star that several reference observations detect by one averaged
     row (groups as in :func:`ref_duplicate_groups`).
 
@@ -541,7 +651,8 @@ def average_ref_duplicates(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
       1-3 frames, falls with fewer frames while the real position error rises, and in held-out
       tests predicts a third copy worse than equal weights do.  The tied tile frames are averaged
       as they are; the median offset between two tiles' tied positions (about 1-2 mas) is not
-      removed, so an averaged star sits between its tiles' frames;
+      removed, so an averaged star sits between its tiles' frames (unless ``tile_offsets`` is given,
+      below);
     * ``ex``, ``ey``: the propagated error of that mean, ``sqrt(sum((w/sum(w))**2 * ex**2))``,
       from the copies' own errors, i.e. in the currency of the unaveraged rows (two equal copies
       give ``ex/sqrt(2)``).  The copies' per-frame errors are independent, but errors the tiles
@@ -556,8 +667,19 @@ def average_ref_duplicates(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
     contributing copy with most frames, then the lowest observation index, so ``ref_row`` and
     ``ref_obs_index`` of a pair name a real catalogue row.
 
+    ``tile_offsets`` (``load_tile_frame_offsets``; default None = the behaviour above) moves every copy into
+    the frame of the group's anchor copy before the mean: the copy in tile t at position x shifts by
+    ``F_anchor(x) - F_t(x)``.  The anchor is the group's first copy (primary order) that ``anchor`` (boolean per
+    ``ref`` row, e.g. ``ref_anchor_mask``) flags, else the primary copy.  An averaged star then sits in the
+    anchor tile's frame with the copies' independent noise reduced as before, whereas the plain average also
+    averages the tiles' frame errors.  What the alignment cannot do: the anchor tile's own frame error stays, the
+    model error of the fields (about 1 mas in the bright held-out test) enters each shifted copy, and ``ex``/``ey``
+    do not include either.  Rows without duplicates are not touched.
+
     Returns ``(averaged ref dict, info)``; ``info`` holds JSON-ready counts.
     """
+    if anchor is not None and tile_offsets is None:
+        raise ValueError('anchor only chooses the frame the tile offsets align to; it needs tile_offsets')
     label, is_group, n_edges = ref_duplicate_groups(ref, radius_arcsec, flux_floor, flux_gate_chi2)
     sc = ref['sc']
     n = len(sc)
@@ -566,6 +688,10 @@ def average_ref_duplicates(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
     info = dict(radius_arcsec=float(radius_arcsec), n_rows_in=int(n), n_edges=n_edges,
                 n_components_multi=int((np.bincount(label, minlength=n_comp) > 1).sum()),
                 n_groups=int(is_group.sum()))
+    if tile_offsets is not None:
+        info['tile_offsets'] = dict(file=tile_offsets['file'], sha256=tile_offsets['sha256'],
+                                    anchor='flagged copy, else primary' if anchor is not None else 'primary copy',
+                                    n_copies_shifted=0)
     out = {k: v for k, v in ref.items() if k not in _REF_COORD_KEYS + _REF_ARRAY_KEYS}
     out.update({k: np.array(ref[k]) for k in _REF_ARRAY_KEYS if k in ref})
     out.update({k: ref[k] for k in _REF_COORD_KEYS if k in ref})
@@ -599,8 +725,24 @@ def average_ref_duplicates(ref, radius_arcsec, flux_floor=REF_AVG_FLUX_FLOOR,
     glab = np.flatnonzero(is_group)
     prims = prim_of[glab]
     dlon, dlat = sc[prim_of[lab]].spherical_offsets_to(sc[rows])
-    moved = sc[prims].spherical_offsets_by(_mean(dlon.to_value(u.arcsec))[glab] * u.arcsec,
-                                           _mean(dlat.to_value(u.arcsec))[glab] * u.arcsec)
+    dlon, dlat = dlon.to_value(u.arcsec), dlat.to_value(u.arcsec)
+    if tile_offsets is not None:
+        anchor_row, n_flagged = _anchor_rows(rows, lab, is_primary, n_comp, anchor)
+        to_tile = obs[anchor_row[lab]]
+        shift_e, shift_n = tile_frame_shift(tile_offsets, sc[rows], obs[rows], to_tile)
+        dlon, dlat = dlon + shift_e / 1e3, dlat + shift_n / 1e3
+        shifted = obs[rows] != to_tile
+        info['tile_offsets'].update(
+            n_copies_shifted=int(shifted.sum()),
+            rms_shift_mas=[float(np.sqrt(np.mean(shift_e[shifted] ** 2))), float(np.sqrt(np.mean(shift_n[shifted] ** 2)))]
+            if shifted.any() else [0.0, 0.0],
+            max_abs_shift_mas=float(max(np.abs(shift_e).max(), np.abs(shift_n).max())),
+            anchor_tile_counts={int(t): int(c) for t, c in zip(*np.unique(obs[anchor_row[glab]], return_counts=True))})
+        if anchor is not None:
+            info['tile_offsets'].update(n_groups_one_flagged_copy=int((n_flagged[glab] == 1).sum()),
+                                        n_groups_several_flagged_copies=int((n_flagged[glab] > 1).sum()),
+                                        n_groups_no_flagged_copy=int((n_flagged[glab] == 0).sum()))
+    moved = sc[prims].spherical_offsets_by(_mean(dlon)[glab] * u.arcsec, _mean(dlat)[glab] * u.arcsec)
     ra, dec = sc.ra.deg.copy(), sc.dec.deg.copy()
     ra[prims], dec[prims] = moved.ra.deg, moved.dec.deg
     flux = _mean(np.asarray(ref['flux'], float)[rows])[glab]
@@ -767,7 +909,7 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
          demote_offset_saturated=True, src_isolation='flux', assign=DEFAULT_ASSIGN,
          rescue_k=DEFAULT_RESCUE_K, rescued_trustworthy=False, skip_unverified_refs=False,
          flux_ratio_cap=DEFAULT_FLUX_RATIO_CAP, src_poscorr=None, ref_poscorr=None,
-         emit_rows=False, ref_average_duplicates=None):
+         emit_rows=False, ref_average_duplicates=None, ref_dup_tile_offsets=None, ref_dup_anchor_table=None):
     # Same convention as --rescue-inflated-err: 0 (or None) = rescue off.  Passed on as 0, the
     # threshold is 0 x local noise: every positive-flux row that fails the S/N cut is rescued.
     if rescue_k is not None and not rescue_k >= 0:
@@ -776,6 +918,17 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
     if ref_average_duplicates is not None and not 0 < ref_average_duplicates < np.inf:
         raise ValueError('ref_average_duplicates (arcsec) must be positive and finite or None, '
                          f'got {ref_average_duplicates!r}')
+    if ref_average_duplicates is None and (ref_dup_tile_offsets is not None or ref_dup_anchor_table is not None):
+        raise ValueError('ref_dup_tile_offsets and ref_dup_anchor_table are options of the duplicate averaging: '
+                         'they need ref_average_duplicates')
+    if ref_dup_anchor_table is not None and ref_dup_tile_offsets is None:
+        raise ValueError('ref_dup_anchor_table only chooses the frame the tile offsets align to: '
+                         'it needs ref_dup_tile_offsets')
+    offsets = anchor_keys = None
+    if ref_dup_tile_offsets is not None:
+        offsets = load_tile_frame_offsets(ref_dup_tile_offsets)
+    if ref_dup_anchor_table is not None:
+        anchor_keys = read_anchor_keys(ref_dup_anchor_table)
     src = load_filter_catalog(src_paths, filt, src_epoch, rescue_k=rescue_k,
                               poscorr_paths=src_poscorr)
     if verbose:
@@ -790,12 +943,20 @@ def build(src_paths, ref_paths, filt, src_epoch, ref_epoch, out_path,
                                            poscorr_paths=ref_poscorr)
     dup_info = None
     if ref_average_duplicates is not None:
-        ref, dup_info = average_ref_duplicates(ref, ref_average_duplicates)
+        anchor = ref_anchor_mask(ref, anchor_keys) if anchor_keys is not None else None
+        ref, dup_info = average_ref_duplicates(ref, ref_average_duplicates, tile_offsets=offsets, anchor=anchor)
+        if anchor_keys is not None:
+            dup_info['tile_offsets']['anchor_table'] = os.path.basename(ref_dup_anchor_table)
+            dup_info['tile_offsets']['anchor_table_sha256'] = _file_sha256(ref_dup_anchor_table)
         if verbose:
             print(f'  ref duplicates averaged within {ref_average_duplicates * 1e3:g} mas: '
                   f'{dup_info["n_groups"]:,} groups (rows per group: {dup_info["groups_by_size"]}), '
                   f'{dup_info["n_rows_in"]:,} -> {dup_info["n_rows_out"]:,} rows, '
                   f'{dup_info["n_components_multi"] - dup_info["n_groups"]:,} ambiguous clusters left alone')
+            if 'tile_offsets' in dup_info:
+                to = dup_info['tile_offsets']
+                print(f'  duplicate copies aligned with {to["file"]}: {to["n_copies_shifted"]:,} copies moved '
+                      f'(rms {to["rms_shift_mas"][0]:.2f}, {to["rms_shift_mas"][1]:.2f} mas E, N; anchor: {to["anchor"]})')
     if verbose:
         print(f'  ref ({filt}, epoch {ref_epoch:.3f}) usable: {ref["n"]:,} '
               f'(from {len(diags)} independently-tied observations)')
@@ -961,6 +1122,13 @@ def main():
                          '(tied positions within ARCSEC, mutual nearest, flux consistent) into one '
                          'row before the src-ref pairing; adds ref_n_merged to the output. '
                          'Default: off (every row of every --ref catalog is kept)')
+    ap.add_argument('--ref-dup-tile-offsets', default=None, metavar='NPZ',
+                    help='with --ref-average-duplicates: move the copies of a star into the frame of one anchor copy '
+                         'before averaging, using per-tile frame-error fields (see load_tile_frame_offsets). '
+                         'Default: off (the tied frames are averaged as they are)')
+    ap.add_argument('--ref-dup-anchor-table', default=None, metavar='FITS',
+                    help='with --ref-dup-tile-offsets: a previous PM table; the anchor copy of a star is the copy '
+                         'that table matched (its ref_obs_index/ref_row). Default: the primary copy')
     ap.add_argument('--skip-unverified-refs', action='store_true',
                     help='drop a --ref catalog whose tie to --src cannot be verified '
                          '(e.g. a tile with no overlap) instead of aborting')
@@ -969,6 +1137,10 @@ def main():
         ap.error('--rescue-inflated-err must be >= 0 (0 turns the rescue off)')
     if args.ref_average_duplicates is not None and not 0 < args.ref_average_duplicates < np.inf:
         ap.error('--ref-average-duplicates must be a positive radius in arcsec')
+    if args.ref_average_duplicates is None and (args.ref_dup_tile_offsets or args.ref_dup_anchor_table):
+        ap.error('--ref-dup-tile-offsets and --ref-dup-anchor-table need --ref-average-duplicates')
+    if args.ref_dup_anchor_table and not args.ref_dup_tile_offsets:
+        ap.error('--ref-dup-anchor-table needs --ref-dup-tile-offsets')
     build(args.src, args.ref, args.filter, args.src_epoch, args.ref_epoch, args.out,
          match_radius=args.match_radius, isolation_radius=args.isolation_radius,
          demote_offset_saturated=not args.keep_offset_saturated,
@@ -976,7 +1148,8 @@ def main():
          rescue_k=args.rescue_inflated_err or None, rescued_trustworthy=args.rescued_trustworthy,
          skip_unverified_refs=args.skip_unverified_refs, flux_ratio_cap=args.flux_ratio_cap,
          src_poscorr=args.src_poscorr, ref_poscorr=args.ref_poscorr, emit_rows=args.emit_rows,
-         ref_average_duplicates=args.ref_average_duplicates)
+         ref_average_duplicates=args.ref_average_duplicates, ref_dup_tile_offsets=args.ref_dup_tile_offsets,
+         ref_dup_anchor_table=args.ref_dup_anchor_table)
 
 
 if __name__ == '__main__':
