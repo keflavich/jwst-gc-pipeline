@@ -1,0 +1,6 @@
+1,2c1,2
+< 5034 2026-11-27 06:04:36.000000000 /orange/adamginsburg/jwst/crds/config/jwst/bad_files.txt
+< 1457934 2026-11-27 06:04:36.000000000 /orange/adamginsburg/jwst/crds/config/jwst/server_config
+---
+> 5034 2026-11-27 15:53:45.000000000 /orange/adamginsburg/jwst/crds/config/jwst/bad_files.txt
+> 1457934 2026-11-27 15:53:45.000000000 /orange/adamginsburg/jwst/crds/config/jwst/server_config

@@ -1,0 +1,32 @@
+o045 F212N nrca: opt seed 368565 rows, production seed 368524 rows; 41 rows only in opt, 0 only in production
+o045 F212N nrcb: opt seed 381134 rows, production seed 381078 rows; 56 rows only in opt, 0 only in production
+added rows by (module, seed_origin, seed_round_bright): {('nrca', 'own_m6', False): 25, ('nrca', 'i2d', True): 16, ('nrcb', 'own_m6', False): 28, ('nrcb', 'i2d', True): 28}
+opt nrca raw   : 334461 rows
+opt nrca vetted: 295964 rows
+opt nrcb raw   : 347685 rows
+opt nrcb vetted: 308377 rows
+opt merged raw   : 661305 rows
+opt merged vetted: 584406 rows
+ctl nrca raw   : 334208 rows
+ctl nrca vetted: 295718 rows
+ctl nrcb raw   : 347434 rows
+ctl nrcb vetted: 308144 rows
+ctl merged raw   : 660797 rows
+ctl merged vetted: 583925 rows
+
+group      mod      n | optRaw optVet | ctlRaw ctlVet | new in raw new in vet | merged: optRaw optVet ctlVet
+A exempt   nrca    25 |     25     25 |      5      5 |         20         20 |             25     25      5   (new in merged vetted 20; ctl merged raw 5)
+A exempt   nrcb    28 |     28     28 |      3      3 |         25         25 |             28     28      3   (new in merged vetted 25; ctl merged raw 3)
+A exempt   both    53 |     53     53 |      8      8 |         45         45 |             53     53      8   (new in merged vetted 45; ctl merged raw 8)
+B relaxed  nrca    16 |     16     16 |      4      2 |         12         14 |             16     16      2   (new in merged vetted 14; ctl merged raw 4)
+B relaxed  nrcb    28 |     28     28 |      3      3 |         25         25 |             28     28      3   (new in merged vetted 25; ctl merged raw 3)
+B relaxed  both    44 |     44     44 |      7      5 |         37         39 |             44     44      5   (new in merged vetted 39; ctl merged raw 7)
+all        nrca    41 |     41     41 |      9      7 |         32         34 |             41     41      7   (new in merged vetted 34; ctl merged raw 9)
+all        nrcb    56 |     56     56 |      6      6 |         50         50 |             56     56      6   (new in merged vetted 50; ctl merged raw 6)
+all        both    97 |     97     97 |     15     13 |         82         84 |             97     97     13   (new in merged vetted 84; ctl merged raw 15)
+
+opt merged-module raw rows within the radius of an added row that are absent from the vetted catalog (simple tests of the raw row):
+  A exempt: 0 rows; S/N median nan, qfit median nan, flags>0 0, nmatch<=2 0, S/N<5 0, qfit>0.2 0
+  B relaxed: 0 rows; S/N median nan, qfit median nan, flags>0 0, nmatch<=2 0, S/N<5 0, qfit>0.2 0
+
+wrote <scratch>/e2e6/survive_ctlref/survive_o045_F212N.json

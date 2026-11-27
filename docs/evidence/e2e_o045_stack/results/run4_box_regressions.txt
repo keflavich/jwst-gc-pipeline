@@ -1,0 +1,9 @@
+# Box 13 x 13 px extremes of the residual i2d in MJy/sr (NaN counted as 0) in the renders of run 4; tags of the four-tile run: prod5 = prod, ctlfin = ctl4fin, optnm = opt4nm, optfin = opt4fin; positions are mosaic array indices (x, y)
+F212N (8653,1078) prod5   NaN px in box   0  box max     236.6  box min   -2006.7
+F212N (8653,1078) ctlfin  NaN px in box   0  box max     257.5  box min   -1598.4
+F212N (8653,1078) optnm   NaN px in box   0  box max     257.5  box min   -1598.4
+F212N (8653,1078) optfin  NaN px in box 169  box max       0.0  box min       0.0
+F480M (410,1680) prod5   NaN px in box   0  box max      18.9  box min       7.2
+F480M (410,1680) ctlfin  NaN px in box   0  box max      19.2  box min       7.4
+F480M (410,1680) optnm   NaN px in box   0  box max      19.2  box min       7.4
+F480M (410,1680) optfin  NaN px in box   0  box max      19.2  box min       7.4

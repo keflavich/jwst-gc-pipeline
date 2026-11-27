@@ -1,0 +1,3 @@
+# Difference between the lines that are not comments of the common environment file of the opt arm of run 4 (lines starting with <) and of the common environment file of its control arm (lines starting with >).
+# diff of the files with the lines that start with # removed; no diff line below means that the two files have the same lines apart from comment lines.
+# end of the diff, exit status 0

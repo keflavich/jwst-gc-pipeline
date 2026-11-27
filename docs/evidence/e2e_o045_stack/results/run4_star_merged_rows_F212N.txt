@@ -1,0 +1,17 @@
+## vetted m7 merged within 0.5" of (266.2146297,-29.0338845), run 4
+  [ctl4] 7 rows
+    d=0.071" flux=3.758e+04 qfit=0.008859 flags=0.4868 nmatch=2 is_saturated=T replaced_saturated=T satstar_gate_rejected=F satstar_match_sep=0.06859 satstar_nframes=1 iter_found=2 forced_refit_frac=0
+    d=0.110" flux=2391 qfit=0.02393 flags=1 nmatch=1 is_saturated=F replaced_saturated=F satstar_gate_rejected=T satstar_match_sep=nan satstar_nframes=0 iter_found=3 forced_refit_frac=1
+    d=0.168" flux=2070 qfit=0.1296 flags=0 nmatch=1 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0
+    d=0.289" flux=677.3 qfit=0.1428 flags=0.2064 nmatch=6 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0
+    d=0.319" flux=502.3 qfit=0.269 flags=0 nmatch=5 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0.2
+    d=0.331" flux=118.8 qfit=0.08627 flags=0.3644 nmatch=4 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=1
+    d=0.341" flux=2528 qfit=0.06698 flags=0 nmatch=3 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0
+  [opt4] 7 rows
+    d=0.004" flux=2.853e+04 qfit=0.008576 flags=0.3651 nmatch=5 is_saturated=F replaced_saturated=F satstar_gate_rejected=T satstar_dao_restored=F satstar_match_sep=nan satstar_nframes=0 iter_found=7 forced_refit_frac=0.6 satstar_dao_flux=nan
+    d=0.071" flux=3.758e+04 qfit=3.321 flags=0.07097 nmatch=2 is_saturated=T replaced_saturated=T satstar_gate_rejected=F satstar_dao_restored=F satstar_match_sep=0.01138 satstar_nframes=1 iter_found=2 forced_refit_frac=1 satstar_dao_flux=305.1
+    d=0.168" flux=2070 qfit=0.1296 flags=0 nmatch=1 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_dao_restored=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0 satstar_dao_flux=nan
+    d=0.289" flux=677.3 qfit=0.1428 flags=0.2064 nmatch=6 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_dao_restored=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0 satstar_dao_flux=nan
+    d=0.319" flux=502.3 qfit=0.269 flags=0 nmatch=5 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_dao_restored=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0.2 satstar_dao_flux=nan
+    d=0.331" flux=107.1 qfit=0.08627 flags=0.3644 nmatch=4 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_dao_restored=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=1 satstar_dao_flux=nan
+    d=0.341" flux=2528 qfit=0.06698 flags=0 nmatch=3 is_saturated=F replaced_saturated=F satstar_gate_rejected=F satstar_dao_restored=F satstar_match_sep=nan satstar_nframes=0 iter_found=2 forced_refit_frac=0 satstar_dao_flux=nan

@@ -1,0 +1,38 @@
+# Differences between the common environment file of this run (lines starting with >) and the common environment file of run 2 of #1383 (lines starting with <).
+# First block: diff run-2-file this-run-file. The two lines DAOPHOT_HANDOFF_PEAK_MIN_AREA and DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM are present in this run only; the further differences are the header comment, the tree path and the tile variables.
+1,2c1,6
+< # e2e2 = second run of the o045 opt arm with the final recipe.  Same as e2e045/env_common.sh (values reproduced from the production shard / finalize logs of jobs 50365036 / 50365046)
+< # except PIPE_ROOT (wt_e2e2) and the last line (CRDS_READONLY_CACHE).
+---
+> # e2e6 = control arm of e2e5: the same environment and code tree, no opt-in switch (no env_opt3.sh) and the default m7 seed options.  Source after `export TILE=o105|o118|o130|o138`.
+> # Same values as e2e5/env_common5.sh, that is e2e4/env_common4.sh plus DAOPHOT_HANDOFF_PEAK_MIN_AREA and DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM.  The production F480M m7 jobs (o105 job 50037748, o045 job 50365036)
+> # ran with both from the submitting shell (--export=ALL); no log line names them as variables, only the hand-off log lines show them.  The e2e4 run and the o045 end-to-end runs lacked both.
+> # DAOPHOT_HANDOFF_FILTERS=F480M keeps both off for F212N.
+> : "${TILE:?export TILE=o105|o118|o130|o138 first}"
+> SCR=<scratch>
+8a13,14
+> export DAOPHOT_HANDOFF_PEAK_MIN_AREA=50
+> export DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM=1.5
+11,12c17,18
+< export PIPE_ROOT=<scratch>/wt_e2e2
+< export PROPOSAL=10678 FIELD=045 TARGET=gc-treasury MODULES=nrca,nrcb,merged EACH_SUFFIX=destreak_o045_crf
+---
+> export PIPE_ROOT=$SCR/wt_e2e4
+> export PROPOSAL=10678 FIELD=${TILE#o} TARGET=gc-treasury MODULES=nrca,nrcb,merged EACH_SUFFIX=destreak_${TILE}_crf
+14c20
+< export CRDS_READONLY_CACHE=1   # e2e2: the client must not rewrite server_config / bad_files.txt of the shared /orange CRDS cache
+---
+> export CRDS_READONLY_CACHE=1   # the client must not rewrite server_config / bad_files.txt of the shared /orange CRDS cache
+# Second block: diff run-1-file run-2-file of #1383. The two files differ in the header comment, the tree path and the line CRDS_READONLY_CACHE only, so the files of run 1 and run 2 both lack the two hand-off settings.
+1,2c1,2
+< # Environment shared by both arms of the o045 end-to-end run (sourced by submit_arm.sh; values reproduced from the
+< # production shard / finalize logs of jobs 50365036 / 50365046).
+---
+> # e2e2 = second run of the o045 opt arm with the final recipe.  Same as e2e045/env_common.sh (values reproduced from the production shard / finalize logs of jobs 50365036 / 50365046)
+> # except PIPE_ROOT (wt_e2e2) and the last line (CRDS_READONLY_CACHE).
+11c11
+< export PIPE_ROOT=<scratch>/wt_e2e
+---
+> export PIPE_ROOT=<scratch>/wt_e2e2
+13a14
+> export CRDS_READONLY_CACHE=1   # e2e2: the client must not rewrite server_config / bad_files.txt of the shared /orange CRDS cache

@@ -1,0 +1,11 @@
+# o045 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source ctlfin, references ['prod5']
+## features of ctlfin (n_left 179, n_crater 39) against the prod5 extremum in the same box (regressions)
+  leftover: 179 features; prod5 below the threshold and >1.5x lower (regressions): 1; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 164; prod5 >1.5x higher: 14
+      ( 1099, 1974) ctlfin     264  prod5     108  cls=NOT_IN_M7_CATALOG d_sat=2.034
+  crater  : 39 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 1; within 1.5x: 33; prod5 >1.5x higher: 5
+## features of prod5 (n_left 180, n_crater 34) against the ctlfin extremum in the same box (improvements)
+  leftover: 180 features; ctlfin below the threshold and >1.5x lower (improvements): 2; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 166; ctlfin >1.5x higher: 12
+      ( 1919, 2060) prod5     429  ctlfin      21  cls=VETTED_BUT_UNSUBTRACTED d_sat=2.212
+      ( 2831, 1248) prod5     362  ctlfin      19  cls=NOT_IN_M7_CATALOG d_sat=1.149
+  crater  : 34 features; ctlfin below the threshold and >1.5x lower (improvements): 1; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 30; ctlfin >1.5x higher: 3
+      ( 1099, 1974) prod5     544  ctlfin      -8  d_vet1=0.016 is_sat1=True flux1=10544
