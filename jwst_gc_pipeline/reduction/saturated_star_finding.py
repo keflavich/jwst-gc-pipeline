@@ -1359,6 +1359,13 @@ def satstar_fit_switches(env=None):
       recovered-core cap and the PSF fraction below which it is skipped
       (``recovered_cap_flux``).  The cap reads only the fitted seed's share of
       a blended component (``recovered_cap_region``).
+    * ``SATSTAR_FITTER_MAXITERS`` (default 100, photutils' own): iteration cap
+      of the per-star LevMar fit (``satstar_fitter_maxiters``).
+    * ``SATSTAR_EDGE_POS_BOUND`` (default 0 = OFF): position bound, in pixels
+      around the seed, of a saturated component within
+      ``SATSTAR_EDGE_TOUCH_PX`` of the frame edge and with at least
+      ``SATSTAR_EDGE_MIN_AREA`` (default 100) saturated pixels
+      (``satstar_edge_pos_bound``, ``satstar_edge_min_area``).
     """
     env = os.environ if env is None else env
     qloc_gate = _env_switch('SATSTAR_QFIT_LOCAL_GATE', False, env)
@@ -1387,6 +1394,9 @@ def satstar_fit_switches(env=None):
             float(env.get('SATSTAR_DEBLEND_PSF_MARGIN', '') or 0.0), 0.0),
         'cap_min_psf_frac': float(
             env.get('NIRCAM_SATSTAR_RECOVERED_MIN_PSF_FRAC', '') or 0.005),
+        'fitter_maxiters': satstar_fitter_maxiters(env),
+        'edge_pos_bound': satstar_edge_pos_bound(env),
+        'edge_min_area': satstar_edge_min_area(env),
     }
 
 
@@ -1783,6 +1793,18 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
+    if sw['fitter_maxiters'] != SATSTAR_FITTER_MAXITERS_DEFAULT:
+        # A fit that the default cap stopped early converges further (or not)
+        # under another cap, on every frame, with or without a ramp.  Left out
+        # at the default, so the default key is the one before the switch.
+        parts.append(f"mi{sw['fitter_maxiters']}")
+    if sw['edge_pos_bound'] > 0:
+        # Changes the position bound of every edge-clipped component of every
+        # NIRCam in-FOV frame, with or without a ramp.  The area floor enters
+        # only when it is not the default, so the usual key stays short.
+        parts.append(f"eb{sw['edge_pos_bound']:g}"
+                     + ('' if sw['edge_min_area'] == SATSTAR_EDGE_MIN_AREA_DEFAULT
+                        else f"a{sw['edge_min_area']}"))
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
@@ -3099,6 +3121,142 @@ def _set_position_fixed(model, fixed):
     """
     model.x_0.fixed = bool(fixed)
     model.y_0.fixed = bool(fixed)
+
+
+#: Iteration cap of the per-star satstar LevMar fit when ``SATSTAR_FITTER_MAXITERS``
+#: is unset: photutils' own ``PSFPhotometry`` default.
+SATSTAR_FITTER_MAXITERS_DEFAULT = 100
+
+
+def satstar_fitter_maxiters(env=None):
+    """Iteration cap of the per-star saturated-star LevMar fit.
+
+    Env ``SATSTAR_FITTER_MAXITERS`` (positive integer); unset or blank is
+    ``SATSTAR_FITTER_MAXITERS_DEFAULT``, so the default changes nothing.  A fit
+    that reaches the cap returns the iterate it stopped at, with photutils flag
+    bits 8 (the fitter may not have converged) and 16 (no parameter
+    covariance).  Reads like the other fit switches (``satstar_fit_switches``)
+    so that the fit and the cache key see one value.
+
+    Raises
+    ------
+    ValueError
+        The value is not a positive integer.  It changes the fit and the
+        satstar cache key, so a typo must not be read as the default.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_FITTER_MAXITERS')
+    if raw is None or not str(raw).strip():
+        return SATSTAR_FITTER_MAXITERS_DEFAULT
+    try:
+        maxiters = int(str(raw).strip())
+    except ValueError as err:
+        raise ValueError(f"SATSTAR_FITTER_MAXITERS={raw!r} is not a positive "
+                         f"integer") from err
+    if maxiters < 1:
+        raise ValueError(f"SATSTAR_FITTER_MAXITERS={raw!r} is not a positive "
+                         f"integer")
+    return maxiters
+
+
+#: A saturated component whose bounding box lies within this many pixels of the
+#: frame edge is edge-clipped: the 4-px reference-pixel border (DO_NOT_USE, NaN
+#: in SCI) cuts its core, and its centre of mass sits inside the star.
+SATSTAR_EDGE_TOUCH_PX = 6
+
+#: Saturated pixels an edge-clipped component needs before ``SATSTAR_EDGE_POS_BOUND``
+#: applies to it, unless ``SATSTAR_EDGE_MIN_AREA`` says otherwise.  The components
+#: this near the edge with fewer include detector-corner features: the same
+#: saturated-pixel count in every frame of a detector, whatever the pointing
+#: (o045-o138 F212N: 75 on nrca2, 63 on nrcb1, 42 on nrca1, 40 on nrcb3), so
+#: not sky stars.
+SATSTAR_EDGE_MIN_AREA_DEFAULT = 100
+
+
+def satstar_edge_pos_bound(env=None):
+    """Position bound (pixels) of an edge-clipped saturated component's fit.
+
+    Env ``SATSTAR_EDGE_POS_BOUND``; unset, blank or ``0`` is off, which keeps
+    the bound ``max(size_saturated, 1.5 FWHM)`` around the seed for every
+    component.  With it set, a component within ``SATSTAR_EDGE_TOUCH_PX`` of the
+    frame edge (``component_edge_distance``) and with at least
+    ``satstar_edge_min_area`` saturated pixels is bounded by at least this many
+    pixels around its seed (``widened_position_bound``).
+
+    Raises
+    ------
+    ValueError
+        The value is not a non-negative number.  It changes the fit and the
+        satstar cache key, so a typo must not be read as off.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_EDGE_POS_BOUND')
+    if raw is None or not str(raw).strip():
+        return 0.0
+    try:
+        bound = float(str(raw).strip())
+    except ValueError as err:
+        raise ValueError(f"SATSTAR_EDGE_POS_BOUND={raw!r} is not a "
+                         f"non-negative number") from err
+    if not np.isfinite(bound) or bound < 0:
+        raise ValueError(f"SATSTAR_EDGE_POS_BOUND={raw!r} is not a "
+                         f"non-negative number")
+    return bound
+
+
+def satstar_edge_min_area(env=None):
+    """Saturated pixels an edge-clipped component needs for
+    ``SATSTAR_EDGE_POS_BOUND`` to widen its bound: env
+    ``SATSTAR_EDGE_MIN_AREA`` (non-negative integer), default
+    ``SATSTAR_EDGE_MIN_AREA_DEFAULT``.
+
+    Raises
+    ------
+    ValueError
+        The value is not a non-negative integer.
+    """
+    env = os.environ if env is None else env
+    raw = env.get('SATSTAR_EDGE_MIN_AREA')
+    if raw is None or not str(raw).strip():
+        return SATSTAR_EDGE_MIN_AREA_DEFAULT
+    try:
+        area = int(str(raw).strip())
+    except ValueError as err:
+        raise ValueError(f"SATSTAR_EDGE_MIN_AREA={raw!r} is not a "
+                         f"non-negative integer") from err
+    if area < 0:
+        raise ValueError(f"SATSTAR_EDGE_MIN_AREA={raw!r} is not a "
+                         f"non-negative integer")
+    return area
+
+
+def component_edge_distance(comp_slice, shape):
+    """Pixels between a component's bounding box and the nearest frame edge.
+
+    ``comp_slice`` is the ``(row slice, column slice)`` pair of
+    ``ndimage.find_objects``; ``shape`` is the frame shape.  ``None`` when the
+    component has no slice (a forced source).  A component on the first pixel
+    row or column is at distance 0.
+    """
+    if comp_slice is None or comp_slice[0] is None or comp_slice[1] is None:
+        return None
+    rows, cols = comp_slice
+    return int(min(rows.start, cols.start,
+                   shape[0] - rows.stop, shape[1] - cols.stop))
+
+
+def widened_position_bound(pos_bound, edge_dist, edge_bound, sat_area=None,
+                           min_area=0):
+    """The position bound of one fit: ``pos_bound``, or at least ``edge_bound``
+    when the component is edge-clipped (``edge_dist`` within
+    ``SATSTAR_EDGE_TOUCH_PX``) and holds at least ``min_area`` saturated pixels
+    (``sat_area``).  ``edge_bound`` <= 0, an unknown distance or an unknown
+    area below ``min_area`` leave it alone."""
+    if edge_bound <= 0 or edge_dist is None or edge_dist > SATSTAR_EDGE_TOUCH_PX:
+        return pos_bound
+    if min_area > 0 and (sat_area is None or sat_area < min_area):
+        return pos_bound
+    return max(pos_bound, edge_bound)
 
 
 def _nircam_position_locked(*, is_miri, lock_pos, lock_min_px, sat_area):
@@ -4760,11 +4918,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 src_comp_cx = 0.5 * (_sl[1].start + _sl[1].stop - 1)
             else:
                 src_comp_cy = src_comp_cx = np.nan
+            src_edge_dist = component_edge_distance(_sl, data.shape)
             # read by SATSTAR_QFIT_LOCAL_GATE (satstar_qfit_for_gate)
             _comp_sat_dq = component_carries_saturated_dq(dq, sources,
                                                           src_label, _sl)
         else:
             src_sat_area = None
+            src_edge_dist = None
             _comp_sat_dq = False
             src_comp_cy = src_comp_cx = np.nan
 
@@ -5244,6 +5404,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             psfphot = PSFPhotometry(
                                     localbkg_estimator=localbkg_estimator,
                                     fitter=lmfitter,
+                                    fitter_maxiters=_fit_switches['fitter_maxiters'],
                                     psf_model=_psf_for_fit,
                                     fit_shape=_size_eff,
                                     aperture_radius=15*fwhm_pix)
@@ -5293,6 +5454,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     pos_bound = 1.5 * fwhm_pix
                 else:
                     pos_bound = max(size_saturated, 1.5 * fwhm_pix)
+                    # An edge-clipped core leaves a seed (centre of mass of the
+                    # visible saturated pixels) several px inside the star; the
+                    # nominal bound then pins the fitted position.
+                    pos_bound = widened_position_bound(
+                        pos_bound, src_edge_dist,
+                        _fit_switches['edge_pos_bound'], src_sat_area,
+                        _fit_switches['edge_min_area'])
                 low_x  = x_init - pos_bound
                 high_x = x_init + pos_bound
                 low_y  = y_init - pos_bound
