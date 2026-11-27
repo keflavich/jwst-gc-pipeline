@@ -59,6 +59,7 @@ DEFAULT_MERGE_MODULES = 'merged'
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.dedup_catalog import flag_complementary_splits
+from jwst_gc_pipeline.photometry import merge_pair_rescue
 from jwst_gc_pipeline.photometry.frame_pixel_area import (
     PIXAREF_KEY, DEG2_PER_SR, apply_frame_pixel_area,
     apply_satstar_frame_pixel_area)
@@ -733,9 +734,16 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         skycoord_colname = 'skycoord_centroid'
         column_names = (flux_colname, flux_error_colname, 'qfit', 'qfit_group', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', ) + RESBKG_COLUMNS
 
+    # Opt-in (MERGE_PAIR_RESCUE_RATIO): a row far brighter than the row that seeded its
+    # nearest base row also starts a base row.  See merge_pair_rescue.
+    _pair_rescue = merge_pair_rescue.settings()
+    _pair_split_radius = split_row_radius(_filt, min_offset)
+    n_pair_rescued = 0
+
     # Loop 1: Add new sources, which are any that don't have a match in the existing catalog closer than min_offset
     # this loop _only_ adds new sources
     basecrds = None   # set by the first NON-EMPTY frame
+    base_flux = None  # flux of the row that seeded each base row (only with the pair rescue)
     for ii, tbl in enumerate(tbls):
         crds = tbl[skycoord_colname]
         # corner case: some fits resulted in flagged x, y that propagate
@@ -756,13 +764,22 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
                   f"{tbl.meta.get('exposure','?')} has 0 sources; skipping",
                   flush=True)
             continue
+        _frame_flux = (np.asarray(tbl[flux_colname], dtype=float)
+                       if _pair_rescue is not None else None)
         if basecrds is None:
             basecrds = crds
+            base_flux = _frame_flux
         else:
-            _, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
+            match_inds, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
 
             # add new sources to the cat iff their separation from an existing source in the catalog is >min
             keep = sep > min_offset
+            if _pair_rescue is not None:
+                rescued = merge_pair_rescue.rescue_rows(
+                    sep, _frame_flux, base_flux[match_inds], _pair_split_radius, *_pair_rescue) & ~keep
+                n_pair_rescued += int(rescued.sum())
+                keep = keep | rescued
+                base_flux = np.concatenate([base_flux, _frame_flux[keep]])
 
             newcrds = crds[keep]
             basecrds = SkyCoord([basecrds, newcrds])
@@ -930,23 +947,38 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print("Realigning")
         # remake base coordinates after the rematching
         basecrds = None
+        base_flux = None
+        n_pair_rescued = 0
         for ii, tbl in enumerate(tbls):
             crds = tbl[skycoord_colname]
             if len(crds) == 0:
                 continue
+            _frame_flux = (np.asarray(tbl[flux_colname], dtype=float)
+                           if _pair_rescue is not None else None)
             if basecrds is None:
                 basecrds = crds
+                base_flux = _frame_flux
             else:
-                _, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
+                match_inds, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
 
                 # add new sources to the cat iff their separation from an existing source in the catalog is >min
                 keep = (sep > min_offset)
+                if _pair_rescue is not None:
+                    rescued = merge_pair_rescue.rescue_rows(
+                        sep, _frame_flux, base_flux[match_inds], _pair_split_radius, *_pair_rescue) & ~keep
+                    n_pair_rescued += int(rescued.sum())
+                    keep = keep | rescued
+                    base_flux = np.concatenate([base_flux, _frame_flux[keep]])
 
                 newcrds = crds[keep]
                 basecrds = SkyCoord([basecrds, newcrds])
                 print(f"Added {len(newcrds)} new sources in exposure {tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''}")
 
     print(f"There are a total of {len(basecrds)} sources in the base coordinate list after rematching")
+    if _pair_rescue is not None:
+        print(f"combine_singleframe: pair rescue (flux ratio >= {_pair_rescue[0]:g}, flux >= {_pair_rescue[1]:g}): "
+              f"{n_pair_rescued} base row(s) started by a row far brighter than the row that seeded its nearest base row",
+              flush=True)
 
     assert flux_error_colname in tbls[0].colnames
     assert flux_error_colname in column_names
@@ -1029,7 +1061,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # Rows of one star that Loop 1 split in two: their frames are disjoint and
     # their averaged positions lie within 0.75 FWHM (at most min_offset, the
     # radius Loop 1 itself calls "same star").  See split_row_owners.
-    _split_radius = split_row_radius(_filt, min_offset)
+    _split_radius = _pair_split_radius
     owner = split_row_owners(arr_ra, arr_dec, _split_radius)
     n_split = int((owner != np.arange(n_src)).sum())
     if n_split:
@@ -1174,6 +1206,8 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     newtbl.meta = dict(tbls[0].meta)
     newtbl.meta['offsets'] = {tbl.meta['exposure']: (tbl.meta['ra_offset'], tbl.meta['dec_offset'])
                               for tbl in tbls}
+    if _pair_rescue is not None:
+        newtbl.meta['PAIRRESC'] = n_pair_rescued
     newtbl['skycoord_avg'] = avgpos
     newtbl['std_ra'] = std_ra
     newtbl['std_dec'] = std_dec
