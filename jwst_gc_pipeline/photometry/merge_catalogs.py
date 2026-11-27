@@ -91,6 +91,7 @@ from jwst_gc_pipeline.photometry.naming import (
 )
 from jwst_gc_pipeline.photometry.epsf_hybrid import (
     HYBRID_TOKEN, hybrid_psf_token)
+from jwst_gc_pipeline.photometry import merge_partial_box
 from jwst_gc_pipeline.photometry.measure_offsets import (
     DenseNNMedianAstrometryError, assert_sparse_reference_for_nn_median)
 # Imported as field_registry: `fields` is a local variable in these
@@ -714,6 +715,10 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
               f"min_offset {_min0}->{min_offset}, max_offset {_max0}->{max_offset}",
               flush=True)
 
+    # Opt-in (MERGE_PARTIAL_BOX_FRAC_MIN, MERGE_PARTIAL_BOX_ZMAX): read before any matching so a
+    # bad value stops the merge at once.  Applied where the weights are built.
+    _partial_box = merge_partial_box.settings()
+
     # set up DAO vs crowd column names
     if 'qf' in tbls[0].colnames:
         qfcn = 'qf'
@@ -1097,6 +1102,35 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # (keepmask) weights for position averaging.
     pos_weights = keepmask.astype('float32')
 
+    # Opt-in (MERGE_PARTIAL_BOX_FRAC_MIN): a row fitted to a part of its pixel box does not
+    # vote on a star that a full-box row measured.  The row leaves the flux weights, the
+    # position weights and (through weights_with_fallback) every averaged column;
+    # keepmask and nmatch_good are left alone.  See merge_partial_box.
+    n_partial_box_dropped = 0
+    n_partial_box_row = None
+    if _partial_box is not None:
+        _have_npix = [ii for ii, tbl in enumerate(tbls) if 'n_pixels_fit' in tbl.colnames]
+        if len(_have_npix) < len(tbls):
+            print(f"Phase 1: MERGE_PARTIAL_BOX_FRAC_MIN is set but {len(tbls) - len(_have_npix)} of "
+                  f"{len(tbls)} frames have no n_pixels_fit column; their rows are never left out "
+                  f"and never serve as the full-box row", flush=True)
+        _arr_npix = np.full(arr_flux.shape, np.nan, dtype='float32')
+        for ii in _have_npix:
+            _keep = saved_keep[ii]
+            _arr_npix[saved_match_inds[ii][_keep], ii] = np.asarray(tbls[ii]['n_pixels_fit'], dtype='float32')[_keep]
+        _drop, _box = merge_partial_box.partial_rows(_arr_npix, keepmask, arr_flux, arr_fluxerr,
+                                                     *_partial_box)
+        del _arr_npix
+        n_partial_box_dropped = int(_drop.sum())
+        n_partial_box_row = _drop.sum(axis=1).astype('int16')
+        weights = np.where(_drop, 0.0, weights)
+        pos_weights = np.where(_drop, 0.0, pos_weights).astype('float32')
+        print(f"Phase 1: MERGE_PARTIAL_BOX_FRAC_MIN={_partial_box[0]:g}"
+              f"{'' if _partial_box[1] is None else f' MERGE_PARTIAL_BOX_ZMAX={_partial_box[1]:g}'}: "
+              f"left {n_partial_box_dropped} row(s) of {int((n_partial_box_row > 0).sum())} source(s) out of the "
+              f"averages (fit box {_box:g} pixels)", flush=True)
+        del _drop
+
     # For flux / flux_err averages we keep inverse-variance weighting
     # where it is available, but fall back to uniform (keepmask)
     # weights per row when the inverse-variance weights are all NaN /
@@ -1179,6 +1213,11 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     newtbl['std_dec'] = std_dec
     newtbl['nmatch'] = nmatch
     newtbl['nmatch_good'] = nmatch_good
+    if n_partial_box_row is not None:
+        # nmatch_good still counts these rows; this is how many of them the
+        # averages below leave out (merge_partial_box)
+        newtbl['n_partial_box_dropped'] = n_partial_box_row
+        newtbl.meta['PBOXDROP'] = n_partial_box_dropped
     # nmatch_good == nmatch on a fallback row, the same as on a row with no
     # clipped frame; this flag tells the two apart.
     newtbl['clip_fallback'] = _all_clipped
