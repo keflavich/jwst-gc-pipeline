@@ -1,0 +1,41 @@
+Pixel checks of the F480M renders mk4f and mk3f against the unmasked render (optnm) and the masked render of the run (optfin): grid keywords, NaN-only counts and the largest difference where both are finite (MJy/sr)
+
+o105-optnm-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o105-optnm-vs-mk4f-F480M: NaN only in A 0, NaN only in B 2839717, NaN in both 394410, finite in both 9625073; max |A-B| 0, px with |A-B| > 1e-3: 0
+o105-optfin-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o105-optfin-vs-mk4f-F480M: NaN only in A 67922, NaN only in B 0, NaN in both 3234127, finite in both 9557151; max |A-B| 0, px with |A-B| > 1e-3: 0
+
+o105-optnm-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o105-optnm-vs-mk3f-F480M: NaN only in A 0, NaN only in B 1868153, NaN in both 394410, finite in both 10596637; max |A-B| 0, px with |A-B| > 1e-3: 0
+o105-optfin-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o105-optfin-vs-mk3f-F480M: NaN only in A 1039486, NaN only in B 0, NaN in both 2262563, finite in both 9557151; max |A-B| 0, px with |A-B| > 1e-3: 0
+
+o118-optnm-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o118-optnm-vs-mk4f-F480M: NaN only in A 0, NaN only in B 1359309, NaN in both 388483, finite in both 11111408; max |A-B| 0, px with |A-B| > 1e-3: 0
+o118-optfin-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o118-optfin-vs-mk4f-F480M: NaN only in A 65527, NaN only in B 0, NaN in both 1747792, finite in both 11045881; max |A-B| 0, px with |A-B| > 1e-3: 0
+
+o118-optnm-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o118-optnm-vs-mk3f-F480M: NaN only in A 0, NaN only in B 905841, NaN in both 388483, finite in both 11564876; max |A-B| 0, px with |A-B| > 1e-3: 0
+o118-optfin-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o118-optfin-vs-mk3f-F480M: NaN only in A 518995, NaN only in B 0, NaN in both 1294324, finite in both 11045881; max |A-B| 0, px with |A-B| > 1e-3: 0
+
+o130-optnm-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o130-optnm-vs-mk4f-F480M: NaN only in A 0, NaN only in B 978380, NaN in both 386459, finite in both 11494361; max |A-B| 0, px with |A-B| > 1e-3: 0
+o130-optfin-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o130-optfin-vs-mk4f-F480M: NaN only in A 64334, NaN only in B 0, NaN in both 1364839, finite in both 11430027; max |A-B| 0, px with |A-B| > 1e-3: 0
+
+o130-optnm-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o130-optnm-vs-mk3f-F480M: NaN only in A 0, NaN only in B 668760, NaN in both 386459, finite in both 11803981; max |A-B| 0, px with |A-B| > 1e-3: 0
+o130-optfin-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o130-optfin-vs-mk3f-F480M: NaN only in A 373954, NaN only in B 0, NaN in both 1055219, finite in both 11430027; max |A-B| 0, px with |A-B| > 1e-3: 0
+
+o138-optnm-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o138-optnm-vs-mk4f-F480M: NaN only in A 0, NaN only in B 1206958, NaN in both 387194, finite in both 11265048; max |A-B| 0, px with |A-B| > 1e-3: 0
+o138-optfin-vs-mk4f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o138-optfin-vs-mk4f-F480M: NaN only in A 63648, NaN only in B 0, NaN in both 1594152, finite in both 11201400; max |A-B| 0, px with |A-B| > 1e-3: 0
+
+o138-optnm-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o138-optnm-vs-mk3f-F480M: NaN only in A 0, NaN only in B 805725, NaN in both 387194, finite in both 11666281; max |A-B| 0, px with |A-B| > 1e-3: 0
+o138-optfin-vs-mk3f-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o138-optfin-vs-mk3f-F480M: NaN only in A 464881, NaN only in B 0, NaN in both 1192919, finite in both 11201400; max |A-B| 0, px with |A-B| > 1e-3: 0

@@ -1,0 +1,77 @@
+F480M masked renders with the mask values of the run (optfin: the F212N values) and with the F480M values of #1380 (mk4f: KFAC 4, mk3f: KFAC 3); the catalogs, models and unmasked pixels are those of the run.
+Other mask variables as in the run: MARGIN_PX 2, RING_FLUX_MIN 1e6, RING2_FLUX_MIN 3e4, RING2_RADIUS_PX 8, REJECTED 1. Leftover counts: residual peak above 0.7 times the data peak and the threshold in MJy/sr; craters: depth above the threshold in MJy/sr.
+
+tile      render  leftovers >=50 >=100 >=200 >=500 >=1000 | craters >=50 >=200 >=500 | masked %
+o105      optfin      49      2      0      0      0 |     0     0     0 |  23.33
+o105      mk4f        51      2      0      0      0 |     0     0     0 |  22.78
+o105      mk3f        55      2      0      0      0 |     1     0     0 |  14.99
+o118      optfin      48     10      1      0      0 |     0     0     0 |  11.43
+o118      mk4f        52     13      2      0      0 |     0     0     0 |  10.90
+o118      mk3f        53     13      2      0      0 |     0     0     0 |   7.26
+o130      optfin      56      7      1      0      0 |     0     0     0 |   8.36
+o130      mk4f        57      8      1      0      0 |     0     0     0 |   7.84
+o130      mk3f        57      8      1      0      0 |     0     0     0 |   5.36
+o138      optfin      40      4      0      0      0 |     0     0     0 |  10.19
+o138      mk4f        40      4      0      0      0 |     0     0     0 |   9.68
+o138      mk3f        43      4      0      0      0 |     0     0     0 |   6.46
+all four  optfin     193     23      2      0      0 |     0     0     0 |  13.32
+all four  mk4f       200     27      3      0      0 |     0     0     0 |  12.80
+all four  mk3f       208     27      3      0      0 |     1     0     0 |   8.52
+
+---- o105: comparison of the variants with the run (new = leftover without a counterpart within 3 pixels in the first render) ----
+=== optfin -> mk4f: leftovers >= 100: 2 -> 2; cleared 0, reduced <0.5x 0, unchanged 2, worse >1.5x 0; new (no counterpart in optfin) 0
+    cleared >= 200: 0 of 0; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+=== optfin -> mk3f: leftovers >= 100: 2 -> 2; cleared 0, reduced <0.5x 0, unchanged 2, worse >1.5x 0; new (no counterpart in optfin) 0
+    cleared >= 200: 0 of 0; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 0 -> 1; gone 0 (>= 200: 0), new 1 (>= 200: 0)
+    crater new  (  667,  775) depth 52 model_peak 166 depth_over_model 0.312 nearest vetted row 0.024"
+
+---- o118: comparison of the variants with the run (new = leftover without a counterpart within 3 pixels in the first render) ----
+=== optfin -> mk4f: leftovers >= 100: 10 -> 13; cleared 0, reduced <0.5x 0, unchanged 10, worse >1.5x 0; new (no counterpart in optfin) 3
+    cleared >= 200: 0 of 1; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: NOT_IN_M7_CATALOG 2, VETTED_BUT_UNSUBTRACTED 1
+    new      (   65, 2223) NOT_IN_M7_CATALOG                       472
+    new      ( 1542, 2166) VETTED_BUT_UNSUBTRACTED                 175
+    new      ( 2112, 1715) NOT_IN_M7_CATALOG                       131
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+=== optfin -> mk3f: leftovers >= 100: 10 -> 13; cleared 0, reduced <0.5x 0, unchanged 10, worse >1.5x 0; new (no counterpart in optfin) 3
+    cleared >= 200: 0 of 1; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: NOT_IN_M7_CATALOG 2, VETTED_BUT_UNSUBTRACTED 1
+    new      (   65, 2223) NOT_IN_M7_CATALOG                       472
+    new      ( 1542, 2166) VETTED_BUT_UNSUBTRACTED                 175
+    new      ( 2112, 1715) NOT_IN_M7_CATALOG                       131
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+---- o130: comparison of the variants with the run (new = leftover without a counterpart within 3 pixels in the first render) ----
+=== optfin -> mk4f: leftovers >= 100: 7 -> 8; cleared 0, reduced <0.5x 0, unchanged 7, worse >1.5x 0; new (no counterpart in optfin) 1
+    cleared >= 200: 0 of 1; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: NOT_IN_M7_CATALOG 1
+    new      (  834, 2121) NOT_IN_M7_CATALOG                       113
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+=== optfin -> mk3f: leftovers >= 100: 7 -> 8; cleared 0, reduced <0.5x 0, unchanged 7, worse >1.5x 0; new (no counterpart in optfin) 1
+    cleared >= 200: 0 of 1; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: NOT_IN_M7_CATALOG 1
+    new      (  834, 2121) NOT_IN_M7_CATALOG                       113
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+---- o138: comparison of the variants with the run (new = leftover without a counterpart within 3 pixels in the first render) ----
+=== optfin -> mk4f: leftovers >= 100: 4 -> 4; cleared 0, reduced <0.5x 0, unchanged 4, worse >1.5x 0; new (no counterpart in optfin) 0
+    cleared >= 200: 0 of 0; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+=== optfin -> mk3f: leftovers >= 100: 4 -> 4; cleared 0, reduced <0.5x 0, unchanged 4, worse >1.5x 0; new (no counterpart in optfin) 0
+    cleared >= 200: 0 of 0; >= 500: 0 of 0; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 0 -> 0; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+

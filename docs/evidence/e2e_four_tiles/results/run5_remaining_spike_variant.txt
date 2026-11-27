@@ -1,0 +1,25 @@
+Variant of the isolated-spike finder (find_positive_spikes) that tolerates one unusable pixel (non-finite, SATURATED or DO_NOT_USE) in the 3x3 box and judges isolation on the usable neighbours
+shipped = spikes the finder of the run finds in the crf frame; variant = spikes the variant finds; frames of o130, F480M (12 frames) and F212N (48 frames)
+
+F480M: 12 frames, MAXBAD 1
+1_02101_00001_nrcalong_d: shipped 7, variant 7, added 0
+1_02101_00001_nrcblong_d: shipped 6, variant 6, added 0
+1_02101_00002_nrcalong_d: shipped 4, variant 4, added 0
+1_02101_00002_nrcblong_d: shipped 3, variant 3, added 0
+1_02101_00003_nrcalong_d: shipped 6, variant 8, added 2
+      added (1525,141) peak 1572 excess 1566 (738 sigma) neighbour 0.006 of it, bad neighbours 1; 2 other frames cover it, their 3x3 max 9 = 0.00 of the excess
+      added (760,303) peak 1282 excess 1275 (791 sigma) neighbour 0.001 of it, bad neighbours 1; 5 other frames cover it, their 3x3 max 9 = 0.00 of the excess
+1_02101_00003_nrcblong_d: shipped 7, variant 7, added 0
+1_02101_00004_nrcalong_d: shipped 8, variant 9, added 1
+      added (760,303) peak 1284 excess 1276 (976 sigma) neighbour 0.002 of it, bad neighbours 1; 3 other frames cover it, their 3x3 max 11 = 0.00 of the excess
+1_02101_00004_nrcblong_d: shipped 8, variant 9, added 1
+      added (821,2037) peak 3360 excess 3332 (150 sigma) neighbour 0.017 of it, bad neighbours 1; 5 other frames cover it, their 3x3 max 94 = 0.02 of the excess
+1_02101_00005_nrcalong_d: shipped 3, variant 3, added 0
+1_02101_00005_nrcblong_d: shipped 6, variant 6, added 0
+1_02101_00006_nrcalong_d: shipped 6, variant 6, added 0
+1_02101_00006_nrcblong_d: shipped 5, variant 5, added 0
+TOTAL shipped 69, variant 73
+
+F212N: 48 frames, MAXBAD 1
+      added (1819,1980) peak 604 excess 602 (244 sigma) neighbour 0.037 of it, bad neighbours 1; 5 other frames cover it, their 3x3 max 12 = 0.02 of the excess
+TOTAL shipped 9, variant 10

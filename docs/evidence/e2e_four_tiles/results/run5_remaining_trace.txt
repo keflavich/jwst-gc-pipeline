@@ -1,0 +1,37 @@
+Trace of the 16 leftovers >= 200 MJy/sr of the masked renders (optfin) of run e2e5 (2026-11-27)
+peaks in MJy/sr; x, y = pixel of the mosaic; score = class of the score product (SATSTAR_NEAR labels of 0, 3, 5, 8, 9 are artifacts: nearest satstar 0.66-0.86 arcsec away, unrelated)
+group = the mechanism that keeps the star from being subtracted
+
+ # tile band      x     y  resid   data  model group       score_class
+ 0 o105 F212N   434  3684    358    495    439 b   pair        SATSTAR_NEAR
+     row A 2.5 px away (flux 7466, qfit 0.28), no row at B; per-frame finder sees one maximum (A) in 2 frames; i2d detection of B: round1 1.08, S/N 56, prominence 135, unsubtracted fraction 0.72 < 0.9 gate
+ 1 o105 F212N  5368  4587    345    345      0 b   nancore     NOT_IN_M7_CATALOG
+     one covering frame (exp1 nrca4), core pixel DO_NOT_USE, NaN-filled; per-frame finder sharpness 0.07 (bound 0.50); i2d detection sharpness 0.33 < 0.4, prominence 42 < 50, S/N 38; no m6 row within 8.1 px
+ 2 o105 F212N 11052  3798    336    423    181 b   compcut     NOT_IN_M7_CATALOG
+     own-band m6 vetted row 3527 (S/N 87, unsaturated) cut by the companion cut (flux ratio 0.078 < 0.1 vs a 45252 star 1.76 FWHM away); #1377 exemption blocked: cross-band seed position 1.628 FWHM from the star (< 1.75); per-frame finder has no maximum; replay with keep radius 1.5 adds the row
+ 3 o105 F212N  7030  3275    254    259      8 b   shape       SATSTAR_NEAR
+     no m6 row; per-frame finder detects the star in 4 of 4 frames (sharpness 0.54-0.59) but roundness1 -1.22 to -1.30 (bound +-1.0); i2d detection round1 1.12, S/N 70, fraction 0.98, prominence 30 < 50
+ 4 o105 F212N  6529  3558    245    246      1 b   shape       NOT_IN_M7_CATALOG
+     no m6 row; per-frame roundness1 -1.02 to -1.29 in 4 of 4 frames (bound +-1.0); i2d detection round1 1.00, S/N 68, fraction 1.00, prominence 40 < 50
+ 5 o105 F212N  3245  3878    209    285    135 b   pair        SATSTAR_NEAR
+     row A 2.9 px away (flux 4788, qfit 0.29), no row at B; per-frame finder one maximum (A) in 5 frames; i2d detection of B: round1 0.93, S/N 81, prominence 141, unsubtracted fraction 0.74 < 0.9 gate
+ 6 o105 F212N  1660   341    205    291     92 b   compcut     NOT_IN_M7_CATALOG
+     own-band m6 vetted row 2197 (S/N 67, unsaturated) cut by the companion cut (ratio 0.089 vs a 24645 star 1.86 FWHM away); cross-band seed position 1.728 FWHM < 1.75 blocks the #1377 exemption; per-frame finder no maximum within 3 px; replay with keep radius 1.5 adds the row
+ 7 o105 F212N  9362  1291    201    251    105 a   mergepair   VETTED_BUT_UNSUBTRACTED
+     m6 had two vetted rows 1.6 px apart (2108, 958); per-frame fits resolve strong 1556-2145 + weak 1142-1704, merge matches them into one row (flux 1206, qfit 0.155, nmatch 5/3) beside an edge-truncated first-frame row (795, flags 1); separation 0.7 FWHM is inside the split-row radius, so #1365 starts no row
+ 8 o118 F212N   330   111    939    939      2 b   nancore     SATSTAR_NEAR
+     one covering frame (exp4 nrca1), core pixel DO_NOT_USE, NaN-filled to 649 against a ring of 900-1040; per-frame finder sharpness 0.07; i2d detection peak 920, S/N 68, prominence 174, sharpness 0.39 < 0.4 (fails by 0.01); no m6 row; SATSTAR_NEAR label is an artifact (nearest satstar 0.66 arcsec = 21 px, qfit 1.1-3.4)
+ 9 o118 F212N   220  4407    423    471    142 b   pair        SATSTAR_NEAR
+     one covering frame; row A 3.1 px away (flux 7238, qfit 0.405), no row at B; i2d detection of B: round1 0.94, S/N 41, prominence 93, unsubtracted fraction 0.90 (below the 0.9 gate)
+10 o118 F212N   637  3732    308    309      1 c+d maskedge    NOT_IN_M7_CATALOG
+     wing of an unmodelled very bright saturated star at the edge of its NaN disc in the masked render; the two covering frames carry rejected satstar fits (qfit 17.9 and 29.7); the production render and the unmasked render of the run show the star as one leftover of 30152 MJy/sr at (645, 3733) (data peak 30156, model peak 5); the two wing leftovers exist only in the masked render
+11 o118 F212N   641  3740    203    206      6 c+d maskedge    NOT_IN_M7_CATALOG
+     same star and cause as the previous row (6 px away)
+12 o130 F212N  5065    68   1241   1391    316 a   mergeweight VETTED_BUT_UNSUBTRACTED
+     exp2 fit flux 14434 +- 64.7 (qfit 0.0126, flags 0); exp3 row 2.96 px off, flux 1295 +- 31.1 (qfit 0.19, flags 1; 53 of 169 box pixels NaN/DNU, star 1.6 px from the detector edge); two frames are not sigma-clipped; inverse-variance mean 3762 (production 3761, run 3849); m6 had a good row 14335
+13 o138 F212N  7366  4240    287    357    243 b   pair        NOT_IN_M7_CATALOG
+     row A 2.6 px away (flux 6387, qfit 0.265, nmatch 6), no row at B; per-frame finder one maximum (A) in 5 frames; i2d detection of B: round1 0.85, S/N 97, prominence 117, unsubtracted fraction 0.80 < 0.9 gate
+14 o118 F480M   368   334    253    357    164 pair        NOT_IN_M7_CATALOG
+     own-band seed A 6.1 px away (flux 6837; 1.2 F480M FWHM of 5.2 px), no row at B; i2d detection of B: round1 0.87, S/N 239, prominence 157, unsubtracted fraction 0.71 < 0.9 gate
+15 o130 F480M  1932   146    359    361      5 spike       VETTED_BUT_UNSUBTRACTED
+     nrcalong exp3 detector pixel (1525,141) = 1572 MJy/sr against 6-15 around it and 73 in the other five exposures; high in both integrations (1829 and 1748 DN/group), so the ramp test does not fire (box-sum ratio 0.58 > 0.5); spike mask skips it because the lower-left neighbour is DO_NOT_USE (3x3 box must be complete); excess 1566 MJy/sr over the annulus background 6.4 = 738 times the annulus MAD-sigma (about 2.1), brightest usable neighbour 0.55 % of it
