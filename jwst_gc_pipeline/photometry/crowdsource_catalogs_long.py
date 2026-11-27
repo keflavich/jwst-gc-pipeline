@@ -1472,14 +1472,36 @@ def _protect_mask(x, y, protect_xy, protect_radius_pix):
     return prot
 
 
+def _mask_pixel_tree(mask):
+    """``cKDTree`` over the pixel centres ``(column, row)`` of the True pixels
+    of ``mask``; ``None`` when there are none."""
+    rows, cols = np.nonzero(mask)
+    if len(rows) == 0:
+        return None
+    return cKDTree(np.column_stack([cols, rows]).astype(float))
+
+
+def _continuous_sat_distance(x, y, in_frame, tree):
+    """Euclidean distance from each fitted ``(x, y)`` to the centre of the
+    nearest pixel in ``tree`` (``_mask_pixel_tree``), ``inf`` for rows outside
+    ``in_frame`` and for an empty tree.  No rounding of the position."""
+    dist = np.full(len(x), np.inf, dtype=float)
+    if tree is not None and np.any(in_frame):
+        dist[in_frame] = tree.query(np.column_stack([x[in_frame], y[in_frame]]))[0]
+    return dist
+
+
 def _seeded_companion_mask(tbl, x, y, ix, iy, in_frame, *, seed_xy,
-                           seed_radius_pix, lost_dist_map, max_sat_dist_pix):
+                           seed_radius_pix, lost_dist_map, max_sat_dist_pix,
+                           lost_dist=None):
     """Fits exempt from the near-saturation drop as seeded companions.
 
     A fit qualifies when it lies within ``seed_radius_pix`` of a seed
     position (the i2d / cross-band seed catalog the pass was seeded from),
     its nearest SATURATED pixel that the fit still treats as lost
-    (``lost_dist_map``) is more than ``max_sat_dist_pix`` away, and it has a
+    (``lost_dist_map``, looked up at the rounded position; or ``lost_dist``,
+    the per-row distance of the continuous rule when given) is more than
+    ``max_sat_dist_pix`` away, and it has a
     finite ``flux_fit > 0`` and a finite ``qfit``.  The SATURATED pixels
     closer than that are then all valid-rate pixels the frame preparation
     gave back to the fit (``_handoff_restore_pixels``), i.e. the late-group
@@ -1494,8 +1516,11 @@ def _seeded_companion_mask(tbl, x, y, ix, iy, in_frame, *, seed_xy,
     comp = _protect_mask(x, y, seed_xy, seed_radius_pix)
     if not comp.any():
         return comp
-    lost = np.zeros(len(x), dtype=float)
-    lost[in_frame] = lost_dist_map[iy[in_frame], ix[in_frame]]
+    if lost_dist is not None:
+        lost = np.asarray(lost_dist, dtype=float)
+    else:
+        lost = np.zeros(len(x), dtype=float)
+        lost[in_frame] = lost_dist_map[iy[in_frame], ix[in_frame]]
     comp &= lost > float(max_sat_dist_pix)
     flux = np.asarray(tbl['flux_fit'], dtype=float)
     comp &= np.isfinite(flux) & (flux > 0)
@@ -1512,10 +1537,28 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                             handoff_xy=None, handoff_radius_pix=0.0,
                             companion_seed_xy=None,
                             companion_seed_radius_pix=0.0,
-                            companion_restored_mask=None):
+                            companion_restored_mask=None,
+                            continuous_dist=False):
     """Drop fits from ``phot_obj.results`` whose center is within
     ``max_sat_dist_pix`` pixels of any SATURATED-DQ pixel and keep the
     PSFPhotometry object's state consistent.
+
+    By default the distance is read from the distance transform at the pixel
+    the fit ROUNDS to (``np.rint``, half to even): a fit within half a pixel of
+    a pixel centre is measured from that centre, so two fits 0.001 px apart on
+    either side of a half-pixel boundary are measured from pixels one column
+    apart and can fall either side of ``max_sat_dist_pix`` (a pixel edge-
+    adjacent to a SATURATED pixel is at 1.0 and dropped, a diagonal one at
+    1.414 and kept).  ``continuous_dist=True`` (``cataloging`` passes it for
+    NIRCam under env ``NEARSAT_CONTINUOUS_DIST``) measures instead the Euclidean
+    distance from the unrounded ``(x_fit, y_fit)`` to the nearest SATURATED
+    pixel centre and drops at ``<= max_sat_dist_pix``; the seeded-companion
+    test uses the same distance to the nearest still-lost pixel.  The two rules
+    differ near the threshold: the continuous disc of radius 1.0 around a
+    SATURATED pixel keeps a fit 1.0-1.5 px away along a pixel axis that the
+    rounded rule drops, and drops a fit inside the disc on the diagonal
+    (``0.6, 0.6`` from the centre) that the rounded rule keeps.  The log
+    line of a pass states how many fits each rule would drop.
 
     Rationale: regular ``phot_basic``/``phot_iter`` fits placed on a
     saturated pixel are unreliable -- the central data value is "stuck"
@@ -1549,6 +1592,11 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         (``_handoff_restore_pixels``).  Only the SATURATED pixels NOT in it
         count as lost for the companion exemption; ``None`` counts every
         SATURATED pixel as lost, so nothing is exempt.
+    continuous_dist : bool
+        Measure the Euclidean distance from the unrounded fitted position to
+        the nearest SATURATED pixel centre instead of reading the distance
+        transform at the rounded pixel (see above).  ``False`` (the default)
+        leaves the behaviour unchanged.
     """
     if dq is None:
         return 0
@@ -1558,12 +1606,15 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         return 0
     # distance_transform_edt: distance to nearest True in the input mask.
     # We want distance to nearest saturated pixel, so feed ~sat_mask.
+    # The continuous rule needs it only for the census of the log line.
     sat_dist_map = ndimage.distance_transform_edt(~sat_mask)
+    sat_tree = _mask_pixel_tree(sat_mask) if continuous_dist else None
     use_companion = (companion_seed_xy is not None
                      and len(companion_seed_xy) > 0
                      and companion_seed_radius_pix > 0
                      and companion_restored_mask is not None)
     lost_dist_map = None
+    lost_tree = None
     if use_companion:
         restored = np.asarray(companion_restored_mask, dtype=bool)
         if restored.shape != sat_mask.shape:
@@ -1573,6 +1624,7 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         lost = sat_mask & ~restored
         if lost.any():
             lost_dist_map = ndimage.distance_transform_edt(~lost)
+            lost_tree = _mask_pixel_tree(lost)
         else:
             # every SATURATED pixel was restored: no lost pixel anywhere.
             # distance_transform_edt of an all-True array is not a distance
@@ -1596,6 +1648,20 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
     sat_dist = np.full(len(res), np.inf, dtype=float)
     if np.any(in_frame):
         sat_dist[in_frame] = sat_dist_map[iy[in_frame], ix[in_frame]]
+    lost_dist = None
+    if continuous_dist:
+        rounded_drop = sat_dist <= float(max_sat_dist_pix)
+        sat_dist = _continuous_sat_distance(x, y, in_frame, sat_tree)
+        if use_companion:
+            lost_dist = _continuous_sat_distance(x, y, in_frame, lost_tree)
+        cont_drop = sat_dist <= float(max_sat_dist_pix)
+        if rounded_drop.any() or cont_drop.any():
+            print(f"Saturation-proximity filter ({label}): continuous distance "
+                  f"<= {max_sat_dist_pix:.1f} px of a SATURATED pixel centre: "
+                  f"{int(cont_drop.sum())} fits (rounded-pixel rule: "
+                  f"{int(rounded_drop.sum())}; kept only by the continuous "
+                  f"rule {int((rounded_drop & ~cont_drop).sum())}, dropped only "
+                  f"by it {int((cont_drop & ~rounded_drop).sum())})", flush=True)
 
     drop = sat_dist <= float(max_sat_dist_pix)
     if drop.any() and protect_xy is not None and protect_radius_pix > 0:
@@ -1618,7 +1684,8 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         comp = _seeded_companion_mask(
             res, x, y, ix, iy, in_frame, seed_xy=companion_seed_xy,
             seed_radius_pix=companion_seed_radius_pix,
-            lost_dist_map=lost_dist_map, max_sat_dist_pix=max_sat_dist_pix)
+            lost_dist_map=lost_dist_map, max_sat_dist_pix=max_sat_dist_pix,
+            lost_dist=lost_dist)
         n_comp = int(np.sum(drop & comp))
         if n_comp:
             drop = drop & ~comp
@@ -1630,7 +1697,8 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         return 0
 
     print(f"Saturation-proximity filter ({label}): dropping {n_drop} fits "
-          f"within {max_sat_dist_pix:.1f} pix of a SATURATED-DQ pixel "
+          f"within {max_sat_dist_pix:.1f} pix of a SATURATED-DQ pixel"
+          f"{' (continuous distance)' if continuous_dist else ''} "
           f"({len(res)} -> {len(res) - n_drop}); "
           f"sat_pixels_in_frame={n_sat}", flush=True)
 
@@ -1682,7 +1750,9 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                     & (s_ix >= 0) & (s_ix < nx)
                     & (s_iy >= 0) & (s_iy < ny))
             s_dist = np.full(len(sub), np.inf, dtype=float)
-            if np.any(s_in):
+            if continuous_dist:
+                s_dist = _continuous_sat_distance(sx, sy, s_in, sat_tree)
+            elif np.any(s_in):
                 s_dist[s_in] = sat_dist_map[s_iy[s_in], s_ix[s_in]]
             sub_drop = s_dist <= float(max_sat_dist_pix)
             if sub_drop.any() and protect_xy is not None and protect_radius_pix > 0:
@@ -1698,7 +1768,9 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
                     sub, sx, sy, s_ix, s_iy, s_in, seed_xy=companion_seed_xy,
                     seed_radius_pix=companion_seed_radius_pix,
                     lost_dist_map=lost_dist_map,
-                    max_sat_dist_pix=max_sat_dist_pix)
+                    max_sat_dist_pix=max_sat_dist_pix,
+                    lost_dist=(_continuous_sat_distance(sx, sy, s_in, lost_tree)
+                               if continuous_dist else None))
             sub_keep = ~sub_drop
             if sub_drop.any():
                 fr.results = sub[sub_keep]

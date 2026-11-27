@@ -382,6 +382,29 @@ def _seeded_companion_kwargs(ctx, prev_seed_catalog, is_miri):
                 companion_restored_mask=np.asarray(restored, dtype=bool))
 
 
+def _near_sat_continuous_enabled(is_miri):
+    """``NEARSAT_CONTINUOUS_DIST`` (default off): measure the near-saturation
+    filter's distance from the unrounded fitted position instead of the pixel
+    it rounds to (``_L._filter_near_saturation(continuous_dist=True)``).
+
+    The default reads the distance transform at ``np.rint(x_fit), np.rint(y_fit)``
+    and drops a fit at 1.0 px or less from a SATURATED pixel, so a fit 0.001 px
+    either side of a half-pixel boundary can be kept or dropped
+    (o105 F480M nrcalong exposure 1: x_fit 1834.500295 is kept, 1834.499118 is
+    dropped, 1.27 px from the saturated pixel (1834, 1632) in both cases).  The
+    continuous rule drops at ``near_sat_dist_pix`` (1.0) from the nearest
+    SATURATED pixel centre.  NIRCam only: MIRI's threshold is 1.5 FWHM, where
+    the rounding is a small part of the distance, and stays as it was.
+
+    An unrecognised on/off value raises (``_handoff_env_flag``).
+    """
+    on = _handoff_env_flag('NEARSAT_CONTINUOUS_DIST', False)
+    if on and not is_miri:
+        print("[manual] NEARSAT_CONTINUOUS_DIST: near-saturation filter uses the "
+              "unrounded fitted position", flush=True)
+    return bool(on and not is_miri)
+
+
 def _bright_presub_select(seed, data, peak_noise):
     """Boolean mask of ``seed`` rows whose 3x3 data peak exceeds
     ``peak_noise`` times the median of the frame's local noise map.
@@ -1611,7 +1634,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       frame_ww=None, protect_xy=None, protect_radius_pix=0.0,
                       handoff_xy=None, handoff_radius_pix=0.0,
                       companion_seed_xy=None, companion_seed_radius_pix=0.0,
-                      companion_restored_mask=None):
+                      companion_restored_mask=None, near_sat_continuous=False):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -1626,6 +1649,10 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     ``companion_restored_mask`` likewise exempt seeded companions next to a
     handed-off star's restored footprint (``_seeded_companion_mask``, env
     ``SATPROX_SEEDED_COMPANION``); ``None`` leaves the chain unchanged.
+    ``near_sat_continuous`` (env ``NEARSAT_CONTINUOUS_DIST``,
+    ``_near_sat_continuous_enabled``) makes the near-saturation filter measure
+    the distance from the unrounded fitted position; ``False`` leaves the chain
+    unchanged.
 
     ``init_params`` rows with ``keep_in_fit`` True (cross-epoch seeds, see
     ``_build_manual_seed``) stay in the fit through the post-fit dedup, the
@@ -1746,7 +1773,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                             handoff_radius_pix=handoff_radius_pix,
                             companion_seed_xy=companion_seed_xy,
                             companion_seed_radius_pix=companion_seed_radius_pix,
-                            companion_restored_mask=companion_restored_mask)
+                            companion_restored_mask=companion_restored_mask,
+                            continuous_dist=near_sat_continuous)
     _filter_satstar_artifacts(phot, satstar_model_subtracted, err,
                               sig_K=float(options.satstar_artifact_sigK),
                               ratio_cut=float(options.satstar_artifact_ratio),
@@ -5463,6 +5491,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     _handoff_xy = None if _is_miri else getattr(ctx, 'handoff_xy', None)
     _handoff_radius = getattr(ctx, 'handoff_radius', 0.0)
     _companion_kw = _seeded_companion_kwargs(ctx, prev_seed_catalog, _is_miri)
+    _near_sat_continuous = _near_sat_continuous_enabled(_is_miri)
 
     def _pass(seed, label, prom_snr=None):
         # prom_snr: per-pass prominence-reject threshold.  None -> default
@@ -5493,6 +5522,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             frame_ww=ctx.ww, protect_xy=_protect_xy,
             protect_radius_pix=_protect_radius,
             handoff_xy=_handoff_xy, handoff_radius_pix=_handoff_radius,
+            near_sat_continuous=_near_sat_continuous,
             **_companion_kw)
 
     if manual_phase == 'm12':
