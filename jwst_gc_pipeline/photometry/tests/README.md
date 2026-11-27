@@ -34,6 +34,7 @@ overlap, registration gate, obs-token collisions, satstar gates, …). Use
 | crowdsource_catalogs_long.py::`forced_psf_photometry` | closed-form forced-photometry flux solve | `…::TestForcedPsfPhotometry` |
 | merge_catalogs.py::`nanaverage_numpy` / `nanaverage_dask` | `nanaverage` all-zero / all-NaN-weight rows → NaN | `test_merge_catalogs_regressions.py::TestNanaverage` |
 | merge_catalogs.py::`combine_singleframe` | ~31k rows lost: NaN flux_err → all-zero pos weights → NaN pos → dropped | `…::test_combine_singleframe_keeps_sources_with_nan_fluxerr` |
+| merge_catalogs.py::`combine_singleframe` (`MERGE_PARTIAL_BOX_FRAC_MIN`) | a 10-pixel fit-box row with a small `flux_err` outvotes the 25-pixel row of the same star (o130 F212N (5065, 68): 3760.5 vs 14433.84); default must stay unchanged | `test_combine_singleframe_partial_box.py` |
 | merge_catalogs.py::`merge_catalogs` (`ref_filter`) | missing `ref_filter` must raise (no silent reference switch) | `…::test_merge_catalogs_missing_ref_filter_raises` |
 | make_reference_from_pipeline_catalogs.py::`summarize_offsets` | `summarize_offsets` empty-input guard | `test_make_reference_regressions.py::TestSummarizeOffsets` |
 | make_reference_from_pipeline_catalogs.py::`initial_spatial_photometric_match` | `initial_spatial_photometric_match` MAD==0 fallback | `…::TestInitialSpatialPhotometricMatchMadFallback` |
