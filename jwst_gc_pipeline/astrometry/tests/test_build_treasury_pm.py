@@ -874,16 +874,26 @@ def _const_fields(per_tile, ny=200, nx=200):
 
 
 def test_load_tile_frame_offsets_reads_the_fields_and_refuses_bad_files(tmp_path):
+    import hashlib
     from jwst_gc_pipeline.astrometry.build_treasury_pm import load_tile_frame_offsets
     good = _write_offsets(tmp_path / 'offs.npz', _const_fields([(0, 0), (2, -1), (-1, 3)]))
     off = load_tile_frame_offsets(good)
     assert off['fields'].shape == (3, 2, 200, 200) and off['tiles'].tolist() == [0, 1, 2]
-    assert off['file'] == 'offs.npz' and len(off['sha256']) == 16
+    assert off['file'] == 'offs.npz'
+    assert off['sha256'] == hashlib.sha256((tmp_path / 'offs.npz').read_bytes()).hexdigest()[:16]
     assert off['x0'] == -100.0 and off['pixel_arcsec'] == 1.0
-    with pytest.raises(ValueError, match='lacks'):
-        load_tile_frame_offsets(_write_offsets(tmp_path / 'a.npz', _const_fields([(0, 0)] * 3), x0=None))
-    with pytest.raises(ValueError, match='fields must be'):
+    for key in ('fields', 'tiles', 'origin_deg', 'x0', 'y0', 'pixel_arcsec'):          # each of the six is required
+        with np.load(good) as z:
+            kept = {k: z[k] for k in z.files if k != key}
+        np.savez(tmp_path / f'lacks_{key}.npz', **kept)
+        with pytest.raises(ValueError, match=f'lacks.*{key}'):
+            load_tile_frame_offsets(str(tmp_path / f'lacks_{key}.npz'))
+    with pytest.raises(ValueError, match='fields must be'):                             # more fields than tiles
         load_tile_frame_offsets(_write_offsets(tmp_path / 'b.npz', _const_fields([(0, 0)] * 3), tiles=(0, 1)))
+    with pytest.raises(ValueError, match='fields must be'):                             # fewer fields than tiles
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'b2.npz', _const_fields([(0, 0)] * 2), tiles=(0, 1, 2)))
+    with pytest.raises(ValueError, match='fields must be'):                             # an empty grid
+        load_tile_frame_offsets(_write_offsets(tmp_path / 'b3.npz', _const_fields([(0, 0)] * 3, ny=0, nx=5)))
     with pytest.raises(ValueError, match='fields must be'):
         load_tile_frame_offsets(_write_offsets(tmp_path / 'c.npz', _const_fields([(0, 0)] * 3)[:, :1]))
     with pytest.raises(ValueError, match='duplicate tile'):
@@ -927,6 +937,34 @@ def test_tile_frame_shift_is_the_field_difference_between_the_tiles(tmp_path):
     np.testing.assert_allclose(tile_frame_shift(off, far, np.array([1]), np.array([0]))[0], 1.0 - 0.1 * 99.5, atol=2e-3)
     with pytest.raises(ValueError, match='covers observations'):
         tile_frame_shift(off, sc[:1], np.array([1]), np.array([7]))
+
+
+def test_tile_frame_shift_reads_a_sloped_field_on_an_asymmetric_grid_by_tile_id(tmp_path):
+    """x0 != y0, nx != ny, a 2" pixel and a tile list that is not 0, 1, 2 in order: the grid origin, the pixel scale, the
+    half pixel, the axis order and the tile-id lookup each change the answer.  The fields are linear in east and north,
+    which the bilinear read reproduces exactly inside the grid."""
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import load_tile_frame_offsets, tile_frame_shift
+    x0, y0, pix, nx, ny = -40.0, -70.0, 2.0, 60, 100                      # east -40..80", north -70..130"
+    coef = {5: ((0.30, 0.020, -0.010), (-0.50, 0.015, 0.025)),            # (east, north) error = a + b * east" + c * north"
+            2: ((-0.10, 0.005, 0.004), (0.20, -0.012, 0.008)),
+            7: ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))}
+
+    def field(tile, x, y):
+        return [a + b * x + c * y for a, b, c in coef[tile]]
+
+    X, Y = np.meshgrid(x0 + pix * (np.arange(nx) + 0.5), y0 + pix * (np.arange(ny) + 0.5))      # (ny, nx)
+    tiles = (7, 5, 2)
+    off = load_tile_frame_offsets(_write_offsets(tmp_path / 'sloped.npz', np.array([field(t, X, Y) for t in tiles]),
+                                                 tiles=tiles, x0=x0, y0=y0, pix=pix))
+    px, py = np.array([-25.3, 12.0, 60.5, -38.0, 0.0]), np.array([3.7, 88.4, -41.2, 125.0, 0.0])
+    sc = CENTER.spherical_offsets_by(px * u.arcsec, py * u.arcsec)
+    for a, b in ((5, 7), (7, 5), (2, 5), (5, 2), (2, 7)):
+        e, n = tile_frame_shift(off, sc, np.full(len(px), a), np.full(len(px), b))
+        np.testing.assert_allclose([e, n], np.subtract(field(b, px, py), field(a, px, py)), atol=1e-5)
+    ft, tt = np.array([5, 2, 7, 5, 2]), np.array([7, 5, 5, 2, 7])                  # several tile pairs in one call
+    e, n = tile_frame_shift(off, sc, ft, tt)
+    want = [[field(b, x, y)[ax] - field(a, x, y)[ax] for a, b, x, y in zip(ft, tt, px, py)] for ax in (0, 1)]
+    np.testing.assert_allclose([e, n], want, atol=1e-5)
 
 
 def _three_stars(F):
@@ -1006,6 +1044,20 @@ def test_average_ref_duplicates_anchor_flags_choose_the_frame(tmp_path):
         average_ref_duplicates(ref, 0.020, anchor=flag)
 
 
+def test_average_ref_duplicates_reads_the_tile_fields_at_each_copys_own_position(tmp_path):
+    from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates, load_tile_frame_offsets
+    F = _const_fields([(0, 0), (0, 0), (0, 0)])
+    F[1, 0] = 20.0 * (-100.0 + (np.arange(200) + 0.5))[None, :]       # tile 1: 20 mas of east error per arcsec of east
+    off = load_tile_frame_offsets(_write_offsets(tmp_path / 'slope.npz', F))
+    ref = _ref_dict([dict(obs=0, dx=750.0, dy=0.0, frames=3), dict(obs=1, dx=765.0, dy=0.0, frames=3)])
+    out, _ = average_ref_duplicates(ref, 0.020, tile_offsets=off)
+    assert out['n'] == 1 and out['n_merged'].tolist() == [2]
+    # the tile-0 copy (primary, anchor) stays; the tile-1 copy at 765 mas east moves by F_0 - F_1 at ITS position, -15.3 mas
+    # (the primary's position would give -15.0 mas)
+    east = CENTER.spherical_offsets_to(out['sc'])[0].to_value(u.mas)
+    np.testing.assert_allclose(east, [(750.0 + 765.0 - 15.3) / 2], atol=0.02)
+
+
 def test_average_ref_duplicates_zero_tile_offsets_change_nothing(tmp_path):
     from jwst_gc_pipeline.astrometry.build_treasury_pm import average_ref_duplicates, load_tile_frame_offsets
     off = load_tile_frame_offsets(_write_offsets(tmp_path / 'zero.npz', _const_fields([(0, 0)] * 3)))
@@ -1039,9 +1091,10 @@ def test_average_ref_duplicates_tile_offsets_without_duplicates_and_with_a_missi
 def test_read_anchor_keys_and_ref_anchor_mask(tmp_path):
     from jwst_gc_pipeline.astrometry.build_treasury_pm import read_anchor_keys, ref_anchor_mask
     ref = _ref_dict([dict(obs=0, dx=0, dy=0), dict(obs=1, dx=4, dy=0), dict(obs=1, dx=900, dy=0), dict(obs=2, dx=-900, dy=0)])
-    Table(dict(ref_obs_index=np.array([1, 2, 1, -1, 0]), ref_row=np.array([101, 103, 101, -1, 100]))).write(tmp_path / 'rec.fits')
+    Table(dict(ref_obs_index=np.array([1, 2, 1, -1, 0, 2, -1]),
+               ref_row=np.array([101, 103, 101, -1, 100, -1, 103]))).write(tmp_path / 'rec.fits')
     keys = read_anchor_keys(str(tmp_path / 'rec.fits'))
-    assert len(keys) == 3                          # (-1, -1) dropped, the repeated (1, 101) once
+    assert len(keys) == 3                          # (-1, -1), (2, -1) and (-1, 103) dropped (a pair needs both), (1, 101) once
     assert ref_anchor_mask(ref, keys).tolist() == [True, True, False, True]
     Table(dict(ref_obs_index=np.array([2]), ref_row=np.array([999]))).write(tmp_path / 'other.fits')
     with pytest.raises(ValueError, match='none of the anchor table'):
@@ -1091,7 +1144,10 @@ def test_build_aligns_cross_tile_duplicates_with_tile_offsets_only_when_asked(tm
     assert np.abs(d_anch[sel & used1] - 1.0 / dt).max() < 0.02 / dt
     assert np.abs(d_anch[sel & ~used1] + 1.0 / dt).max() < 0.02 / dt
     info = json.loads(anch.meta['ref_dup_avg_json'])['tile_offsets']
-    assert info['anchor_table'] == 'plain.fits' and len(info['anchor_table_sha256']) == 16
+    assert info['anchor_table'] == 'plain.fits' and info['file'] == 'shift.npz'
+    # each recorded hash is that of its own file (the loader test checks _file_sha256 against hashlib)
+    assert info['anchor_table_sha256'] == btp._file_sha256(path('plain.fits'))
+    assert info['sha256'] == btp._file_sha256(shift) != info['anchor_table_sha256']
     assert info['n_groups_one_flagged_copy'] > 0
 
 
