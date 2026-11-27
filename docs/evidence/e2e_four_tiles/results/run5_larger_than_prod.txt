@@ -1,0 +1,19 @@
+## o105 F480M: opt leftovers >= 200: 146, opt craters >= 200: 12
+  0 features larger than 1.5 x the production extremum
+## o118 F480M: opt leftovers >= 200: 54, opt craters >= 200: 4
+  0 features larger than 1.5 x the production extremum
+## o130 F480M: opt leftovers >= 200: 19, opt craters >= 200: 0
+  0 features larger than 1.5 x the production extremum
+## o138 F480M: opt leftovers >= 200: 38, opt craters >= 200: 0
+  0 features larger than 1.5 x the production extremum
+## o105 F212N: opt leftovers >= 200: 38, opt craters >= 200: 44
+  crater   ( 8306, 1270) opt    1590 prod     971 ratio  1.64 d_vet1=0.031 is_sat1=True flux1=49769
+  crater   ( 4469, 1280) opt     755 prod     456 ratio  1.65 d_vet1=0.032 is_sat1=True flux1=28265
+  2 features larger than 1.5 x the production extremum
+## o118 F212N: opt leftovers >= 200: 7, opt craters >= 200: 26
+  0 features larger than 1.5 x the production extremum
+## o130 F212N: opt leftovers >= 200: 13, opt craters >= 200: 14
+  0 features larger than 1.5 x the production extremum
+## o138 F212N: opt leftovers >= 200: 28, opt craters >= 200: 28
+  leftover ( 8633, 2587) opt    2209 prod    1297 ratio  1.70 cls=SATSTAR_NEAR d_sat=0.095
+  1 features larger than 1.5 x the production extremum

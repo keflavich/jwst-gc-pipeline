@@ -1,0 +1,17 @@
+# Leftovers with a residual peak >= 200 MJy/sr in the masked render (optfin): tile band (x, y) pixel of the merged mosaic, residual peak, data peak, model peak, class, distance to the nearest vetted m7 row and to the nearest consolidated satstar fit (arcsec)
+o105 F212N (  434, 3684) resid      358 data      495 model      439 SATSTAR_NEAR             d_vet  0.077 d_sat  0.797
+o105 F212N ( 5368, 4587) resid      345 data      345 model        0 NOT_IN_M7_CATALOG        d_vet  0.444 d_sat  1.208
+o105 F212N (11052, 3798) resid      336 data      423 model      181 NOT_IN_M7_CATALOG        d_vet  0.126 d_sat  1.577
+o105 F212N ( 7030, 3275) resid      254 data      259 model        8 SATSTAR_NEAR             d_vet  0.349 d_sat  0.808
+o105 F212N ( 6529, 3558) resid      245 data      246 model        1 NOT_IN_M7_CATALOG        d_vet  0.206 d_sat  1.930
+o105 F212N ( 3245, 3878) resid      209 data      285 model      135 SATSTAR_NEAR             d_vet  0.091 d_sat  0.783
+o105 F212N ( 1660,  341) resid      205 data      291 model       92 NOT_IN_M7_CATALOG        d_vet  0.139 d_sat  1.228
+o105 F212N ( 9362, 1291) resid      201 data      251 model      105 VETTED_BUT_UNSUBTRACTED  d_vet  0.044 d_sat  1.693
+o118 F212N (  330,  111) resid      939 data      939 model        2 SATSTAR_NEAR             d_vet  0.245 d_sat  0.657
+o118 F212N (  220, 4407) resid      423 data      471 model      142 SATSTAR_NEAR             d_vet  0.097 d_sat  0.864
+o118 F212N (  637, 3732) resid      308 data      309 model        1 NOT_IN_M7_CATALOG        d_vet  0.342 d_sat  1.329
+o118 F212N (  641, 3740) resid      203 data      206 model        6 NOT_IN_M7_CATALOG        d_vet  0.293 d_sat  1.132
+o130 F212N ( 5065,   68) resid     1241 data     1391 model      316 VETTED_BUT_UNSUBTRACTED  d_vet  0.046 d_sat  2.975
+o138 F212N ( 7366, 4240) resid      287 data      357 model      243 NOT_IN_M7_CATALOG        d_vet  0.082 d_sat  1.401
+o118 F480M (  368,  334) resid      253 data      357 model      164 NOT_IN_M7_CATALOG        d_vet  0.192 d_sat  9.235
+o130 F480M ( 1932,  146) resid      359 data      361 model        5 VETTED_BUT_UNSUBTRACTED  d_vet  0.017 d_sat  8.029

@@ -1,0 +1,18 @@
+# One-frame replays of the o105 F480M m7 DAO pass, rows of the production per-frame table that a replay lacks (lost) and replay rows that production lacks (extra); match radius 0.5 px of (x_fit, y_fit).
+# pinned = production code of the m7 per-frame run; control = integration code with every switch off; treatment = integration code with the opt-in recipe; noenv / env = without / with the two production hand-off settings.
+## frame A (nrcblong exp 1)
+production table f480m_nrcblong_o105_visit001_vgroup02101_exp00001_resbgsub_hybpsf_m7_daophot_basic.fits: 52465 rows, 52465 with finite flux_fit
+  pinned_noenv: 52446 rows; flux>0: lost 64, extra 46; flux>1000: lost 21, extra 1; flux>10000: lost 12, extra 1; flux>30000: lost 3, extra 1
+  control_noenv: 52545 rows; flux>0: lost 411, extra 492; flux>1000: lost 31, extra 42; flux>10000: lost 13, extra 8; flux>30000: lost 3, extra 1
+  treatment_noenv: 52629 rows; flux>0: lost 404, extra 569; flux>1000: lost 30, extra 53; flux>10000: lost 12, extra 10; flux>30000: lost 3, extra 1
+  pinned_env: 52466 rows; flux>0: lost 6, extra 7; flux>1000: lost 0, extra 0; flux>10000: lost 0, extra 0; flux>30000: lost 0, extra 0
+  control_env: 52528 rows; flux>0: lost 390, extra 453; flux>1000: lost 14, extra 39; flux>10000: lost 2, extra 7; flux>30000: lost 0, extra 0
+  treatment_env: 52614 rows; flux>0: lost 380, extra 529; flux>1000: lost 11, extra 50; flux>10000: lost 0, extra 9; flux>30000: lost 0, extra 0
+## frame B (nrcalong exp 2)
+production table f480m_nrcalong_o105_visit001_vgroup02101_exp00002_resbgsub_hybpsf_m7_daophot_basic.fits: 53915 rows, 53915 with finite flux_fit
+  pinned_noenv: 53954 rows; flux>0: lost 83, extra 122; flux>1000: lost 5, extra 3; flux>10000: lost 3, extra 1; flux>30000: lost 3, extra 1
+  control_noenv: 54093 rows; flux>0: lost 334, extra 511; flux>1000: lost 9, extra 67; flux>10000: lost 4, extra 10; flux>30000: lost 3, extra 1
+  treatment_noenv: 54184 rows; flux>0: lost 323, extra 591; flux>1000: lost 8, extra 70; flux>10000: lost 4, extra 12; flux>30000: lost 3, extra 1
+  pinned_env: 53953 rows; flux>0: lost 74, extra 112; flux>1000: lost 1, extra 0; flux>10000: lost 0, extra 0; flux>30000: lost 0, extra 0
+  control_env: 54093 rows; flux>0: lost 327, extra 504; flux>1000: lost 6, extra 65; flux>10000: lost 1, extra 12; flux>30000: lost 0, extra 1
+  treatment_env: 54183 rows; flux>0: lost 317, extra 584; flux>1000: lost 5, extra 68; flux>10000: lost 1, extra 14; flux>30000: lost 0, extra 1

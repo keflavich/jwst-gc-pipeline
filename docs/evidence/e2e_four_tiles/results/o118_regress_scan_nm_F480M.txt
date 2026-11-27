@@ -1,0 +1,20 @@
+# o118 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source optnm, references ['prod5']
+## features of optnm (n_left 54, n_crater 4) against the prod5 extremum in the same box (regressions)
+  leftover: 54 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 51; prod5 >1.5x higher: 3
+  crater  : 4 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 3; prod5 >1.5x higher: 1
+## features of prod5 (n_left 76, n_crater 6) against the optnm extremum in the same box (improvements)
+  leftover: 76 features; optnm below the threshold and >1.5x lower (improvements): 24; optnm >1.5x lower but above the threshold: 0; within 1.5x: 51; optnm >1.5x higher: 1
+      (  368,   14) prod5    1607  optnm      37  cls=NOT_IN_M7_CATALOG d_sat=2.156
+      ( 4552,  395) prod5     725  optnm     144  cls=SATSTAR_NEAR d_sat=0.217
+      ( 3033,   56) prod5     530  optnm      17  cls=NOT_IN_M7_CATALOG d_sat=10.908
+      (  303, 1629) prod5     465  optnm      16  cls=NOT_IN_M7_CATALOG d_sat=2.546
+      (   89,  687) prod5     410  optnm       7  cls=VETTED_BUT_UNSUBTRACTED d_sat=5.376
+      ( 4809, 1549) prod5     386  optnm     160  cls=NOT_IN_M7_CATALOG d_sat=5.889
+      (  331,  697) prod5     364  optnm      17  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.347
+      (  889, 1327) prod5     302  optnm      12  cls=NOT_IN_M7_CATALOG d_sat=2.743
+      ( 2461,  260) prod5     284  optnm      13  cls=VETTED_BUT_UNSUBTRACTED d_sat=3.222
+      ( 1665, 1437) prod5     274  optnm      24  cls=NOT_IN_M7_CATALOG d_sat=2.934
+      (  796, 2089) prod5     270  optnm      14  cls=NOT_IN_M7_CATALOG d_sat=1.531
+      ( 1970, 1592) prod5     264  optnm      17  cls=NOT_IN_M7_CATALOG d_sat=3.532
+  crater  : 6 features; optnm below the threshold and >1.5x lower (improvements): 1; optnm >1.5x lower but above the threshold: 1; within 1.5x: 4; optnm >1.5x higher: 0
+      (  780,   69) prod5     205  optnm      39  d_vet1=0.015 is_sat1=False flux1=3990

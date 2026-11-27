@@ -1,0 +1,190 @@
+{
+ "tags": [
+  "prod5",
+  "optnm",
+  "optfin"
+ ],
+ "match_px": 3.0,
+ "radius_arcsec": 0.093669,
+ "min": 100.0,
+ "counts": {
+  "prod5": {
+   "leftovers": {
+    "50": 219,
+    "100": 121,
+    "200": 76,
+    "500": 47,
+    "1000": 38
+   },
+   "craters": {
+    "50": 26,
+    "200": 6,
+    "500": 5
+   },
+   "classes_ge200": {
+    "NOT_IN_M7_CATALOG": 23,
+    "SATSTAR_NEAR": 44,
+    "VETTED_BUT_UNSUBTRACTED": 7,
+    "VETTED_OUT": 2
+   }
+  },
+  "optnm": {
+   "leftovers": {
+    "50": 118,
+    "100": 71,
+    "200": 54,
+    "500": 45,
+    "1000": 36
+   },
+   "craters": {
+    "50": 5,
+    "200": 4,
+    "500": 3
+   },
+   "classes_ge200": {
+    "NOT_IN_M7_CATALOG": 6,
+    "SATSTAR_NEAR": 48,
+    "VETTED_BUT_UNSUBTRACTED": 0,
+    "VETTED_OUT": 0
+   }
+  },
+  "optfin": {
+   "leftovers": {
+    "50": 48,
+    "100": 10,
+    "200": 1,
+    "500": 0,
+    "1000": 0
+   },
+   "craters": {
+    "50": 0,
+    "200": 0,
+    "500": 0
+   },
+   "classes_ge200": {
+    "NOT_IN_M7_CATALOG": 1,
+    "VETTED_BUT_UNSUBTRACTED": 0,
+    "VETTED_OUT": 0
+   }
+  }
+ },
+ "pairs": {
+  "prod5:optfin": {
+   "n_a": 121,
+   "n_b": 10,
+   "cleared": 111,
+   "reduced": 0,
+   "unchanged": 10,
+   "worse": 0,
+   "new": 0,
+   "cleared_ge200": 75,
+   "n_a_ge200": 76,
+   "cleared_ge500": 47,
+   "n_a_ge500": 47,
+   "cleared_ge1000": 38,
+   "n_a_ge1000": 38,
+   "cleared_by_class": {
+    "NOT_IN_M7_CATALOG": 33,
+    "VETTED_OUT": 7,
+    "VETTED_BUT_UNSUBTRACTED": 23,
+    "SATSTAR_NEAR": 48
+   },
+   "new_by_class": {},
+   "added_under_a": {
+    "B relaxed": 5
+   },
+   "added_under_a_cleared": {
+    "B relaxed": 5
+   },
+   "cleared_nearest_added": {
+    "none": 106,
+    "B relaxed": 5
+   },
+   "craters": {
+    "n_a": 26,
+    "n_b": 0,
+    "gone": 26,
+    "new": 0,
+    "gone_ge200": 6,
+    "new_ge200": 0
+   }
+  },
+  "prod5:optnm": {
+   "n_a": 121,
+   "n_b": 71,
+   "cleared": 58,
+   "reduced": 0,
+   "unchanged": 63,
+   "worse": 0,
+   "new": 8,
+   "cleared_ge200": 30,
+   "n_a_ge200": 76,
+   "cleared_ge500": 9,
+   "n_a_ge500": 47,
+   "cleared_ge1000": 6,
+   "n_a_ge1000": 38,
+   "cleared_by_class": {
+    "NOT_IN_M7_CATALOG": 20,
+    "VETTED_BUT_UNSUBTRACTED": 22,
+    "SATSTAR_NEAR": 10,
+    "VETTED_OUT": 6
+   },
+   "new_by_class": {
+    "SATSTAR_NEAR": 8
+   },
+   "added_under_a": {
+    "B relaxed": 5
+   },
+   "added_under_a_cleared": {
+    "B relaxed": 5
+   },
+   "cleared_nearest_added": {
+    "none": 53,
+    "B relaxed": 5
+   },
+   "craters": {
+    "n_a": 26,
+    "n_b": 5,
+    "gone": 21,
+    "new": 0,
+    "gone_ge200": 2,
+    "new_ge200": 0
+   }
+  },
+  "optnm:optfin": {
+   "n_a": 71,
+   "n_b": 10,
+   "cleared": 61,
+   "reduced": 0,
+   "unchanged": 10,
+   "worse": 0,
+   "new": 0,
+   "cleared_ge200": 53,
+   "n_a_ge200": 54,
+   "cleared_ge500": 45,
+   "n_a_ge500": 45,
+   "cleared_ge1000": 36,
+   "n_a_ge1000": 36,
+   "cleared_by_class": {
+    "NOT_IN_M7_CATALOG": 9,
+    "VETTED_OUT": 1,
+    "SATSTAR_NEAR": 50,
+    "VETTED_BUT_UNSUBTRACTED": 1
+   },
+   "new_by_class": {},
+   "added_under_a": {},
+   "added_under_a_cleared": {},
+   "cleared_nearest_added": {
+    "none": 61
+   },
+   "craters": {
+    "n_a": 5,
+    "n_b": 0,
+    "gone": 5,
+    "new": 0,
+    "gone_ge200": 4,
+    "new_ge200": 0
+   }
+  }
+ }
+}

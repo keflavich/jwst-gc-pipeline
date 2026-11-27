@@ -1,0 +1,6 @@
+# Probe of the CRDS client (installed crds package of the python313 environment) on 2026-11-27 ~07:32 EST, in scratch copies of the two cache files (server_config 1457934 bytes, bad_files.txt 5034 bytes),
+# modification time of the copies set to 2026-11-01 12:00:00 before each run; CRDS_SERVER_URL=https://jwst-crds.stsci.edu; call: get_config_info('jwst') then update_config_info('jwst') (crds/core/heavy_client.py).
+CRDS_READONLY_CACHE=1: connected True, effective_mode local; server_config modification time after the call 2026-11-01 12:00:00 (unchanged), size 1457934
+CRDS_READONLY_CACHE=0: connected True, effective_mode local; server_config modification time after the call 2026-11-27 07:32:45 (rewritten), size 1457934 (same size)
+# Empty cache directory, same call: CRDS_READONLY_CACHE=0 creates server_config and bad_files.txt; CRDS_READONLY_CACHE=1 creates nothing (the client then stops with a FATAL cache-load error because the read-only cache is empty).
+# Source gate: heavy_client.update_config_info() runs cache_server_info() only if config.writable_cache_or_verbose() is true, which is false when CRDS_READONLY_CACHE is set to a true value (config.get_cache_readonly()).

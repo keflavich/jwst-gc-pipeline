@@ -1,0 +1,40 @@
+o105 F212N: prod 522372 rows, opt 523550 rows; prod rows without opt row 1440; opt rows without prod row 2392; saturated rows prod 10229 opt 10304
+    flux 1e+03-1e+04: prod rows  56775 unmatched    74 | opt rows  57070 unmatched   214
+    flux 1e+04-3e+04: prod rows   8585 unmatched     4 | opt rows   8667 unmatched    22
+    flux 3e+04-1e+05: prod rows   4435 unmatched     0 | opt rows   4466 unmatched    16
+    flux 1e+05-1e+12: prod rows   1743 unmatched     0 | opt rows   1745 unmatched     0
+o105 F480M: prod 145740 rows, opt 146489 rows; prod rows without opt row 747; opt rows without prod row 1483; saturated rows prod 1687 opt 1674
+    flux 1e+03-1e+04: prod rows  17581 unmatched    24 | opt rows  17766 unmatched   201
+    flux 1e+04-3e+04: prod rows   1809 unmatched    18 | opt rows   1792 unmatched     7
+    flux 3e+04-1e+05: prod rows    766 unmatched    10 | opt rows    762 unmatched     0
+    flux 1e+05-1e+12: prod rows    431 unmatched     0 | opt rows    430 unmatched     0
+o118 F212N: prod 298329 rows, opt 298583 rows; prod rows without opt row 621; opt rows without prod row 809; saturated rows prod 3371 opt 3383
+    flux 1e+03-1e+04: prod rows  21276 unmatched    13 | opt rows  21376 unmatched    61
+    flux 1e+04-3e+04: prod rows   2907 unmatched     2 | opt rows   2903 unmatched     8
+    flux 3e+04-1e+05: prod rows   1490 unmatched     0 | opt rows   1507 unmatched     4
+    flux 1e+05-1e+12: prod rows    621 unmatched     0 | opt rows    626 unmatched     0
+o118 F480M: prod 139908 rows, opt 140387 rows; prod rows without opt row 475; opt rows without prod row 946; saturated rows prod 666 opt 657
+    flux 1e+03-1e+04: prod rows   9403 unmatched    15 | opt rows   9436 unmatched    50
+    flux 1e+04-3e+04: prod rows    762 unmatched     4 | opt rows    756 unmatched     2
+    flux 3e+04-1e+05: prod rows    336 unmatched     2 | opt rows    336 unmatched     0
+    flux 1e+05-1e+12: prod rows    200 unmatched     1 | opt rows    201 unmatched     1
+o130 F212N: prod 252457 rows, opt 252597 rows; prod rows without opt row 522; opt rows without prod row 658; saturated rows prod 2813 opt 2829
+    flux 1e+03-1e+04: prod rows  17416 unmatched    10 | opt rows  17589 unmatched    42
+    flux 1e+04-3e+04: prod rows   2469 unmatched     1 | opt rows   2458 unmatched     5
+    flux 3e+04-1e+05: prod rows   1221 unmatched     0 | opt rows   1237 unmatched     1
+    flux 1e+05-1e+12: prod rows    542 unmatched     0 | opt rows    545 unmatched     0
+o130 F480M: prod 139868 rows, opt 140145 rows; prod rows without opt row 555; opt rows without prod row 810; saturated rows prod 528 opt 517
+    flux 1e+03-1e+04: prod rows   7178 unmatched    12 | opt rows   7182 unmatched    23
+    flux 1e+04-3e+04: prod rows    659 unmatched     1 | opt rows    657 unmatched     0
+    flux 3e+04-1e+05: prod rows    277 unmatched     2 | opt rows    279 unmatched     2
+    flux 1e+05-1e+12: prod rows    134 unmatched     1 | opt rows    135 unmatched     3
+o138 F212N: prod 474369 rows, opt 475021 rows; prod rows without opt row 917; opt rows without prod row 1498; saturated rows prod 4912 opt 4930
+    flux 1e+03-1e+04: prod rows  44807 unmatched    61 | opt rows  45131 unmatched   151
+    flux 1e+04-3e+04: prod rows   2928 unmatched     2 | opt rows   2937 unmatched    10
+    flux 3e+04-1e+05: prod rows   2720 unmatched     1 | opt rows   2734 unmatched     6
+    flux 1e+05-1e+12: prod rows   1040 unmatched     0 | opt rows   1048 unmatched     0
+o138 F480M: prod 160045 rows, opt 160170 rows; prod rows without opt row 767; opt rows without prod row 887; saturated rows prod 595 opt 583
+    flux 1e+03-1e+04: prod rows   6104 unmatched    26 | opt rows   6100 unmatched    18
+    flux 1e+04-3e+04: prod rows    657 unmatched     2 | opt rows    653 unmatched     0
+    flux 3e+04-1e+05: prod rows    289 unmatched     0 | opt rows    293 unmatched     0
+    flux 1e+05-1e+12: prod rows    190 unmatched     0 | opt rows    188 unmatched     2

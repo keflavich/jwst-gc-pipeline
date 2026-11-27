@@ -1,0 +1,26 @@
+# o130 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source optnm, references ['prod5']
+## features of optnm (n_left 19, n_crater 0) against the prod5 extremum in the same box (regressions)
+  leftover: 19 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 17; prod5 >1.5x higher: 2
+## features of prod5 (n_left 50, n_crater 12) against the optnm extremum in the same box (improvements)
+  leftover: 50 features; optnm below the threshold and >1.5x lower (improvements): 29; optnm >1.5x lower but above the threshold: 4; within 1.5x: 16; optnm >1.5x higher: 1
+      ( 2743, 1645) prod5     892  optnm       5  cls=NOT_IN_M7_CATALOG d_sat=3.470
+      ( 2460, 2038) prod5     658  optnm       5  cls=VETTED_BUT_UNSUBTRACTED d_sat=6.630
+      ( 1659,   78) prod5     518  optnm       7  cls=NOT_IN_M7_CATALOG d_sat=9.911
+      (  621, 1856) prod5     460  optnm      15  cls=NOT_IN_M7_CATALOG d_sat=6.341
+      ( 4140, 2108) prod5     393  optnm      21  cls=NOT_IN_M7_CATALOG d_sat=1.014
+      ( 2105,  859) prod5     370  optnm       5  cls=VETTED_BUT_UNSUBTRACTED d_sat=6.136
+      ( 5607, 1129) prod5     360  optnm      16  cls=NOT_IN_M7_CATALOG d_sat=9.175
+      ( 3607, 2210) prod5     358  optnm      13  cls=VETTED_BUT_UNSUBTRACTED d_sat=4.001
+      ( 5038, 2221) prod5     351  optnm       6  cls=NOT_IN_M7_CATALOG d_sat=4.736
+      (  639,  452) prod5     348  optnm      12  cls=NOT_IN_M7_CATALOG d_sat=3.858
+      ( 3832,  188) prod5     346  optnm       7  cls=NOT_IN_M7_CATALOG d_sat=1.183
+      ( 1037,  273) prod5     333  optnm      13  cls=NOT_IN_M7_CATALOG d_sat=4.258
+  crater  : 12 features; optnm below the threshold and >1.5x lower (improvements): 8; optnm >1.5x lower but above the threshold: 2; within 1.5x: 2; optnm >1.5x higher: 0
+      ( 3579, 1263) prod5     448  optnm     108  d_vet1=0.050 is_sat1=False flux1=5740
+      ( 1392,  766) prod5     413  optnm      -1  d_vet1=0.016 is_sat1=True flux1=6856
+      ( 3255,  613) prod5     360  optnm      -1  d_vet1=0.047 is_sat1=False flux1=9103
+      ( 4054,  577) prod5     329  optnm      -3  d_vet1=0.023 is_sat1=False flux1=7849
+      ( 4149,  903) prod5     278  optnm      -2  d_vet1=0.037 is_sat1=True flux1=6663
+      (  629, 1605) prod5     267  optnm       3  d_vet1=0.027 is_sat1=False flux1=5763
+      ( 3319,  280) prod5     244  optnm      85  d_vet1=0.009 is_sat1=False flux1=4125
+      ( 1057, 1932) prod5     232  optnm      -4  d_vet1=0.042 is_sat1=False flux1=6740
