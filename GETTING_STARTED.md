@@ -212,7 +212,9 @@ scripts/reduction/stage_scratch_basepath.sh \
     "$GC_BASEPATH_OVERRIDE" reduce destreak_o001_crf F410M
 ```
 
-It stages the exposures, the offsets table and the reference catalog. It leaves
+It stages the exposures (with their Detector1 `_ramp.fits`, which the
+saturated-star anchor and the single-group DQ read; it warns for any exposure
+that has none), the offsets table and the reference catalog. It leaves
 the association file, so stage 1 fetches that from MAST — a minute, and the one
 thing in this example that needs your MAST token.
 
