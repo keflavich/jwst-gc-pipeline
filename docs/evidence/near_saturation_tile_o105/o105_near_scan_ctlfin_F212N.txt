@@ -1,0 +1,7 @@
+# o105 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source n1xnear, references ['ctlfin']
+## features of n1xnear (n_left 175, n_crater 151) against the ctlfin extremum in the same box (regressions)
+  leftover: 175 features; ctlfin below the threshold and >1.5x lower (regressions): 0; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 167; ctlfin >1.5x higher: 8
+  crater  : 151 features; ctlfin below the threshold and >1.5x lower (regressions): 0; ctlfin >1.5x lower but above the threshold: 1; within 1.5x: 135; ctlfin >1.5x higher: 15
+## features of ctlfin (n_left 176, n_crater 152) against the n1xnear extremum in the same box (improvements)
+  leftover: 176 features; n1xnear below the threshold and >1.5x lower (improvements): 0; n1xnear >1.5x lower but above the threshold: 1; within 1.5x: 167; n1xnear >1.5x higher: 8
+  crater  : 152 features; n1xnear below the threshold and >1.5x lower (improvements): 0; n1xnear >1.5x lower but above the threshold: 2; within 1.5x: 135; n1xnear >1.5x higher: 15
