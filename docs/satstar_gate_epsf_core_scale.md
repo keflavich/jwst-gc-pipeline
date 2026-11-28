@@ -212,12 +212,31 @@ and a peak of at least the stated value; a big crater is a negative residual dee
 |---|---|---|---|---|---|---|---|---|---|
 | F480M | production | 303 | 202 | 168 | 111 | 84 | 69 | 28 | 16 |
 | F480M | control | 297 | 200 | 168 | 107 | 77 | 92 | 38 | 17 |
+| F480M | fit-time switches, unmasked | 221 | 155 | 146 | 104 | 78 | 20 | 12 | 8 |
+| F480M | fit-time switches, masked | 49 | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
 | F480M | distance switch alone | 277 | 180 | 150 | 103 | 76 | 94 | 39 | 17 |
 | F480M | both switches | 277 | 180 | 150 | 103 | 76 | 95 | 40 | 18 |
 | F212N | production | 845 | 317 | 178 | 133 | 116 | 489 | 166 | 71 |
 | F212N | control | 830 | 315 | 176 | 134 | 117 | 454 | 152 | 65 |
+| F212N | fit-time switches, unmasked | 610 | 118 | 38 | 13 | 8 | 102 | 44 | 18 |
+| F212N | fit-time switches, masked | 475 | 52 | 8 | 0 | 0 | 10 | 0 | 0 |
 | F212N | distance switch alone | 827 | 312 | 175 | 133 | 116 | 452 | 151 | 64 |
 | F212N | both switches | 827 | 312 | 175 | 133 | 116 | 452 | 151 | 64 |
+
+The two further renders are the end-to-end render with the fit-time switches of the other
+open pull requests and no footprint mask ("unmasked") and the same with the footprint masks
+("masked"); neither contains the two switches of this test.  The four features followed through the
+end-to-end tests:
+
+| feature | production | control | fit-time switches, unmasked | fit-time switches, masked | distance switch alone | both switches |
+|---|---|---|---|---|---|---|
+| F480M leftover (2614, 1826), "F4" | none | 904 | 904 | none | none | none |
+| F480M leftover (4452, 858), "F5" | none | 403 | 403 | none | none | none |
+| F212N crater (8306, 1270), depth | 978 | 966 | 1590 (ratio 0.32, big) | none | 966 | 966 |
+| F212N crater (4469, 1280), depth | 463 | 465 | 755 (ratio 0.30, big) | none | 465 | 465 |
+
+"None" is no entry in the leftover or crater list within 3 px.  The 13 x 13 pixel box maxima
+of F4 and F5 are 33 and 59 MJy/sr with the distance switch alone and 33 and 26 with both.
 
 Both switches against the distance switch alone:
 
