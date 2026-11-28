@@ -1,0 +1,33 @@
+o105: values of the features F1, F2 (F212N craters) and F4, F5 (F480M leftovers) in the reference renders and n1xboth
+nearest entry within 3 px of 0.031223 arcsec = 0.094 arcsec of the position; MJy/sr
+craters: deepest candidate (depth, model peak, depth over model peak; big = depth > 50 and ratio > 0.3);
+leftovers: largest residual peak of the leftover list (residual peak, data peak, model peak, class); "-" = no entry
+
+F1  F212N crater  (8306, 1270)
+   prod5     depth      978  model peak     4400  data peak     3422  ratio 0.222  big no   at (8307, 1271)
+   ctlfin    depth      966  model peak     4388  data peak     3422  ratio 0.220  big no   at (8307, 1271)
+   optnm     depth     1590  model peak     4902  data peak     3423  ratio 0.324  big yes  at (8306, 1270)
+   optfin    -
+   n1xboth   depth      966  model peak     4388  data peak     3422  ratio 0.220  big no   at (8307, 1271)
+
+F2  F212N crater  (4469, 1280)
+   prod5     depth      463  model peak     2364  data peak     1901  ratio 0.196  big no   at (4469, 1281)
+   ctlfin    depth      465  model peak     2367  data peak     1901  ratio 0.197  big no   at (4469, 1281)
+   optnm     depth      755  model peak     2482  data peak     1901  ratio 0.304  big yes  at (4469, 1280)
+   optfin    -
+   n1xboth   depth      465  model peak     2367  data peak     1901  ratio 0.197  big no   at (4469, 1281)
+
+F4  F480M leftover  (2614, 1826)
+   prod5     -
+   ctlfin    residual      904  data peak     1045  model peak      249  SATSTAR_NEAR  at (2614, 1826)
+   optnm     residual      904  data peak     1045  model peak      249  SATSTAR_NEAR  at (2614, 1826)
+   optfin    -
+   n1xboth   -
+
+F5  F480M leftover  (4452, 858)
+   prod5     -
+   ctlfin    residual      403  data peak      508  model peak      107  NOT_IN_M7_CATALOG  at (4452, 858)
+   optnm     residual      403  data peak      508  model peak      107  NOT_IN_M7_CATALOG  at (4452, 858)
+   optfin    -
+   n1xboth   -
+

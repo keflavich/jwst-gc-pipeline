@@ -1,0 +1,21 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source n1xboth, references ['ctlfin']
+## features of n1xboth (n_left 150, n_crater 40) against the ctlfin extremum in the same box (regressions)
+  leftover: 150 features; ctlfin below the threshold and >1.5x lower (regressions): 1; ctlfin >1.5x lower but above the threshold: 0; within 1.5x: 141; ctlfin >1.5x higher: 8
+      ( 5325, 1803) n1xboth     327  ctlfin      42  cls=SATSTAR_NEAR d_sat=0.310
+  crater  : 40 features; ctlfin below the threshold and >1.5x lower (regressions): 1; ctlfin >1.5x lower but above the threshold: 1; within 1.5x: 35; ctlfin >1.5x higher: 3
+      ( 1111, 1885) n1xboth     275  ctlfin      99  d_vet1=0.013 is_sat1=False flux1=3588
+## features of ctlfin (n_left 168, n_crater 38) against the n1xboth extremum in the same box (improvements)
+  leftover: 168 features; n1xboth below the threshold and >1.5x lower (improvements): 15; n1xboth >1.5x lower but above the threshold: 0; within 1.5x: 142; n1xboth >1.5x higher: 11
+      ( 2160,  277) ctlfin    1000  n1xboth      56  cls=SATSTAR_NEAR d_sat=0.236
+      ( 2614, 1826) ctlfin     904  n1xboth      33  cls=SATSTAR_NEAR d_sat=0.384
+      ( 2837,  911) ctlfin     531  n1xboth      45  cls=NOT_IN_M7_CATALOG d_sat=3.019
+      ( 4622,  988) ctlfin     461  n1xboth      26  cls=SATSTAR_NEAR d_sat=0.298
+      ( 1201,  983) ctlfin     432  n1xboth      28  cls=SATSTAR_NEAR d_sat=0.294
+      ( 3230,  588) ctlfin     427  n1xboth      87  cls=SATSTAR_NEAR d_sat=0.203
+      ( 4452,  858) ctlfin     403  n1xboth      26  cls=NOT_IN_M7_CATALOG d_sat=3.905
+      ( 2901, 1511) ctlfin     376  n1xboth      38  cls=SATSTAR_NEAR d_sat=0.281
+      ( 4604, 1669) ctlfin     326  n1xboth     176  cls=SATSTAR_NEAR d_sat=0.368
+      ( 4932,  416) ctlfin     309  n1xboth      17  cls=SATSTAR_NEAR d_sat=0.289
+      ( 5119, 2009) ctlfin     309  n1xboth      50  cls=SATSTAR_NEAR d_sat=0.275
+      ( 3930, 2131) ctlfin     260  n1xboth      47  cls=SATSTAR_NEAR d_sat=0.239
+  crater  : 38 features; n1xboth below the threshold and >1.5x lower (improvements): 0; n1xboth >1.5x lower but above the threshold: 0; within 1.5x: 35; n1xboth >1.5x higher: 3

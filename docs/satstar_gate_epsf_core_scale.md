@@ -271,15 +271,95 @@ Both switches against the distance switch alone:
   them lie within 3 px of one of the 15 returned rows (the largest, 466 MJy/sr, at (4837, 360)
   and 464 at (1596, 1877)); the other four are at (5236, 916), (3673, 107), (721, 1514) and
   (5421, 1177), with peak differences of 114, 55, 52 and 52 MJy/sr, 122 to 1085 px from the
-  nearest returned row (not traced).
+  nearest returned row.  Each lies within 2.3 px of a satstar row that both arms have and
+  whose flux differs between the arms; the last table below lists the five largest of
+  these regions.
 * F212N: the switch has no F212N entry.  The two arms have the same counts, the same satstar
   rows (10,399; production 10,356) and residual images that differ in 4433 of 51,825,305
   pixels by at most 6.3e-5 MJy/sr.
 
+The 15 returned rows and the residual around them.  The table lists the 15 consolidated
+satstar rows that the arm with both switches has and the control lacks.  The last four columns
+give the minimum and maximum of the residual (MJy/sr, written min / max) in the 13 x 13 pixel
+box around each row.  Positions are tile pixels and the flux is `flux_fit` of the consolidated
+satstar catalog.
+
+| x | y | satstar flux | production | control | distance switch alone | both switches |
+|---|---|---|---|---|---|---|
+| 1579 | 1960 | 28,357 | -100 / 34 | 4 / 70 | 4 / 70 | -101 / 64 |
+| 4837 | 360 | 28,504 | -480 / 206 | -20 / 225 | -20 / 226 | -468 / 205 |
+| 1597 | 1877 | 28,577 | -466 / 279 | -462 / 279 | -462 / 279 | -867 / 280 |
+| 4457 | 856 | 28,581 | -425 / 30 | -1 / 418 | -1 / 59 | -349 / 26 |
+| 1545 | 2079 | 28,671 | -71 / 36 | -59 / 43 | -59 / 43 | -61 / 41 |
+| 3729 | 1334 | 28,678 | -348 / 81 | 1 / 83 | 1 / 83 | -293 / 79 |
+| 4664 | 1518 | 28,705 | -343 / 75 | -34 / 92 | -34 / 92 | -312 / 77 |
+| 2684 | 1378 | 28,735 | -240 / 58 | -61 / 62 | -61 / 62 | -217 / 50 |
+| 2772 | 1062 | 28,769 | -259 / 40 | -39 / 74 | -39 / 74 | -209 / 43 |
+| 5399 | 1040 | 28,789 | -173 / 53 | -22 / 71 | -22 / 71 | -126 / 47 |
+| 1150 | 142 | 28,914 | -357 / 24 | -44 / 56 | -44 / 56 | -348 / 45 |
+| 5364 | 1285 | 28,990 | -29 / 67 | -25 / 48 | -25 / 48 | -25 / 118 |
+| 8 | 47 | 29,044 | -163 / 38 | -2 / 47 | -2 / 47 | -8 / 74 |
+| 5360 | 1429 | 29,145 | -93 / 30 | -8 / 39 | -8 / 39 | -57 / 27 |
+| 5363 | 88 | 29,237 | -136 / 39 | -6 / 49 | -6 / 49 | -45 / 46 |
+
+The box minimum is below -200 MJy/sr at 8 of the 15 rows in production, 1 in the control,
+1 with the distance switch alone and 8 with both switches.  Its median over the 15 rows
+is -240 MJy/sr in production, -22 in the control, -22 with the distance switch alone and
+-209 with both switches.  With both switches the box minimum is lower than with the distance
+switch alone by more than 50 MJy/sr at 10 of the 15 rows.  The box maximum is above 200 MJy/sr
+at 2 rows in production, 3 in the control, 2 with the distance switch alone and
+2 with both switches.  The F5 star is the row at (4457, 856): its box maximum is
+418 in the control, 59 with the distance switch alone and 26 with both switches, and its
+box minimum is -1, -1 and -349 (production: 30 and -425).  At these stars the
+satstar fit that the switch returns subtracts about as deeply as the production fit
+and more deeply than the daophot fit of the control.  Of the 15 rows only the star at
+(1597, 1877) is the added crater counted above: against the control the arm with the distance
+switch alone has 4 new and 2 gone craters at >= 50 MJy/sr and the arm with both switches has
+5 new and 2 gone.
+
+The five largest regions of the difference image that lie more than 3 px from a returned row
+each lie within 2.3 px of a matched satstar row, a row that the control and the arm with both
+switches both have, whose flux differs between the two:
+
+| region (x, y) | peak difference (MJy/sr) | nearest matched row | satstar flux, control to both switches |
+|---|---|---|---|
+| (5236, 916) | 114.2 | 2.3 px | 30,381 to 29,859 (-1.7 %) |
+| (3673, 107) | 55.4 | 0.3 px | 28,100 to 28,465 (+1.3 %) |
+| (721, 1514) | 52.3 | 2.1 px | 29,187 to 28,853 (-1.1 %) |
+| (5421, 1177) | 52.0 | 0.8 px | 29,548 to 29,039 (-1.7 %) |
+| (2036, 623) | 49.0 | 0.4 px | 29,646 to 28,420 (-4.1 %) |
+
+The arm with the distance switch alone has the satstar rows and fluxes of the control in every
+one of the 1686 matched rows.  With both switches 56 of the 1686 differ in `flux_fit`: 49 by
+more than 1e-6 of the flux, 30 by more than 0.1 %, 11 by more than 1 % and none by more than
+5 %.  The cause of these flux changes was not traced.
+
 On this tile the switch returns 14 of the 21 production satstar rows that the control had
-moved to the daophot channel, changes no leftover count in either band, lowers the F5 feature
-from 59 to 26 MJy/sr and adds one deeper crater at one of the returned rows.  This is one
-tile.
+moved to the daophot channel, changes no leftover count in either band and adds one deeper
+crater at one of the returned rows.  At the F5 star it lowers the box maximum from 59 to 26
+MJy/sr and the residual at the peak pixel (4457, 856) from +34 to -349 MJy/sr (production
+-425, control +48).  The box minimum is below -200 MJy/sr at 8 of the 15 returned rows, as
+in production, and at 1 of the 15 in the control.  The tile test shows no gain in the counts
+of leftovers or craters.  This is one tile, and the arm with this switch also has the
+distance switch.
+
+Evidence files are in `docs/evidence/satstar_gate_tile_o105/`.  `o105_both_summary.txt` and
+`o105_near_summary.txt` hold the counts and the paired changes of the two arms against the
+production, control and two other renders; `o105_both_compare_F480M.txt` and
+`o105_both_compare_F212N.txt` list every cleared, reduced, worse and new feature of the arm
+with both switches; `o105_both_scan_ctlfin_F480M.txt` and `o105_both_scan_ctlfin_F212N.txt`
+hold the position-independent scan against the control (13 pixel boxes, threshold 200
+MJy/sr); `o105_both_satcons.txt` and `o105_near_satcons.txt` compare the consolidated satstar
+catalogs; `o105_satstar_flux_changes_both.txt` lists the matched rows whose flux changes;
+`o105_gained_rows_boxes.txt` is the table of the 15 returned rows; `o105_residual_both_minus_near.txt`
+lists the regions where the two F480M images differ; `o105_both_features.txt`,
+`o105_boxes_at_features.txt` and `o105_rows_at_features.txt` give the features F1, F2, F4
+and F5, the residual extrema in the boxes around the features of both tile tests and the
+rows of the merged catalog there.  The files label the renders `prod5` (production),
+`ctlfin` (control), `optnm` and `optfin` (the fit-time switches of the other open pull
+requests, unmasked and masked), `n1xnear` (the distance switch alone) and `n1xboth` (both
+switches).  The survive files named in line 16 of the compare files are scratch files of the
+end-to-end run and are not part of the evidence.
 
 ## Limits of this change
 
@@ -292,3 +372,6 @@ tile.
 * It changes which stars the satstar channel owns, so a star near the gate can come back
   to the satstar channel with a flux that differs from the daophot one.  The tile test
   above counts the consolidated satstar rows gained and lost.
+* The tile test is one tile, and the arm with this switch also has the distance switch of
+  #1394.  No arm with this switch alone was built, so its effect is the difference of two
+  arms that share the other switch.

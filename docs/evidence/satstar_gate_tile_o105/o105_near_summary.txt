@@ -1,0 +1,28 @@
+=== o105 F212N: counts (leftovers by resid_peak MJy/sr; craters = depth > 50 and depth/model > 0.3, by depth)
+tag         L>=50 L>=100 L>=200 L>=500 L>=1000 | cr>=50 cr>=200 cr>=500
+prod5         845    317    178    133     116 |    489     166      71
+ctlfin        830    315    176    134     117 |    454     152      65
+optnm         610    118     38     13       8 |    102      44      18
+optfin        475     52      8      0       0 |     10       0       0
+n1xnear       827    312    175    133     116 |    452     151      64
+  ctlfin:n1xnear     leftovers>=100 315->312: cleared 3 (>=200 1/176, >=500 1/134), reduced 0, worse 0, new 0; craters 454->452: gone 3 (>=200 2), new 1 (>=200 1)
+  prod5:n1xnear      leftovers>=100 317->312: cleared 15 (>=200 7/178, >=500 2/133), reduced 0, worse 0, new 9; craters 489->452: gone 84 (>=200 32), new 47 (>=200 18)
+  optnm:n1xnear      leftovers>=100 118->312: cleared 2 (>=200 1/38, >=500 1/13), reduced 0, worse 0, new 196; craters 102->452: gone 2 (>=200 2), new 352 (>=200 107)
+  optfin:n1xnear     leftovers>=100 52->312: cleared 2 (>=200 0/8, >=500 0/0), reduced 0, worse 0, new 262; craters 10->452: gone 6 (>=200 0), new 448 (>=200 151)
+=== o105 F480M: counts (leftovers by resid_peak MJy/sr; craters = depth > 50 and depth/model > 0.3, by depth)
+tag         L>=50 L>=100 L>=200 L>=500 L>=1000 | cr>=50 cr>=200 cr>=500
+prod5         303    202    168    111      84 |     69      28      16
+ctlfin        297    200    168    107      77 |     92      38      17
+optnm         221    155    146    104      78 |     20      12       8
+optfin         49      2      0      0       0 |      0       0       0
+n1xnear       277    180    150    103      76 |     94      39      17
+  ctlfin:n1xnear     leftovers>=100 200->180: cleared 21 (>=200 19/168, >=500 4/107), reduced 0, worse 0, new 1; craters 92->94: gone 2 (>=200 0), new 4 (>=200 1)
+  prod5:n1xnear      leftovers>=100 202->180: cleared 35 (>=200 30/168, >=500 16/111), reduced 0, worse 0, new 12; craters 69->94: gone 26 (>=200 12), new 51 (>=200 21)
+  optnm:n1xnear      leftovers>=100 155->180: cleared 24 (>=200 22/146, >=500 7/104), reduced 0, worse 0, new 49; craters 20->94: gone 0 (>=200 0), new 74 (>=200 27)
+  optfin:n1xnear     leftovers>=100 2->180: cleared 0 (>=200 0/0, >=500 0/0), reduced 0, worse 0, new 178; craters 0->94: gone 0 (>=200 0), new 94 (>=200 39)
+
+=== target rows within 6 px (distance px, peak or depth MJy/sr, depth/model for craters); empty = below the table threshold
+F4 (2614,1826) F480M leftover: prod5: - | ctlfin: 904.1 (r=0.0) | optnm: 904.1 (r=0.0) | optfin: - | n1xnear: -
+F5 (4452,858) F480M leftover: prod5: - | ctlfin: 403.5 (r=0.0) | optnm: 403.5 (r=0.0) | optfin: - | n1xnear: -
+F1 (8306,1270) F212N crater: prod5: 977.9 (r=1.4, d/m=0.22) | ctlfin: 965.6 (r=1.4, d/m=0.22) | optnm: 1590.4 (r=0.0, d/m=0.32) | optfin: - | n1xnear: 965.6 (r=1.4, d/m=0.22)
+F2 (4469,1280) F212N crater: prod5: 463.1 (r=1.0, d/m=0.20) | ctlfin: 465.4 (r=1.0, d/m=0.20) | optnm: 754.6 (r=0.0, d/m=0.30) | optfin: - | n1xnear: 465.4 (r=1.0, d/m=0.20)
