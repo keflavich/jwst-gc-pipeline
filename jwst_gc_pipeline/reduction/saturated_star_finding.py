@@ -29,7 +29,8 @@ from jwst_gc_pipeline.photometry.wingcal import (
 from jwst_gc_pipeline.photometry.psf_fitting import annulus_scatter_sigma
 from jwst_gc_pipeline.photometry.psf_grid_io import load_stpsf_grid
 from jwst_gc_pipeline.photometry.epsf_hybrid import (
-    maybe_apply_epsf_core, psf_provenance_meta, stpsf_detector_name)
+    EPSF_CORE_DIR_ENV, maybe_apply_epsf_core, psf_provenance_meta,
+    stpsf_detector_name)
 from photutils.psf import GriddedPSFModel
 
 
@@ -644,6 +645,71 @@ def _resolve_satstar_severity_floor(filtername, explicit=None):
         except ValueError:
             pass
     return float(SAT_SEVERITY_FLOOR.get(str(filtername).lower(), 0.0))
+
+
+#: Scale of the implied-peak gate for satstar fits made with the ePSF-core
+#: hybrid PSF, by (science bandpass, stpsf detector); opt-in, env
+#: ``SATSTAR_GATE_EPSF_CORE_SCALE`` (see ``_resolve_satstar_gate_core_scale``).
+#: The gate rejects a fit whose model peak is below half ``SAT_SEVERITY_FLOOR``,
+#: a level set with STPSF fits.  The hybrid grid (``photometry/epsf_hybrid.py``)
+#: has a lower peak per unit flux, and the fit takes a slightly lower flux with
+#: it, so a star near the gate has a lower implied peak than the same star fitted
+#: with STPSF.  Each entry is the median ratio of the implied peak (hybrid over
+#: STPSF) over the matched satstar rows whose STPSF implied peak lies within 0.8
+#: to 1.25 times the gate: gc-treasury 10678 F480M, tiles o045 / o105 / o118 /
+#: o130 / o138 pooled, 11,282 (NRCA5) and 13,892 (NRCB5) matched rows, 2,863 and
+#: 2,932 of them near the gate.  The median over tiles moves by +-0.3 % (NRCA5
+#: 0.972 to 0.978, NRCB5 0.951 to 0.956).  Its parts are the peak per unit
+#: flux (0.987 and 0.971) and the fitted flux (0.989 and 0.984).  F212N has
+#: no entry: its ratio near the gate is 1.002 to 1.015 (the core RAISES the
+#: implied peak there), so the unscaled gate stays.  See
+#: docs/satstar_gate_epsf_core_scale.md.
+SAT_GATE_EPSF_CORE_SCALE = {
+    ('f480m', 'NRCA5'): 0.976,
+    ('f480m', 'NRCB5'): 0.955,
+}
+
+
+def _psf_carries_epsf_core(psf_model):
+    """True when ``psf_model`` is a hybrid grid: ``maybe_apply_epsf_core``
+    stamps ``epsf_core_sha256`` into the meta of the grid it builds, and
+    ``GriddedPSFModel.copy`` (so ``psf_in_cutout_coords``) shares that meta."""
+    meta = getattr(psf_model, 'meta', None)
+    return isinstance(meta, dict) and 'epsf_core_sha256' in meta
+
+
+def _resolve_satstar_gate_core_scale(band, detector, psf_model=None, env=None):
+    """Scale of the implied-peak gate for a fit made with the ePSF-core PSF.
+
+    1.0 (the gate as tuned on STPSF fits) unless env
+    ``SATSTAR_GATE_EPSF_CORE_SCALE`` is on and, when ``psf_model`` is given, the
+    PSF carries the core.  Then the value is env
+    ``SATSTAR_GATE_EPSF_CORE_SCALE_VALUE`` when set (a positive number, any band
+    and detector), else the ``SAT_GATE_EPSF_CORE_SCALE`` entry for (``band``,
+    ``detector``), else 1.0.  ``band`` is the lower-case science bandpass and
+    ``detector`` the stpsf detector name (``NRCA5``; ``None`` for the merged
+    module, which has no entry).  An unreadable or non-positive value raises
+    ``ValueError``: it changes which stars are fitted as satstars and the satstar
+    cache key, so a typo must not read as 1.0."""
+    env = os.environ if env is None else env
+    if not _env_switch('SATSTAR_GATE_EPSF_CORE_SCALE', False, env):
+        return 1.0
+    if psf_model is not None and not _psf_carries_epsf_core(psf_model):
+        return 1.0
+    raw = str(env.get('SATSTAR_GATE_EPSF_CORE_SCALE_VALUE', '') or '').strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(
+                f"SATSTAR_GATE_EPSF_CORE_SCALE_VALUE={raw!r} is not a number") from None
+        if not (np.isfinite(value) and value > 0):
+            raise ValueError(
+                f"SATSTAR_GATE_EPSF_CORE_SCALE_VALUE={raw!r} must be a positive number")
+        return value
+    if detector is None:
+        return 1.0
+    return float(SAT_GATE_EPSF_CORE_SCALE.get((str(band).lower(), str(detector).upper()), 1.0))
 
 
 #: Columns of ``*_satstar_severity_dropped.fits``.
@@ -1270,6 +1336,20 @@ def satstar_fit_switches(env=None):
       offset from +0.03 to -0.01.
     * ``SATSTAR_OBS_PK_FROM_CRF`` (default OFF): the implied-peak gate's
       observed-peak second chance reads the crf values, not the rewrite.
+    * ``SATSTAR_GATE_EPSF_CORE_SCALE`` (default OFF) and
+      ``SATSTAR_GATE_EPSF_CORE_SCALE_VALUE`` (unset): the implied-peak gate
+      compares the model peak of a fit made with the ePSF-core hybrid PSF
+      (``PSF_EPSF_CORE_DIR``) with ``SAT_GATE_EPSF_CORE_SCALE`` times half the
+      severity floor, in place of half the floor, which was set with STPSF
+      fits (``_resolve_satstar_gate_core_scale``).  F480M only: 0.976 on NRCA5
+      and 0.955 on NRCB5, the median ratio of the implied peaks of the same
+      stars near the gate.  The unmasked observed-peak second chance keeps the
+      unscaled half floor.  The VALUE variable replaces the table entry for
+      every band and detector.  A fit whose PSF has no core, and every band
+      or detector without a table entry, keeps the unscaled gate.  Fits that
+      fail ``accept_satstar_fit`` first are not touched (the fit-quality
+      hand-off of ``cataloging._gate_reject_handoff_xy`` reads the unscaled half
+      floor).
     * ``SATSTAR_ERR_BKG_SCATTER`` (default OFF; ``cataloging`` turns it on for
       extended-emission NIRCam): the robust local-background scatter is added
       to the fit errors in quadrature (``bkg_scatter_fit_error``).
@@ -1370,6 +1450,7 @@ def satstar_fit_switches(env=None):
         'rcurve_maxstep': float(env.get('SATSTAR_ZF_RCURVE_MAXSTEP', '') or 1.3),
         'keep_finite': _env_switch('SATSTAR_ZF_KEEP_FINITE', cap_on, env),
         'obs_pk_from_crf': _env_switch('SATSTAR_OBS_PK_FROM_CRF', False, env),
+        'gate_epsf_core_scale': _env_switch('SATSTAR_GATE_EPSF_CORE_SCALE', False, env),
         'err_bkg_scatter': _env_switch('SATSTAR_ERR_BKG_SCATTER', False, env),
         'g0_groupdq': _env_switch('SATSTAR_ZF_G0_GROUPDQ', cap_on, env),
         'first_frame': _env_switch('SATSTAR_ZF_FIRST_FRAME', cap_on, env),
@@ -1508,6 +1589,25 @@ def _satstar_data_floor_signature(filename, env=None):
     if table > 0 and readout is not None and 0 < readout < table:
         return f"dfr{_satstar_data_floor_readout_frac(env):g}"
     return ''
+
+
+def _satstar_gate_scale_signature(filename, env=None):
+    """``'gs<SCALE>'`` when ``get_saturated_stars`` will scale this frame's
+    implied-peak gate for the ePSF-core PSF (``SATSTAR_GATE_EPSF_CORE_SCALE``
+    on, ``PSF_EPSF_CORE_DIR`` set, a scale other than 1.0 for its bandpass and
+    detector), else ``''``."""
+    env = os.environ if env is None else env
+    if not env.get(EPSF_CORE_DIR_ENV, ''):
+        return ''
+    try:
+        with fits.open(filename) as fh:
+            h0 = fh[0].header
+    except OSError:
+        return ''
+    scale = _resolve_satstar_gate_core_scale(
+        _satstar_floor_band(h0), stpsf_detector_name(h0.get('DETECTOR', '')),
+        env=env)
+    return f"gs{scale:g}" if scale != 1.0 else ''
 
 
 def _satstar_floor_lookup_signature(filename):
@@ -1783,6 +1883,13 @@ def satstar_fit_switch_signature(filename, *, deblend_with_zeroframe=False,
     if sw['err_bkg_scatter']:
         # Acts on every NIRCam in-FOV fit, with or without a ramp.
         parts.append('es')
+    if sw['gate_epsf_core_scale']:
+        # Moves which borderline stars the implied-peak gate rejects, so a
+        # catalog fitted without it is stale; left out when the frame's gate
+        # keeps scale 1.0 (no core, or no table entry), as before the switch.
+        gs = _satstar_gate_scale_signature(filename, env)
+        if gs:
+            parts.append(gs)
     dfr = _satstar_data_floor_signature(filename, env)
     if dfr:
         parts.append(dfr)
@@ -3729,6 +3836,22 @@ def satstar_implied_peak(flux, psf_model, x_fit, y_fit):
         return np.nan
 
 
+def satstar_implied_peak_gate_rejects(implied, observed_peak, severity_floor, scale=1.0):
+    """Whether the implied-peak severity gate rejects a fitted satstar.
+
+    Pure predicate factored out of ``get_saturated_stars`` (like
+    ``accept_satstar_fit``); with ``scale`` 1.0 it is IDENTICAL to the former
+    inline expression.  The gate rejects when the model-implied peak is below
+    ``scale`` times half the severity floor AND the observed unmasked peak is
+    not at or above half the floor (the observed-peak second chance).  Only the
+    model-implied peak is scaled (``SAT_GATE_EPSF_CORE_SCALE``): the observed
+    peak is data and does not depend on the PSF model.  A non-finite implied
+    peak never rejects."""
+    half = 0.5 * float(severity_floor)
+    return bool(np.isfinite(implied) and implied < scale * half
+                and not (np.isfinite(observed_peak) and observed_peak >= half))
+
+
 def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
                        sidelobe_resid_sigma, ssr_ratio, is_miri,
                        qfit_max_keep, sidelobe_min_keep, ssr_ratio_max_keep,
@@ -4128,6 +4251,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     print(f"WARNING: sibling-seed WCS conversion failed: "
                           f"{type(_sex).__name__}: {_sex}", flush=True)
     _severity_drops = []
+    _gate_scale_noted = False
     saturated, sources, coms, _seed_kinds = find_saturated_stars(
         fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
@@ -6100,10 +6224,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 else _zf_rewrite_delta[y0:y1, x0:x1])
             _implied_diag = _implied
             _obs_pk_diag = _obs_pk
+            # SATSTAR_GATE_EPSF_CORE_SCALE (opt-in): the floor was set with
+            # STPSF fits; a fit made with the ePSF-core PSF has a lower
+            # implied peak, so the gate follows it (1.0 when off).
+            _gate_scale = _resolve_satstar_gate_core_scale(
+                _floor_band, _psf_provenance_detector(header), _psf_for_fit)
+            if _gate_scale != 1.0 and not _gate_scale_noted:
+                _gate_scale_noted = True
+                print(f"Satstar severity gate: implied-peak gate scaled by "
+                      f"{_gate_scale:g} for the ePSF-core PSF "
+                      f"({0.5 * _gate_scale * float(_sev_floor):.0f} MJy/sr "
+                      f"in place of {0.5 * float(_sev_floor):.0f})",
+                      flush=True)
             if (accept_source
-                    and np.isfinite(_implied) and _implied < 0.5 * float(_sev_floor)
-                    and not (np.isfinite(_obs_pk)
-                             and _obs_pk >= 0.5 * float(_sev_floor))):
+                    and satstar_implied_peak_gate_rejects(
+                        _implied, _obs_pk, _sev_floor, _gate_scale)):
                 if _position_only:
                     # A sibling seed is EXPECTED to fail this gate: it exists
                     # precisely because this exposure did not see the star

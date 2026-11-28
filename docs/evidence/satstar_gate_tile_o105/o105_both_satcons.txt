@@ -1,0 +1,28 @@
+=== o105 F480M: consolidated satstar rows prod 1703, ctl 1686, both 1701; match radius 0.15 arcsec
+  prod -> ctl: lost 21 (median 28711, min 1017, max 62432), gained 4 (median 25328, min 2823, max 60484)
+  prod -> arm: lost 7 (median 24928, min 1017, max 62432), gained 5 (median 28577, min 2823, max 60484)
+  ctl -> arm: lost 0 (none), gained 15 (median 28735, min 28357, max 29237)
+    gained (in arm, not in ctl): ra 266.667365 dec -28.624903 flux 28735
+    gained (in arm, not in ctl): ra 266.681272 dec -28.644838 flux 28671
+    gained (in arm, not in ctl): ra 266.661090 dec -28.623362 flux 28769
+    gained (in arm, not in ctl): ra 266.665674 dec -28.578065 flux 28990
+    gained (in arm, not in ctl): ra 266.660791 dec -28.577452 flux 28789
+    gained (in arm, not in ctl): ra 266.642679 dec -28.651645 flux 28914
+    gained (in arm, not in ctl): ra 266.677255 dec -28.643935 flux 28577
+    gained (in arm, not in ctl): ra 266.670262 dec -28.590319 flux 28705
+    gained (in arm, not in ctl): ra 266.641854 dec -28.578039 flux 29237
+    gained (in arm, not in ctl): ra 266.668524 dec -28.578142 flux 29145
+    gained (in arm, not in ctl): ra 266.657085 dec -28.593904 flux 28581
+    gained (in arm, not in ctl): ra 266.647225 dec -28.587238 flux 28504
+    gained (in arm, not in ctl): ra 266.640716 dec -28.671609 flux 29044
+    gained (in arm, not in ctl): ra 266.666551 dec -28.606655 flux 28678
+    gained (in arm, not in ctl): ra 266.678891 dec -28.644244 flux 28357
+    matched ctl->arm rows 1686: flux arm/ctl median 1.0000, 16-84 % 1.0000-1.0000, rows with |ratio-1| > 0.2: 0
+  F5 star in prod: nearest row 0.000 arcsec, flux 28728
+  F5 star in ctl: nearest row 3.798 arcsec, flux 137038  (outside the match radius: no row)
+  F5 star in arm: nearest row 0.000 arcsec, flux 28581
+=== o105 F212N: consolidated satstar rows prod 10356, ctl 10399, both 10399; match radius 0.15 arcsec
+  prod -> ctl: lost 28 (median 14377, min 3662, max 45602), gained 73 (median 22336, min 3929, max 87763)
+  prod -> arm: lost 28 (median 14377, min 3662, max 45602), gained 73 (median 22336, min 3929, max 87763)
+  ctl -> arm: lost 0 (none), gained 0 (none)
+    matched ctl->arm rows 10399: flux arm/ctl median 1.0000, 16-84 % 1.0000-1.0000, rows with |ratio-1| > 0.2: 0

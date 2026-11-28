@@ -1,0 +1,13 @@
+=== o105 F480M: consolidated satstar rows prod 1703, ctl 1686, near 1686; match radius 0.15 arcsec
+  prod -> ctl: lost 21 (median 28711, min 1017, max 62432), gained 4 (median 25328, min 2823, max 60484)
+  prod -> arm: lost 21 (median 28711, min 1017, max 62432), gained 4 (median 25328, min 2823, max 60484)
+  ctl -> arm: lost 0 (none), gained 0 (none)
+    matched ctl->arm rows 1686: flux arm/ctl median 1.0000, 16-84 % 1.0000-1.0000, rows with |ratio-1| > 0.2: 0
+  F5 star in prod: nearest row 0.000 arcsec, flux 28728
+  F5 star in ctl: nearest row 3.798 arcsec, flux 137038  (outside the match radius: no row)
+  F5 star in arm: nearest row 3.798 arcsec, flux 137038  (outside the match radius: no row)
+=== o105 F212N: consolidated satstar rows prod 10356, ctl 10399, near 10399; match radius 0.15 arcsec
+  prod -> ctl: lost 28 (median 14377, min 3662, max 45602), gained 73 (median 22336, min 3929, max 87763)
+  prod -> arm: lost 28 (median 14377, min 3662, max 45602), gained 73 (median 22336, min 3929, max 87763)
+  ctl -> arm: lost 0 (none), gained 0 (none)
+    matched ctl->arm rows 10399: flux arm/ctl median 1.0000, 16-84 % 1.0000-1.0000, rows with |ratio-1| > 0.2: 0
