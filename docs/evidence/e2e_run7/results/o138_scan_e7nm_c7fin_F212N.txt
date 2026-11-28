@@ -1,0 +1,31 @@
+# o138 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source e7nm, references ['c7fin']
+## features of e7nm (n_left 28, n_crater 28) against the c7fin extremum in the same box (regressions)
+  leftover: 28 features; c7fin below the threshold and >1.5x lower (regressions): 0; c7fin >1.5x lower but above the threshold: 0; within 1.5x: 18; c7fin >1.5x higher: 10
+  crater  : 28 features; c7fin below the threshold and >1.5x lower (regressions): 0; c7fin >1.5x lower but above the threshold: 0; within 1.5x: 24; c7fin >1.5x higher: 4
+## features of c7fin (n_left 99, n_crater 102) against the e7nm extremum in the same box (improvements)
+  leftover: 99 features; e7nm below the threshold and >1.5x lower (improvements): 72; e7nm >1.5x lower but above the threshold: 1; within 1.5x: 19; e7nm >1.5x higher: 7
+      ( 5283, 3647) c7fin   16057  e7nm      20  cls=VETTED_BUT_UNSUBTRACTED d_sat=2.932
+      (  312, 3316) c7fin   14755  e7nm      27  cls=NOT_IN_M7_CATALOG d_sat=1.278
+      (11110, 4602) c7fin   13393  e7nm     183  cls=SATSTAR_NEAR d_sat=0.067
+      ( 1311, 4560) c7fin    9524  e7nm      11  cls=SATSTAR_NEAR d_sat=0.794
+      ( 2163, 2391) c7fin    7947  e7nm       8  cls=VETTED_OUT d_sat=1.558
+      ( 2857, 1048) c7fin    7703  e7nm      14  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.355
+      ( 6391, 2609) c7fin    7397  e7nm      52  cls=SATSTAR_NEAR d_sat=0.555
+      (  257,  755) c7fin    6930  e7nm      14  cls=SATSTAR_NEAR d_sat=0.126
+      ( 2920,  165) c7fin    6318  e7nm      25  cls=NOT_IN_M7_CATALOG d_sat=1.776
+      (  741, 1292) c7fin    6219  e7nm      55  cls=SATSTAR_NEAR d_sat=0.104
+      ( 6156, 4308) c7fin    5801  e7nm      79  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.772
+      ( 9712, 4200) c7fin    5678  e7nm       9  cls=SATSTAR_NEAR d_sat=0.888
+  crater  : 102 features; e7nm below the threshold and >1.5x lower (improvements): 52; e7nm >1.5x lower but above the threshold: 13; within 1.5x: 30; e7nm >1.5x higher: 7
+      ( 3310, 3836) c7fin    2590  e7nm       2  d_vet1=0.143 is_sat1=False flux1=138
+      ( 3301, 4182) c7fin    2440  e7nm       4  d_vet1=0.136 is_sat1=False flux1=93
+      ( 4857, 4201) c7fin    2419  e7nm       2  d_vet1=0.182 is_sat1=False flux1=864
+      ( 4867, 3855) c7fin    2281  e7nm      -1  d_vet1=0.127 is_sat1=False flux1=776
+      (  934, 2061) c7fin    2272  e7nm     147  d_vet1=0.004 is_sat1=True flux1=23492
+      (11107, 4602) c7fin    2198  e7nm     122  d_vet1=0.030 is_sat1=True flux1=36655
+      ( 4079, 4192) c7fin    1888  e7nm      -1  d_vet1=0.319 is_sat1=False flux1=197
+      ( 4088, 3846) c7fin    1592  e7nm      -1  d_vet1=0.293 is_sat1=False flux1=74
+      ( 1882, 2419) c7fin     848  e7nm       6  d_vet1=0.017 is_sat1=True flux1=10720
+      ( 3580, 2187) c7fin     836  e7nm      78  d_vet1=0.018 is_sat1=False flux1=13758
+      (10336, 2715) c7fin     653  e7nm      65  d_vet1=0.009 is_sat1=False flux1=10575
+      (  891, 2408) c7fin     616  e7nm       2  d_vet1=0.014 is_sat1=True flux1=7265

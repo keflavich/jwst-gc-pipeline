@@ -1,0 +1,85 @@
+columns: ['skycoord', 'flux', 'seed_origin', 'seed_round_loose', 'seed_round_bright']
+e7 opt             nrcb   exp3 fit: 298459 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.208" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.375" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.413" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.427" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.493" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e7 opt             nrcb   exp6 fit: 298459 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.221" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.395" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.412" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.428" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.472" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e7 opt             merged exp3 fit: 503664 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.208" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.375" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.413" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.427" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.493" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e7 opt             merged exp6 fit: 503664 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.221" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.395" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.412" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.428" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.472" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e5 four-tile opt   nrcb   exp3 fit: 298458 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.208" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.375" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.413" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.427" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.493" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e5 four-tile opt   nrcb   exp6 fit: 298458 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.221" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.395" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.412" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.428" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.472" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e5 four-tile opt   merged exp3 fit: 503660 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.208" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.375" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.413" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.427" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.493" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e5 four-tile opt   merged exp6 fit: 503660 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.221" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False seed_round_bright=False
+      sep=0.395" flux=4653.14 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.412" flux=875.576 seed_origin=i2d seed_round_loose=True seed_round_bright=False
+      sep=0.428" flux=6514.41 seed_origin=own_m6 seed_round_loose=False seed_round_bright=False
+      sep=0.472" flux=467.712 seed_origin=i2d seed_round_loose=False seed_round_bright=False
+e7 ctl             nrcb   exp3 fit: 298435 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False
+      sep=0.208" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False
+      sep=0.375" flux=4653.14 seed_origin=own_m6 seed_round_loose=False
+      sep=0.413" flux=6514.41 seed_origin=own_m6 seed_round_loose=False
+      sep=0.427" flux=875.576 seed_origin=i2d seed_round_loose=True
+      sep=0.493" flux=467.712 seed_origin=i2d seed_round_loose=False
+e7 ctl             nrcb   exp6 fit: 298435 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False
+      sep=0.221" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False
+      sep=0.395" flux=4653.14 seed_origin=own_m6 seed_round_loose=False
+      sep=0.412" flux=875.576 seed_origin=i2d seed_round_loose=True
+      sep=0.428" flux=6514.41 seed_origin=own_m6 seed_round_loose=False
+      sep=0.472" flux=467.712 seed_origin=i2d seed_round_loose=False
+e7 ctl             merged exp3 fit: 503614 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False
+      sep=0.208" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False
+      sep=0.375" flux=4653.14 seed_origin=own_m6 seed_round_loose=False
+      sep=0.413" flux=6514.41 seed_origin=own_m6 seed_round_loose=False
+      sep=0.427" flux=875.576 seed_origin=i2d seed_round_loose=True
+      sep=0.493" flux=467.712 seed_origin=i2d seed_round_loose=False
+e7 ctl             merged exp6 fit: 503614 seeds; 17 within 1.0 arcsec
+      sep=0.014" flux=8828.75 seed_origin=own_m6 seed_round_loose=False
+      sep=0.221" flux=6.93954e+06 seed_origin=crossband seed_round_loose=False
+      sep=0.395" flux=4653.14 seed_origin=own_m6 seed_round_loose=False
+      sep=0.412" flux=875.576 seed_origin=i2d seed_round_loose=True
+      sep=0.428" flux=6514.41 seed_origin=own_m6 seed_round_loose=False
+      sep=0.472" flux=467.712 seed_origin=i2d seed_round_loose=False

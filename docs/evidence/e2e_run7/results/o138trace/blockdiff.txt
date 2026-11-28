@@ -1,0 +1,12 @@
+window x 8610..8739, y 560..699
+|model e7nm - optnm| > 0.5: 405 px; x 8684..8704, y 623..653
+|model e7nm - optnm| > 5: 107 px; x 8689..8699, y 628..650
+|model e7nm - optnm| > 50: 21 px; x 8692..8696, y 632..648
+64-px block of (8695,623) if aligned at multiples of 64: x 8640..8703, y 576..639
+optnm: block n=4092, median 4.420, MAD sigma 5.1812
+e7nm: block n=4092, median 4.405, MAD sigma 5.1605
+model difference inside that block: 258 px above 0.5 MJy/sr, max 548.3 at (x=8694, y=633)
+model difference at the crater pixel (8695,623): 0.147
+block MAD sigma: optnm residual 5.1812; e7nm residual 5.1605; e7nm residual + model difference 5.1812
+block MAD sigma: e7nm residual + model difference restricted to x 8684..8704, y 623..639: 5.1812
+pixels of the block with |model difference| > 0.5 MJy/sr: 258 of 4096; those with residual of optnm > 0: 196

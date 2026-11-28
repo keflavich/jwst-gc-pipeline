@@ -1,0 +1,20 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source e7nm, references ['optnm']
+## features of e7nm (n_left 126, n_crater 12) against the optnm extremum in the same box (regressions)
+  leftover: 126 features; optnm below the threshold and >1.5x lower (regressions): 1; optnm >1.5x lower but above the threshold: 0; within 1.5x: 116; optnm >1.5x higher: 9
+      ( 5325, 1803) e7nm     327  optnm      42  cls=SATSTAR_NEAR d_sat=0.310
+  crater  : 12 features; optnm below the threshold and >1.5x lower (regressions): 0; optnm >1.5x lower but above the threshold: 0; within 1.5x: 11; optnm >1.5x higher: 1
+## features of optnm (n_left 146, n_crater 12) against the e7nm extremum in the same box (improvements)
+  leftover: 146 features; e7nm below the threshold and >1.5x lower (improvements): 17; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 117; e7nm >1.5x higher: 12
+      ( 2160,  277) optnm    1000  e7nm      56  cls=SATSTAR_NEAR d_sat=0.236
+      ( 2614, 1826) optnm     904  e7nm      33  cls=SATSTAR_NEAR d_sat=0.384
+      (  496,   13) optnm     785  e7nm      95  cls=VETTED_BUT_UNSUBTRACTED d_sat=3.254
+      ( 2837,  911) optnm     531  e7nm      45  cls=NOT_IN_M7_CATALOG d_sat=3.019
+      ( 4622,  988) optnm     461  e7nm      26  cls=SATSTAR_NEAR d_sat=0.298
+      ( 1201,  983) optnm     432  e7nm      28  cls=SATSTAR_NEAR d_sat=0.294
+      ( 3230,  588) optnm     427  e7nm      87  cls=SATSTAR_NEAR d_sat=0.203
+      ( 4452,  858) optnm     403  e7nm      59  cls=NOT_IN_M7_CATALOG d_sat=3.905
+      ( 2901, 1511) optnm     376  e7nm      38  cls=SATSTAR_NEAR d_sat=0.281
+      ( 4604, 1669) optnm     326  e7nm     175  cls=SATSTAR_NEAR d_sat=0.368
+      ( 4932,  416) optnm     309  e7nm      17  cls=SATSTAR_NEAR d_sat=0.289
+      ( 5119, 2009) optnm     309  e7nm      50  cls=SATSTAR_NEAR d_sat=0.275
+  crater  : 12 features; e7nm below the threshold and >1.5x lower (improvements): 0; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 11; e7nm >1.5x higher: 1

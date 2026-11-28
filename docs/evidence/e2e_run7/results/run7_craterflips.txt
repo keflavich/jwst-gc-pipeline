@@ -1,0 +1,10 @@
+| tile | band | pixel (x, y) | listed in | render | residual at the pixel (MJy/sr) | block background | block sigma | cut = max(25 sigma, 20) | -(residual - background) | margin over the cut | local maximum of the smoothed map | above the cut | listed by the scan |
+| :--- | :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | :--- |
+| o138 | F212N | (8695, 623) | e7nm only | `prod5` | -129.43 | 4.305 | 5.1294 | 128.23 | 133.74 | +5.50 | yes | yes | yes |
+| o138 | F212N | (8695, 623) | e7nm only | `c7fin` | -124.72 | 4.402 | 5.1340 | 128.35 | 129.13 | +0.78 | yes | yes | yes |
+| o138 | F212N | (8695, 623) | e7nm only | `optnm` | -124.70 | 4.420 | 5.1812 | 129.53 | 129.12 | -0.41 | yes | no | no |
+| o138 | F212N | (8695, 623) | e7nm only | `e7nm` | -124.85 | 4.405 | 5.1605 | 129.01 | 129.25 | +0.24 | yes | yes | yes |
+| o118 | F212N | (11389, 1475) | optnm only | `prod5` | -63.96 | 4.485 | 1.6075 | 40.19 | 68.45 | +28.26 | yes | yes | yes |
+| o118 | F212N | (11389, 1475) | optnm only | `c7fin` | -65.45 | 4.465 | 1.5890 | 39.72 | 69.91 | +30.19 | yes | yes | yes |
+| o118 | F212N | (11389, 1475) | optnm only | `optnm` | -65.45 | 4.465 | 1.5890 | 39.72 | 69.91 | +30.19 | yes | yes | yes |
+| o118 | F212N | (11389, 1475) | optnm only | `e7nm` | 3.09 | 4.470 | 1.5784 | 39.46 | 1.38 | -38.08 | no | no | no |

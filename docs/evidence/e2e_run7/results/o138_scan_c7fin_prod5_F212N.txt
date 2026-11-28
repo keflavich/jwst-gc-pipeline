@@ -1,0 +1,11 @@
+# o138 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source c7fin, references ['prod5']
+## features of c7fin (n_left 99, n_crater 102) against the prod5 extremum in the same box (regressions)
+  leftover: 99 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 1; within 1.5x: 89; prod5 >1.5x higher: 9
+  crater  : 102 features; prod5 below the threshold and >1.5x lower (regressions): 2; prod5 >1.5x lower but above the threshold: 2; within 1.5x: 82; prod5 >1.5x higher: 16
+      ( 2161, 4569) c7fin     428  prod5      32  d_vet1=0.016 is_sat1=False flux1=5002
+      ( 6439, 2490) c7fin     279  prod5      93  d_vet1=0.012 is_sat1=False flux1=3160
+## features of prod5 (n_left 101, n_crater 126) against the c7fin extremum in the same box (improvements)
+  leftover: 101 features; c7fin below the threshold and >1.5x lower (improvements): 1; c7fin >1.5x lower but above the threshold: 3; within 1.5x: 87; c7fin >1.5x higher: 10
+      ( 5772, 3069) prod5     320  c7fin      53  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.340
+  crater  : 126 features; c7fin below the threshold and >1.5x lower (improvements): 1; c7fin >1.5x lower but above the threshold: 2; within 1.5x: 103; c7fin >1.5x higher: 20
+      ( 8355, 1765) prod5     233  c7fin      86  d_vet1=0.002 is_sat1=False flux1=2505

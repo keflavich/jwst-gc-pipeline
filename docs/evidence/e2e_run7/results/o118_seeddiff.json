@@ -1,0 +1,48 @@
+{
+ "F212N": {
+  "nrca": {
+   "n_old": 187609,
+   "n_new": 187609,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  },
+  "nrcb": {
+   "n_old": 185631,
+   "n_new": 185631,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  },
+  "merged": {
+   "n_old": 309294,
+   "n_new": 309294,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  }
+ },
+ "F480M": {
+  "nrca": {
+   "n_old": 109544,
+   "n_new": 109544,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  },
+  "nrcb": {
+   "n_old": 111313,
+   "n_new": 111313,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  },
+  "merged": {
+   "n_old": 161027,
+   "n_new": 161027,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  }
+ }
+}

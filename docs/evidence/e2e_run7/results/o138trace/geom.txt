@@ -1,0 +1,24 @@
+satstar catalog columns: ['id', 'cutout_id', 'group_id', 'group_size', 'local_bkg', 'x_init', 'y_init', 'flux_init', 'x_fit', 'y_fit', 'flux_fit', 'x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'reduced_chi2', 'flags', 'outside_fov_seed', 'sat_area', 'zf_fit', 'zf_rim_in_core', 'zf_nrim_src', 'sat_com_ra', 'sat_com_dec', 'xcentroid', 'ycentroid', 'skycoord_fit', 'flux_fit_precap', 'cap_psf_frac', 'sidelobe_resid_sigma', 'sidelobe_resid_frac', 'ssr_ratio', 'seed_kind', 'position_only', 'sat_severity_floor', 'satstar_implied_peak', 'satstar_observed_peak', 'wingcal_rmask', 'x_0', 'y_0', 'flux_fit_raw', 'wingcal_ratio', 'x_fit_cutout', 'y_fit_cutout', 'x_init_cutout', 'y_init_cutout']
+--- exp3: 328 satstar rows
+  row (97.54, 493.51): satstar at (98.11, 499.93) flux 7.298e+06: separation 6.45 px = 2.80 FWHM; star minus row dx=+0.57 dy=+6.42; angle from the +y axis 185 deg
+  row (97.54, 493.51): satstar at (80.24, 577.14) flux 5.186e+04: separation 85.40 px = 37.13 FWHM; star minus row dx=-17.30 dy=+83.63; angle from the +y axis 168 deg
+  row (97.54, 493.51): satstar at (157.38, 427.78) flux 6.542e+04: separation 88.89 px = 38.65 FWHM; star minus row dx=+59.84 dy=-65.73; angle from the +y axis 318 deg
+  row (1106.48, 553.85): satstar at (1056.23, 614.06) flux 1.239e+05: separation 78.42 px = 34.10 FWHM; star minus row dx=-50.25 dy=+60.21; angle from the +y axis 140 deg
+  row (1106.48, 553.85): satstar at (1166.96, 631.12) flux 2.053e+04: separation 98.13 px = 42.66 FWHM; star minus row dx=+60.48 dy=+77.27; angle from the +y axis 218 deg
+  row (1106.48, 553.85): satstar at (1151.04, 650.60) flux 1.649e+04: separation 106.52 px = 46.31 FWHM; star minus row dx=+44.56 dy=+96.75; angle from the +y axis 205 deg
+  row (1207.50, 927.90): satstar at (1213.80, 875.01) flux 3.598e+04: separation 53.26 px = 23.16 FWHM; star minus row dx=+6.30 dy=-52.89; angle from the +y axis 353 deg
+  row (1207.50, 927.90): satstar at (1249.85, 841.43) flux 5.853e+04: separation 96.29 px = 41.86 FWHM; star minus row dx=+42.35 dy=-86.47; angle from the +y axis 334 deg
+  row (1207.50, 927.90): satstar at (1082.90, 949.23) flux 2.86e+04: separation 126.42 px = 54.96 FWHM; star minus row dx=-124.60 dy=+21.33; angle from the +y axis 100 deg
+  row (12.93, 1680.55): satstar at (46.39, 1620.30) flux 1.917e+05: separation 68.92 px = 29.96 FWHM; star minus row dx=+33.46 dy=-60.25; angle from the +y axis 331 deg
+  row (12.93, 1680.55): satstar at (18.42, 1785.90) flux 7.202e+04: separation 105.49 px = 45.86 FWHM; star minus row dx=+5.49 dy=+105.35; angle from the +y axis 183 deg
+  row (12.93, 1680.55): satstar at (6.02, 1542.18) flux 3.375e+06: separation 138.54 px = 60.24 FWHM; star minus row dx=-6.91 dy=-138.37; angle from the +y axis 3 deg
+--- exp6: 340 satstar rows
+  row (100.65, 150.69): satstar at (100.62, 157.55) flux 7.514e+06: separation 6.86 px = 2.98 FWHM; star minus row dx=-0.03 dy=+6.86; angle from the +y axis 180 deg
+  row (100.65, 150.69): satstar at (82.90, 234.53) flux 5.198e+04: separation 85.70 px = 37.26 FWHM; star minus row dx=-17.75 dy=+83.84; angle from the +y axis 168 deg
+  row (100.65, 150.69): satstar at (159.78, 85.69) flux 6.554e+04: separation 87.87 px = 38.20 FWHM; star minus row dx=+59.13 dy=-65.00; angle from the +y axis 318 deg
+  row (100.71, 165.26): satstar at (100.62, 157.55) flux 7.514e+06: separation 7.71 px = 3.35 FWHM; star minus row dx=-0.09 dy=-7.71; angle from the +y axis 1 deg
+  row (100.71, 165.26): satstar at (82.90, 234.53) flux 5.198e+04: separation 71.52 px = 31.10 FWHM; star minus row dx=-17.81 dy=+69.27; angle from the +y axis 166 deg
+  row (100.71, 165.26): satstar at (159.78, 85.69) flux 6.554e+04: separation 99.10 px = 43.09 FWHM; star minus row dx=+59.07 dy=-79.57; angle from the +y axis 323 deg
+  row (1867.41, 848.59): satstar at (1886.28, 792.91) flux 4.663e+05: separation 58.79 px = 25.56 FWHM; star minus row dx=+18.87 dy=-55.68; angle from the +y axis 341 deg
+  row (1867.41, 848.59): satstar at (1884.21, 754.24) flux 1.792e+05: separation 95.84 px = 41.67 FWHM; star minus row dx=+16.80 dy=-94.35; angle from the +y axis 350 deg
+  row (1867.41, 848.59): satstar at (1932.47, 935.04) flux 5.163e+04: separation 108.19 px = 47.04 FWHM; star minus row dx=+65.06 dy=+86.45; angle from the +y axis 217 deg

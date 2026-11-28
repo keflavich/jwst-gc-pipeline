@@ -1,0 +1,12 @@
+o138 F212N nrca: e2e5 302242 rows, e2e7 302245 rows; added 3, dropped 0
+o138 F212N nrcb: e2e5 298458 rows, e2e7 298459 rows; added 1, dropped 0
+o138 F212N merged: e2e5 503660 rows, e2e7 503664 rows; added 4, dropped 0
+    0 (265.8129472, -28.7134738) flux 2308.1 own_m6 nearest e2e5 seed row 0.116 arcsec | optnm->e7nm [other] tile px (804, 1554): res max 7->7 min -66->-76 data max 2101 leftover None->None crater None->None | optfin->e7fin [masked] tile px (804, 1554): res max nan->nan min nan->nan data max 2101 leftover None->None crater None->None
+    1 (265.8114377, -28.7177999) flux 1797.8 own_m6 nearest e2e5 seed row 0.111 arcsec | optnm->e7nm [other] tile px (306, 1399): res max 211->37 min -58->-31 data max 2643 leftover None->None crater None->None | optfin->e7fin [other] tile px (306, 1399): res max 211->37 min -58->-31 data max 2643 leftover None->None crater None->None
+    2 (265.8136761, -28.6741456) flux 1234.2 own_m6 nearest e2e5 seed row 0.124 arcsec | optnm->e7nm [cleared] tile px (5338, 1653): res max 110->13 min -10->-1 data max 688 leftover 106.47492980957031->None crater None->None | optfin->e7fin [cleared] tile px (5338, 1653): res max 110->13 min -10->-1 data max 688 leftover 106.50657653808594->None crater None->None
+    3 (265.8004743, -28.6503144) flux 1454.5 own_m6 nearest e2e5 seed row 0.109 arcsec | optnm->e7nm [other] tile px (8093, 333): res max 144->6 min -39->-11 data max 1057 leftover None->None crater None->None | optfin->e7fin [other] tile px (8093, 333): res max 144->6 min -39->-11 data max 1057 leftover None->None crater None->None
+o138 F212N optnm->e7nm: cleared 1, false seed 0, new left 0, other 3, masked 0, outside 0
+o138 F212N optfin->e7fin: cleared 1, false seed 0, new left 0, other 2, masked 1, outside 0
+o138 F480M nrca: e2e5 135752 rows, e2e7 135752 rows; added 0, dropped 0
+o138 F480M nrcb: e2e5 134364 rows, e2e7 134364 rows; added 0, dropped 0
+o138 F480M merged: e2e5 181652 rows, e2e7 181652 rows; added 0, dropped 0

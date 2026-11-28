@@ -1,0 +1,45 @@
+listing before the run (file written 2026-11-27 20:52:51, before the first submission at 20:56): modification time [datetime.datetime(2026, 11, 27, 19, 29, 11)]; sizes bad_files.txt 5034, server_config 1457934
+opt o105 post job listing: modification time ['2026-11-27 22:52:37']; sizes equal to the listing before: True
+opt o118 post job listing: modification time ['2026-11-27 22:52:37']; sizes equal to the listing before: True
+opt o130 post job listing: modification time ['2026-11-27 22:52:37']; sizes equal to the listing before: True
+opt o138 post job listing: modification time ['2026-11-27 22:52:37']; sizes equal to the listing before: True
+ctl o105 post job listing: modification time ['2026-11-28 02:26:29']; sizes equal to the listing before: True
+ctl o118 post job listing: modification time ['2026-11-27 22:52:37']; sizes equal to the listing before: True
+ctl o130 post job listing: modification time ['2026-11-27 22:52:37']; sizes equal to the listing before: True
+ctl o138 post job listing: modification time ['2026-11-27 22:52:37']; sizes equal to the listing before: True
+logs scanned: 81
+CRDS client lines in the logs: 16; PARS-RESAMPLESTEP lines: 72
+
+modification time 2026-11-27 22:52:37 (seen by the post jobs of ['opt o105', 'opt o118', 'opt o130', 'opt o138', 'ctl o118', 'ctl o130', 'ctl o138'])
+  lines of this run within 100 s of the modification time: 0
+  nearest line of this run: 2026-11-27 22:54:41 (+124 s) in e7-o130-opt-fin_53122930_4294967294.log
+  jobs of the account running at that time: this run 31, other 207
+    other: 105 x g0full
+    other:  29 x v13p2L3a
+    other:  16 x g0419438-o003-m3-fanout
+    other:  16 x crowded_l39438-o006-m4-fanout
+    other:  16 x g0549438-o004-m12-fanout
+    other:   5 x v13p2L2b
+    other:   1 x interactive
+    other:   1 x ngc63347213-o001-m6-finalize
+    other:   1 x m921334-o001-m7-finalize
+    other:   1 x alma_B3_hires
+    other:   1 x vla22A_Ku_AD_hires
+    other:   1 x vla22A_K_AD_hires
+
+modification time 2026-11-28 02:26:29 (seen by the post jobs of ['ctl o105'])
+  lines of this run within 100 s of the modification time: 0
+  nearest line of this run: 2026-11-28 02:04:59 (-1290 s) in e7-o105-opt-post_53122925.log
+  jobs of the account running at that time: this run 1, other 193
+    other:  95 x g0full
+    other:  21 x v13p2L3a
+    other:  16 x ngc63347213-o001-m7-fanout
+    other:  16 x crowded_l39438-o006-m4-fanout
+    other:  16 x g0549438-o004-m12-fanout
+    other:   8 x data-qa-refresh-issue
+    other:   4 x v13p2L2b
+    other:   4 x g0419438-o003-m3-fanout
+    other:   1 x interactive
+    other:   1 x alma_B3_hires
+    other:   1 x vla22A_K_AD_hires
+    other:   1 x alma_B1_hires

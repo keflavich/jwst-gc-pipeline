@@ -1,0 +1,21 @@
+# o118 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source e7nm, references ['c7fin']
+## features of e7nm (n_left 51, n_crater 4) against the c7fin extremum in the same box (regressions)
+  leftover: 51 features; c7fin below the threshold and >1.5x lower (regressions): 0; c7fin >1.5x lower but above the threshold: 0; within 1.5x: 49; c7fin >1.5x higher: 2
+  crater  : 4 features; c7fin below the threshold and >1.5x lower (regressions): 0; c7fin >1.5x lower but above the threshold: 0; within 1.5x: 3; c7fin >1.5x higher: 1
+## features of c7fin (n_left 78, n_crater 7) against the e7nm extremum in the same box (improvements)
+  leftover: 78 features; e7nm below the threshold and >1.5x lower (improvements): 28; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 48; e7nm >1.5x higher: 2
+      (  368,   14) c7fin    1607  e7nm      37  cls=NOT_IN_M7_CATALOG d_sat=2.159
+      ( 4552,  395) c7fin     718  e7nm     144  cls=SATSTAR_NEAR d_sat=0.217
+      ( 3033,   56) c7fin     530  e7nm      17  cls=NOT_IN_M7_CATALOG d_sat=10.915
+      (  303, 1629) c7fin     465  e7nm      16  cls=NOT_IN_M7_CATALOG d_sat=2.545
+      ( 2133, 1847) c7fin     449  e7nm      32  cls=SATSTAR_NEAR d_sat=0.263
+      (   89,  687) c7fin     410  e7nm       7  cls=VETTED_BUT_UNSUBTRACTED d_sat=5.380
+      ( 4809, 1549) c7fin     386  e7nm     160  cls=NOT_IN_M7_CATALOG d_sat=5.889
+      (  331,  697) c7fin     365  e7nm      17  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.346
+      ( 4904,  818) c7fin     305  e7nm      41  cls=NOT_IN_M7_CATALOG d_sat=7.830
+      (  889, 1327) c7fin     301  e7nm      12  cls=NOT_IN_M7_CATALOG d_sat=2.741
+      ( 4730,  433) c7fin     299  e7nm      26  cls=SATSTAR_NEAR d_sat=0.390
+      ( 2461,  260) c7fin     284  e7nm      13  cls=VETTED_BUT_UNSUBTRACTED d_sat=3.222
+  crater  : 7 features; e7nm below the threshold and >1.5x lower (improvements): 2; e7nm >1.5x lower but above the threshold: 1; within 1.5x: 4; e7nm >1.5x higher: 0
+      (  573, 2069) c7fin     272  e7nm     160  d_vet1=0.546 is_sat1=False flux1=693
+      (  780,   69) c7fin     202  e7nm      39  d_vet1=0.015 is_sat1=False flux1=3979

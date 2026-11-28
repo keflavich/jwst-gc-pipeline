@@ -1,0 +1,36 @@
+== arm a0, exposure 3, switches: none
+Saturation-proximity filter (m7): kept 2 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 20 fits within 1.0 pix of a SATURATED-DQ pixel (42384 -> 42364); sat_pixels_in_frame=1624
+== arm a0, exposure 6, switches: none
+Saturation-proximity filter (m7): kept 4 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 23 fits within 1.0 pix of a SATURATED-DQ pixel (42803 -> 42780); sat_pixels_in_frame=1857
+== arm a1, exposure 3, switches: 1392
+Saturation-proximity filter (m7): kept 2 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 20 fits within 1.0 pix of a SATURATED-DQ pixel (42384 -> 42364); sat_pixels_in_frame=1624
+== arm a1, exposure 6, switches: 1392
+Saturation-proximity filter (m7): kept 4 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 23 fits within 1.0 pix of a SATURATED-DQ pixel (42803 -> 42780); sat_pixels_in_frame=1857
+== arm a2, exposure 3, switches: 1394
+Saturation-proximity filter (m7): continuous distance <= 1.0 px of a SATURATED pixel centre: 18 fits (rounded-pixel rule: 22; kept only by the continuous rule 4, dropped only by it 0)
+Saturation-proximity filter (m7): kept 2 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 16 fits within 1.0 pix of a SATURATED-DQ pixel (continuous distance) (42384 -> 42368); sat_pixels_in_frame=1624
+== arm a2, exposure 6, switches: 1394
+Saturation-proximity filter (m7): continuous distance <= 1.0 px of a SATURATED pixel centre: 23 fits (rounded-pixel rule: 27; kept only by the continuous rule 4, dropped only by it 0)
+Saturation-proximity filter (m7): kept 4 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 19 fits within 1.0 pix of a SATURATED-DQ pixel (continuous distance) (42803 -> 42784); sat_pixels_in_frame=1857
+== arm a3, exposure 3, switches: 1392+1394
+Saturation-proximity filter (m7): continuous distance <= 1.0 px of a SATURATED pixel centre: 18 fits (rounded-pixel rule: 22; kept only by the continuous rule 4, dropped only by it 0)
+Saturation-proximity filter (m7): kept 2 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 16 fits within 1.0 pix of a SATURATED-DQ pixel (continuous distance) (42384 -> 42368); sat_pixels_in_frame=1624
+== arm a3, exposure 6, switches: 1392+1394
+Saturation-proximity filter (m7): continuous distance <= 1.0 px of a SATURATED pixel centre: 23 fits (rounded-pixel rule: 27; kept only by the continuous rule 4, dropped only by it 0)
+Saturation-proximity filter (m7): kept 4 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 19 fits within 1.0 pix of a SATURATED-DQ pixel (continuous distance) (42803 -> 42784); sat_pixels_in_frame=1857
+== arm a4, exposure 3, switches: 1392+1394+1395
+Saturation-proximity filter (m7): continuous distance <= 1.0 px of a SATURATED pixel centre: 18 fits (rounded-pixel rule: 22; kept only by the continuous rule 4, dropped only by it 0)
+Saturation-proximity filter (m7): kept 2 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 16 fits within 1.0 pix of a SATURATED-DQ pixel (continuous distance) (42384 -> 42368); sat_pixels_in_frame=1624
+== arm a4, exposure 6, switches: 1392+1394+1395
+Saturation-proximity filter (m7): continuous distance <= 1.0 px of a SATURATED pixel centre: 23 fits (rounded-pixel rule: 27; kept only by the continuous rule 4, dropped only by it 0)
+Saturation-proximity filter (m7): kept 4 fit(s) at satstar implied-peak-gate rejects (r=1.17px; the gate hands these stars to daophot)
+Saturation-proximity filter (m7): dropping 19 fits within 1.0 pix of a SATURATED-DQ pixel (continuous distance) (42803 -> 42784); sat_pixels_in_frame=1857

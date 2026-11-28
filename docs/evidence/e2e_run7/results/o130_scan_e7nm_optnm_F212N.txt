@@ -1,0 +1,9 @@
+# o130 F212N: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (4737, 11440); source e7nm, references ['optnm']
+## features of e7nm (n_left 11, n_crater 14) against the optnm extremum in the same box (regressions)
+  leftover: 11 features; optnm below the threshold and >1.5x lower (regressions): 0; optnm >1.5x lower but above the threshold: 0; within 1.5x: 7; optnm >1.5x higher: 4
+  crater  : 14 features; optnm below the threshold and >1.5x lower (regressions): 0; optnm >1.5x lower but above the threshold: 0; within 1.5x: 14; optnm >1.5x higher: 0
+## features of optnm (n_left 13, n_crater 14) against the e7nm extremum in the same box (improvements)
+  leftover: 13 features; e7nm below the threshold and >1.5x lower (improvements): 2; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 7; e7nm >1.5x higher: 4
+      ( 5065,   68) optnm    1241  e7nm       9  cls=VETTED_BUT_UNSUBTRACTED d_sat=2.975
+      ( 1700, 4566) optnm     597  e7nm      31  cls=VETTED_BUT_UNSUBTRACTED d_sat=1.434
+  crater  : 14 features; e7nm below the threshold and >1.5x lower (improvements): 0; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 14; e7nm >1.5x higher: 0

@@ -1,0 +1,150 @@
+== a0_e3 (base (four-tile opt env, none of the three switches)): 40861 rows
+   row at target (97.54,493.51): absent (nearest row 13.98 px away)
+   vs e7 opt : ref 40865 rows, only in replay 0, only in ref 4, matched 40861, rel dflux >1e-3: 1, >5e-2: 0, max 0.0344
+        only ref   : x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only ref   : x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only ref   : x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1
+        only ref   : x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0
+   vs e5 opt : ref 40861 rows, only in replay 0, only in ref 0, matched 40861, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e7 ctl : ref 40843 rows, only in replay 19, only in ref 1, matched 40842, rel dflux >1e-3: 2, >5e-2: 0, max 0.00724
+        only replay: x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1
+        only replay: x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0
+        only replay: x_fit=1783.2 y_fit=103.12 flux_fit=1954.3 n_pixels_fit=25 qfit=0.26168 flags=0
+        only replay: x_fit=712.9 y_fit=978.3 flux_fit=1736.5 n_pixels_fit=25 qfit=0.28745 flags=0
+        only ref   : x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0
+== a1_e3 (base + #1392): 40861 rows
+   row at target (97.54,493.51): absent (nearest row 13.98 px away)
+   vs e7 opt : ref 40865 rows, only in replay 0, only in ref 4, matched 40861, rel dflux >1e-3: 1, >5e-2: 0, max 0.0344
+        only ref   : x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only ref   : x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only ref   : x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1
+        only ref   : x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0
+   vs e5 opt : ref 40861 rows, only in replay 0, only in ref 0, matched 40861, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e7 ctl : ref 40843 rows, only in replay 19, only in ref 1, matched 40842, rel dflux >1e-3: 2, >5e-2: 0, max 0.00724
+        only replay: x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1
+        only replay: x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0
+        only replay: x_fit=1783.2 y_fit=103.12 flux_fit=1954.3 n_pixels_fit=25 qfit=0.26168 flags=0
+        only replay: x_fit=712.9 y_fit=978.3 flux_fit=1736.5 n_pixels_fit=25 qfit=0.28745 flags=0
+        only ref   : x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0
+== a2_e3 (base + #1394): 40865 rows
+   row at target (97.54,493.51): present; x_fit=97.54 y_fit=493.51 flux_fit=9469.9 flux_err=123.21 n_pixels_fit=15 qfit=0.36379 reduced_chi2=215.37 flags=1
+   vs e7 opt : ref 40865 rows, only in replay 0, only in ref 0, matched 40865, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e5 opt : ref 40861 rows, only in replay 4, only in ref 0, matched 40861, rel dflux >1e-3: 1, >5e-2: 0, max 0.0333
+        only replay: x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only replay: x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only replay: x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1
+        only replay: x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0
+   vs e7 ctl : ref 40843 rows, only in replay 23, only in ref 1, matched 40842, rel dflux >1e-3: 3, >5e-2: 0, max 0.0333
+        only replay: x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1
+        only replay: x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only replay: x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0
+        only replay: x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only ref   : x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0
+== a3_e3 (base + #1392 + #1394): 40865 rows
+   row at target (97.54,493.51): present; x_fit=97.54 y_fit=493.51 flux_fit=9469.9 flux_err=123.21 n_pixels_fit=15 qfit=0.36379 reduced_chi2=215.37 flags=1
+   vs e7 opt : ref 40865 rows, only in replay 0, only in ref 0, matched 40865, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e5 opt : ref 40861 rows, only in replay 4, only in ref 0, matched 40861, rel dflux >1e-3: 1, >5e-2: 0, max 0.0333
+        only replay: x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only replay: x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only replay: x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1
+        only replay: x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0
+   vs e7 ctl : ref 40843 rows, only in replay 23, only in ref 1, matched 40842, rel dflux >1e-3: 3, >5e-2: 0, max 0.0333
+        only replay: x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1
+        only replay: x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only replay: x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0
+        only replay: x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only ref   : x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0
+== a4_e3 (base + all three (= e7 opt)): 40865 rows
+   row at target (97.54,493.51): present; x_fit=97.54 y_fit=493.51 flux_fit=9469.9 flux_err=123.21 n_pixels_fit=15 qfit=0.36379 reduced_chi2=215.37 flags=1
+   vs e7 opt : ref 40865 rows, only in replay 0, only in ref 0, matched 40865, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e5 opt : ref 40861 rows, only in replay 4, only in ref 0, matched 40861, rel dflux >1e-3: 1, >5e-2: 0, max 0.0333
+        only replay: x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only replay: x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only replay: x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1
+        only replay: x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0
+   vs e7 ctl : ref 40843 rows, only in replay 23, only in ref 1, matched 40842, rel dflux >1e-3: 3, >5e-2: 0, max 0.0333
+        only replay: x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1
+        only replay: x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1
+        only replay: x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0
+        only replay: x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1
+        only ref   : x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0
+== a0_e6 (base (four-tile opt env, none of the three switches)): 41136 rows
+   row at target (100.65,150.69): absent (nearest row 19.99 px away)
+   row at target (100.71,165.26): absent (nearest row 17.74 px away)
+   vs e7 opt : ref 41139 rows, only in replay 0, only in ref 3, matched 41136, rel dflux >1e-3: 0, >5e-2: 0, max 0
+        only ref   : x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only ref   : x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only ref   : x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0
+   vs e5 opt : ref 41136 rows, only in replay 0, only in ref 0, matched 41136, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e7 ctl : ref 41114 rows, only in replay 25, only in ref 3, matched 41111, rel dflux >1e-3: 1, >5e-2: 0, max 0.0155
+        only replay: x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0
+        only replay: x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0
+        only replay: x_fit=507.7 y_fit=671.36 flux_fit=2468.7 n_pixels_fit=25 qfit=0.019682 flags=0
+        only replay: x_fit=775.99 y_fit=778.19 flux_fit=2441.7 n_pixels_fit=25 qfit=0.026681 flags=0
+        only ref   : x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0
+        only ref   : x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16
+        only ref   : x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16
+== a1_e6 (base + #1392): 41136 rows
+   row at target (100.65,150.69): absent (nearest row 19.99 px away)
+   row at target (100.71,165.26): absent (nearest row 17.74 px away)
+   vs e7 opt : ref 41139 rows, only in replay 0, only in ref 3, matched 41136, rel dflux >1e-3: 0, >5e-2: 0, max 0
+        only ref   : x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only ref   : x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only ref   : x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0
+   vs e5 opt : ref 41136 rows, only in replay 0, only in ref 0, matched 41136, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e7 ctl : ref 41114 rows, only in replay 25, only in ref 3, matched 41111, rel dflux >1e-3: 1, >5e-2: 0, max 0.0155
+        only replay: x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0
+        only replay: x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0
+        only replay: x_fit=507.7 y_fit=671.36 flux_fit=2468.7 n_pixels_fit=25 qfit=0.019682 flags=0
+        only replay: x_fit=775.99 y_fit=778.19 flux_fit=2441.7 n_pixels_fit=25 qfit=0.026681 flags=0
+        only ref   : x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0
+        only ref   : x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16
+        only ref   : x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16
+== a2_e6 (base + #1394): 41139 rows
+   row at target (100.65,150.69): present; x_fit=100.65 y_fit=150.69 flux_fit=8464.8 flux_err=99.982 n_pixels_fit=19 qfit=0.56391 reduced_chi2=161.98 flags=1
+   row at target (100.71,165.26): present; x_fit=100.71 y_fit=165.26 flux_fit=6718.7 flux_err=75.348 n_pixels_fit=11 qfit=0.35976 reduced_chi2=290.75 flags=1
+   vs e7 opt : ref 41139 rows, only in replay 0, only in ref 0, matched 41139, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e5 opt : ref 41136 rows, only in replay 3, only in ref 0, matched 41136, rel dflux >1e-3: 0, >5e-2: 0, max 0
+        only replay: x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only replay: x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only replay: x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0
+   vs e7 ctl : ref 41114 rows, only in replay 28, only in ref 3, matched 41111, rel dflux >1e-3: 1, >5e-2: 0, max 0.0155
+        only replay: x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0
+        only replay: x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only replay: x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only replay: x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0
+        only ref   : x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0
+        only ref   : x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16
+        only ref   : x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16
+== a3_e6 (base + #1392 + #1394): 41139 rows
+   row at target (100.65,150.69): present; x_fit=100.65 y_fit=150.69 flux_fit=8464.8 flux_err=99.982 n_pixels_fit=19 qfit=0.56391 reduced_chi2=161.98 flags=1
+   row at target (100.71,165.26): present; x_fit=100.71 y_fit=165.26 flux_fit=6718.7 flux_err=75.348 n_pixels_fit=11 qfit=0.35976 reduced_chi2=290.75 flags=1
+   vs e7 opt : ref 41139 rows, only in replay 0, only in ref 0, matched 41139, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e5 opt : ref 41136 rows, only in replay 3, only in ref 0, matched 41136, rel dflux >1e-3: 0, >5e-2: 0, max 0
+        only replay: x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only replay: x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only replay: x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0
+   vs e7 ctl : ref 41114 rows, only in replay 28, only in ref 3, matched 41111, rel dflux >1e-3: 1, >5e-2: 0, max 0.0155
+        only replay: x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0
+        only replay: x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only replay: x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only replay: x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0
+        only ref   : x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0
+        only ref   : x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16
+        only ref   : x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16
+== a4_e6 (base + all three (= e7 opt)): 41139 rows
+   row at target (100.65,150.69): present; x_fit=100.65 y_fit=150.69 flux_fit=8464.8 flux_err=99.982 n_pixels_fit=19 qfit=0.56391 reduced_chi2=161.98 flags=1
+   row at target (100.71,165.26): present; x_fit=100.71 y_fit=165.26 flux_fit=6718.7 flux_err=75.348 n_pixels_fit=11 qfit=0.35976 reduced_chi2=290.75 flags=1
+   vs e7 opt : ref 41139 rows, only in replay 0, only in ref 0, matched 41139, rel dflux >1e-3: 0, >5e-2: 0, max 0
+   vs e5 opt : ref 41136 rows, only in replay 3, only in ref 0, matched 41136, rel dflux >1e-3: 0, >5e-2: 0, max 0
+        only replay: x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only replay: x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only replay: x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0
+   vs e7 ctl : ref 41114 rows, only in replay 28, only in ref 3, matched 41111, rel dflux >1e-3: 1, >5e-2: 0, max 0.0155
+        only replay: x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0
+        only replay: x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1
+        only replay: x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1
+        only replay: x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0
+        only ref   : x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0
+        only ref   : x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16
+        only ref   : x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16

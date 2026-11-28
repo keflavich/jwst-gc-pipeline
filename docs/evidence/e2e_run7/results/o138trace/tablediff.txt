@@ -1,0 +1,22 @@
+--- lblnrcb exp3: e7 opt 40961 rows, e5 opt 40957 rows; rows only in e7 opt (no e5 row within 0.05 px): 4; only in e5 opt: 0
+   e7 only  x=1106.48 y=553.85 flux=2214.3 err=28.85 npix=17 qfit=0.0136 chi2=0.419 flags=1
+   e7 only  x=1207.50 y=927.90 flux=112.57 err=13.09 npix=25 qfit=0.289 chi2=0.537 flags=0
+   e7 only  x=12.93 y=1680.55 flux=163.02 err=14.61 npix=21 qfit=0.22 chi2=0.875 flags=1
+   e7 only  x=97.54 y=493.51 flux=9469.9 err=123.2 npix=15 qfit=0.364 chi2=215 flags=1
+   matched rows 40957; with |dflux|/flux > 1e-3: 1; > 0.05: 0
+--- lblnrcb exp6: e7 opt 41240 rows, e5 opt 41237 rows; rows only in e7 opt (no e5 row within 0.05 px): 3; only in e5 opt: 0
+   e7 only  x=1867.41 y=848.59 flux=39.465 err=16.27 npix=25 qfit=1.56 chi2=1.03 flags=0
+   e7 only  x=100.71 y=165.26 flux=6718.7 err=75.35 npix=11 qfit=0.36 chi2=291 flags=1
+   e7 only  x=100.65 y=150.69 flux=8464.8 err=99.98 npix=19 qfit=0.564 chi2=162 flags=1
+   matched rows 41237; with |dflux|/flux > 1e-3: 0; > 0.05: 0
+--- lblmerged exp3: e7 opt 40865 rows, e5 opt 40861 rows; rows only in e7 opt (no e5 row within 0.05 px): 4; only in e5 opt: 0
+   e7 only  x=1106.48 y=553.85 flux=2214.3 err=28.85 npix=17 qfit=0.0136 chi2=0.419 flags=1
+   e7 only  x=1207.50 y=927.90 flux=112.57 err=13.09 npix=25 qfit=0.289 chi2=0.537 flags=0
+   e7 only  x=12.93 y=1680.55 flux=163.02 err=14.61 npix=21 qfit=0.22 chi2=0.875 flags=1
+   e7 only  x=97.54 y=493.51 flux=9469.9 err=123.2 npix=15 qfit=0.364 chi2=215 flags=1
+   matched rows 40861; with |dflux|/flux > 1e-3: 1; > 0.05: 0
+--- lblmerged exp6: e7 opt 41139 rows, e5 opt 41136 rows; rows only in e7 opt (no e5 row within 0.05 px): 3; only in e5 opt: 0
+   e7 only  x=1867.41 y=848.59 flux=39.465 err=16.27 npix=25 qfit=1.56 chi2=1.03 flags=0
+   e7 only  x=100.71 y=165.26 flux=6718.7 err=75.35 npix=11 qfit=0.36 chi2=291 flags=1
+   e7 only  x=100.65 y=150.69 flux=8464.8 err=99.98 npix=19 qfit=0.564 chi2=162 flags=1
+   matched rows 41136; with |dflux|/flux > 1e-3: 0; > 0.05: 0

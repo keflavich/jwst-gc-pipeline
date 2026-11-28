@@ -1,0 +1,16 @@
+=== exp3: production table /orange/adamginsburg/jwst/gc-treasury/F212N/f212n_nrcb2_o138_visit001_vgroup02101_exp00003_resbgsub_hybpsf_m7_daophot_basic.fits; modified 2026-11-10 12:55
+  production: 40823 rows
+  e7 ctl: 40843 rows
+     near (98.42,507.46) d=0.00: x_fit=98.418 y_fit=507.46 flux_fit=7346.2 flux_err=61.506 n_pixels_fit=20 qfit=0.87684 reduced_chi2=646.07 flags=1
+  e7 opt: 40865 rows
+     near (97.54,493.51) d=0.00: x_fit=97.54 y_fit=493.51 flux_fit=9469.9 flux_err=123.21 n_pixels_fit=15 qfit=0.36379 reduced_chi2=215.37 flags=1
+     near (98.42,507.46) d=0.00: x_fit=98.418 y_fit=507.46 flux_fit=7346.2 flux_err=61.506 n_pixels_fit=20 qfit=0.87684 reduced_chi2=646.07 flags=1
+  rows only in production vs e7 ctl (0.05 px): 407; only in e7 ctl: 427
+=== exp6: production table /orange/adamginsburg/jwst/gc-treasury/F212N/f212n_nrcb2_o138_visit001_vgroup02101_exp00006_resbgsub_hybpsf_m7_daophot_basic.fits; modified 2026-11-10 13:05
+  production: 41079 rows
+     near (100.65,150.69) d=0.49: x_fit=100.35 y_fit=151.08 flux_fit=8300.8 flux_err=121.41 n_pixels_fit=19 qfit=0.52232 reduced_chi2=122.89 flags=1
+  e7 ctl: 41114 rows
+  e7 opt: 41139 rows
+     near (100.65,150.69) d=0.00: x_fit=100.65 y_fit=150.69 flux_fit=8464.8 flux_err=99.982 n_pixels_fit=19 qfit=0.56391 reduced_chi2=161.98 flags=1
+     near (100.71,165.26) d=0.00: x_fit=100.71 y_fit=165.26 flux_fit=6718.7 flux_err=75.348 n_pixels_fit=11 qfit=0.35976 reduced_chi2=290.75 flags=1
+  rows only in production vs e7 ctl (0.05 px): 488; only in e7 ctl: 523

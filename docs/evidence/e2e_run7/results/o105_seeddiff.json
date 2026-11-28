@@ -1,0 +1,841 @@
+{
+ "F212N": {
+  "nrca": {
+   "n_old": 325110,
+   "n_new": 325113,
+   "n_added": 3,
+   "n_dropped": 0,
+   "added": [
+    {
+     "module": "nrca",
+     "ra": 266.6613106835622,
+     "dec": -28.64762785287149,
+     "flux": 1621.3568115234375,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.1127771050342057
+    },
+    {
+     "module": "nrca",
+     "ra": 266.64279866081534,
+     "dec": -28.657858441479064,
+     "flux": 2197.374267578125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.12440695548006278
+    },
+    {
+     "module": "nrca",
+     "ra": 266.66873188904776,
+     "dec": -28.644422801385076,
+     "flux": 1148.6168212890625,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.12289513547859883
+    }
+   ]
+  },
+  "nrcb": {
+   "n_old": 344056,
+   "n_new": 344064,
+   "n_added": 8,
+   "n_dropped": 0,
+   "added": [
+    {
+     "module": "nrcb",
+     "ra": 266.6555604516079,
+     "dec": -28.62277047488946,
+     "flux": 1273.6783447265625,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11106338042864586
+    },
+    {
+     "module": "nrcb",
+     "ra": 266.68116085186335,
+     "dec": -28.61922571840377,
+     "flux": 2454.155517578125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.1236925923681151
+    },
+    {
+     "module": "nrcb",
+     "ra": 266.68326594772145,
+     "dec": -28.621245875102645,
+     "flux": 1947.27685546875,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11946540764267798
+    },
+    {
+     "module": "nrcb",
+     "ra": 266.6764332736049,
+     "dec": -28.57623415551969,
+     "flux": 3527.470703125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11722430589936653
+    },
+    {
+     "module": "nrcb",
+     "ra": 266.6679919018024,
+     "dec": -28.576759378424676,
+     "flux": 3282.922119140625,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11262921224003321
+    },
+    {
+     "module": "nrcb",
+     "ra": 266.65091591926506,
+     "dec": -28.57721336895387,
+     "flux": 1314.5128173828125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11026875042721981
+    },
+    {
+     "module": "nrcb",
+     "ra": 266.6543066680096,
+     "dec": -28.577730243497257,
+     "flux": 1375.1142578125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.10988725176838132
+    },
+    {
+     "module": "nrcb",
+     "ra": 266.6493653186732,
+     "dec": -28.586794336903175,
+     "flux": 1965.22216796875,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11322163292470866
+    }
+   ]
+  },
+  "merged": {
+   "n_old": 579338,
+   "n_new": 579348,
+   "n_added": 10,
+   "n_dropped": 0,
+   "added": [
+    {
+     "module": "merged",
+     "ra": 266.65091591926506,
+     "dec": -28.57721336895387,
+     "flux": 1314.5128173828125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11026875042721981
+    },
+    {
+     "module": "merged",
+     "ra": 266.6543066680096,
+     "dec": -28.577730243497257,
+     "flux": 1375.1142578125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.10988725176838132
+    },
+    {
+     "module": "merged",
+     "ra": 266.6493653186732,
+     "dec": -28.586794336903175,
+     "flux": 1965.22216796875,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11322163292470866
+    },
+    {
+     "module": "merged",
+     "ra": 266.6764332736049,
+     "dec": -28.57623415551969,
+     "flux": 3527.470703125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11722430589936653
+    },
+    {
+     "module": "merged",
+     "ra": 266.6679919018024,
+     "dec": -28.576759378424676,
+     "flux": 3282.922119140625,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11262921224003321
+    },
+    {
+     "module": "merged",
+     "ra": 266.68116085186335,
+     "dec": -28.61922571840377,
+     "flux": 2454.155517578125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.1236925923681151
+    },
+    {
+     "module": "merged",
+     "ra": 266.6613106835622,
+     "dec": -28.64762785287149,
+     "flux": 1621.3568115234375,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.1127771050342057
+    },
+    {
+     "module": "merged",
+     "ra": 266.64279866081534,
+     "dec": -28.657858441479064,
+     "flux": 2197.374267578125,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.12440695548006278
+    },
+    {
+     "module": "merged",
+     "ra": 266.66873188904776,
+     "dec": -28.644422801385076,
+     "flux": 1148.6168212890625,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.12289513547859883
+    },
+    {
+     "module": "merged",
+     "ra": 266.68326594772145,
+     "dec": -28.621245875102645,
+     "flux": 1947.27685546875,
+     "origin": "own_m6",
+     "nearest_old_arcsec": 0.11946540764267798
+    }
+   ]
+  },
+  "rows": [
+   {
+    "module": "merged",
+    "ra": 266.65091591926506,
+    "dec": -28.57721336895387,
+    "flux": 1314.5128173828125,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.11026875042721981,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 10953.434273763889,
+      "y": 1213.841228418916,
+      "finite_frac": 1.0,
+      "res_max": 130.0145263671875,
+      "res_min": -8.155184745788574,
+      "data_max": 801.1626586914062,
+      "model_max": 809.3179321289062,
+      "leftover_peak": 122.61810302734375,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 10953.434273763889,
+      "y": 1213.841228418916,
+      "finite_frac": 1.0,
+      "res_max": 20.64908218383789,
+      "res_min": 5.0319390296936035,
+      "data_max": 801.1626586914062,
+      "model_max": 794.37890625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "cleared"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 10953.434273763889,
+      "y": 1213.841228418916,
+      "finite_frac": 1.0,
+      "res_max": 130.0145263671875,
+      "res_min": -8.155184745788574,
+      "data_max": 801.1626586914062,
+      "model_max": 809.3179321289062,
+      "leftover_peak": 122.61810302734375,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 10953.434273763889,
+      "y": 1213.841228418916,
+      "finite_frac": 1.0,
+      "res_max": 20.64908218383789,
+      "res_min": 5.0319390296936035,
+      "data_max": 801.1626586914062,
+      "model_max": 794.37890625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "cleared"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.6543066680096,
+    "dec": -28.577730243497257,
+    "flux": 1375.1142578125,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.10988725176838132,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 10891.937586910228,
+      "y": 1556.8311329281605,
+      "finite_frac": 1.0,
+      "res_max": 111.28382873535156,
+      "res_min": -31.89279556274414,
+      "data_max": 1052.791259765625,
+      "model_max": 1084.68408203125,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 10891.937586910228,
+      "y": 1556.8311329281605,
+      "finite_frac": 1.0,
+      "res_max": 45.78757095336914,
+      "res_min": -12.108736991882324,
+      "data_max": 1052.791259765625,
+      "model_max": 1061.66259765625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 10891.937586910228,
+      "y": 1556.8311329281605,
+      "finite_frac": 1.0,
+      "res_max": 111.28382873535156,
+      "res_min": -31.89279556274414,
+      "data_max": 1052.791259765625,
+      "model_max": 1084.68408203125,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 10891.937586910228,
+      "y": 1556.8311329281605,
+      "finite_frac": 1.0,
+      "res_max": 45.78757095336914,
+      "res_min": -12.108736991882324,
+      "data_max": 1052.791259765625,
+      "model_max": 1061.66259765625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.6493653186732,
+    "dec": -28.586794336903175,
+    "flux": 1965.22216796875,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.11322163292470866,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 9849.627329804098,
+      "y": 1050.7505701611487,
+      "finite_frac": 1.0,
+      "res_max": 11.564645767211914,
+      "res_min": -13.039572715759277,
+      "data_max": 2814.9853515625,
+      "model_max": 2824.873291015625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 9849.627329804098,
+      "y": 1050.7505701611487,
+      "finite_frac": 1.0,
+      "res_max": 11.175518035888672,
+      "res_min": -11.597333908081055,
+      "data_max": 2814.9853515625,
+      "model_max": 2825.32421875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 9849.627329804098,
+      "y": 1050.7505701611487,
+      "finite_frac": 1.0,
+      "res_max": 11.564645767211914,
+      "res_min": -13.039572715759277,
+      "data_max": 2814.9853515625,
+      "model_max": 2824.873291015625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 9849.627329804098,
+      "y": 1050.7505701611487,
+      "finite_frac": 1.0,
+      "res_max": 11.175518035888672,
+      "res_min": -11.597333908081055,
+      "data_max": 2814.9853515625,
+      "model_max": 2825.32421875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.6764332736049,
+    "dec": -28.57623415551969,
+    "flux": 3527.470703125,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.11722430589936653,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 11051.786020560627,
+      "y": 3798.1765875954516,
+      "finite_frac": 1.0,
+      "res_max": 343.3603515625,
+      "res_min": 18.062999725341797,
+      "data_max": 2270.818359375,
+      "model_max": 2224.986083984375,
+      "leftover_peak": 335.5697326660156,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 11051.786020560627,
+      "y": 3798.1765875954516,
+      "finite_frac": 1.0,
+      "res_max": 73.06422424316406,
+      "res_min": 8.41193962097168,
+      "data_max": 2270.818359375,
+      "model_max": 2197.754150390625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "cleared"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 11051.786020560627,
+      "y": 3798.1765875954516,
+      "finite_frac": 1.0,
+      "res_max": 343.3603515625,
+      "res_min": 18.062999725341797,
+      "data_max": 2270.818359375,
+      "model_max": 2224.986083984375,
+      "leftover_peak": 335.5210876464844,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 11051.786020560627,
+      "y": 3798.1765875954516,
+      "finite_frac": 1.0,
+      "res_max": 73.06422424316406,
+      "res_min": 8.41193962097168,
+      "data_max": 2270.818359375,
+      "model_max": 2197.754150390625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "cleared"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.6679919018024,
+    "dec": -28.576759378424676,
+    "flux": 3282.922119140625,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.11262921224003321,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 10996.102835418285,
+      "y": 2943.1185220792536,
+      "finite_frac": 1.0,
+      "res_max": 73.28244018554688,
+      "res_min": 1.1605693101882935,
+      "data_max": 2009.84375,
+      "model_max": 1936.5614013671875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 10996.102835418285,
+      "y": 2943.1185220792536,
+      "finite_frac": 1.0,
+      "res_max": 83.98827362060547,
+      "res_min": 1.8781065940856934,
+      "data_max": 2009.84375,
+      "model_max": 1925.8555908203125,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 10996.102835418285,
+      "y": 2943.1185220792536,
+      "finite_frac": 0.2222222222222222,
+      "res_max": 51.52250289916992,
+      "res_min": 9.543323516845703,
+      "data_max": 2009.84375,
+      "model_max": 1936.5614013671875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 10996.102835418285,
+      "y": 2943.1185220792536,
+      "finite_frac": 0.2222222222222222,
+      "res_max": 51.702301025390625,
+      "res_min": 9.621328353881836,
+      "data_max": 2009.84375,
+      "model_max": 1925.8555908203125,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.68116085186335,
+    "dec": -28.61922571840377,
+    "flux": 2454.155517578125,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.1236925923681151,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 6092.1662499020895,
+      "y": 4248.218651047189,
+      "finite_frac": 1.0,
+      "res_max": 244.54151916503906,
+      "res_min": 7.798410415649414,
+      "data_max": 1387.67724609375,
+      "model_max": 1363.873779296875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 6092.1662499020895,
+      "y": 4248.218651047189,
+      "finite_frac": 1.0,
+      "res_max": 33.900962829589844,
+      "res_min": 7.720582008361816,
+      "data_max": 1387.67724609375,
+      "model_max": 1353.776123046875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 6092.1662499020895,
+      "y": 4248.218651047189,
+      "finite_frac": 1.0,
+      "res_max": 244.54151916503906,
+      "res_min": 7.798410415649414,
+      "data_max": 1387.67724609375,
+      "model_max": 1363.873779296875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 6092.1662499020895,
+      "y": 4248.218651047189,
+      "finite_frac": 1.0,
+      "res_max": 33.900962829589844,
+      "res_min": 7.720582008361816,
+      "data_max": 1387.67724609375,
+      "model_max": 1353.776123046875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.6613106835622,
+    "dec": -28.64762785287149,
+    "flux": 1621.3568115234375,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.1127771050342057,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 2828.880988637844,
+      "y": 2220.7735265998695,
+      "finite_frac": 1.0,
+      "res_max": 181.42013549804688,
+      "res_min": -63.9311637878418,
+      "data_max": 2464.75048828125,
+      "model_max": 2463.4619140625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 2828.880988637844,
+      "y": 2220.7735265998695,
+      "finite_frac": 1.0,
+      "res_max": 44.625404357910156,
+      "res_min": -25.53709602355957,
+      "data_max": 2464.75048828125,
+      "model_max": 2435.326904296875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 2828.880988637844,
+      "y": 2220.7735265998695,
+      "finite_frac": 0.4482758620689655,
+      "res_max": 132.9300994873047,
+      "res_min": -63.9311637878418,
+      "data_max": 2464.75048828125,
+      "model_max": 2463.4619140625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 2828.880988637844,
+      "y": 2220.7735265998695,
+      "finite_frac": 0.4482758620689655,
+      "res_max": 31.937820434570312,
+      "res_min": -25.53709602355957,
+      "data_max": 2464.75048828125,
+      "model_max": 2435.326904296875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.64279866081534,
+    "dec": -28.657858441479064,
+    "flux": 2197.374267578125,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.12440695548006278,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 1659.673603026481,
+      "y": 341.20960979211577,
+      "finite_frac": 1.0,
+      "res_max": 212.72039794921875,
+      "res_min": -0.5593916773796082,
+      "data_max": 1032.9056396484375,
+      "model_max": 1017.955810546875,
+      "leftover_peak": 205.3941650390625,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 1659.673603026481,
+      "y": 341.20960979211577,
+      "finite_frac": 1.0,
+      "res_max": 25.458101272583008,
+      "res_min": 1.8658225536346436,
+      "data_max": 1032.9056396484375,
+      "model_max": 1007.4475708007812,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "cleared"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 1659.673603026481,
+      "y": 341.20960979211577,
+      "finite_frac": 1.0,
+      "res_max": 212.72039794921875,
+      "res_min": -0.5593916773796082,
+      "data_max": 1032.9056396484375,
+      "model_max": 1017.955810546875,
+      "leftover_peak": 205.46824645996094,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 1659.673603026481,
+      "y": 341.20960979211577,
+      "finite_frac": 1.0,
+      "res_max": 25.458101272583008,
+      "res_min": 1.8658225536346436,
+      "data_max": 1032.9056396484375,
+      "model_max": 1007.4475708007812,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "cleared"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.66873188904776,
+    "dec": -28.644422801385076,
+    "flux": 1148.6168212890625,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.12289513547859883,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 3194.1815994604126,
+      "y": 2973.7795919957125,
+      "finite_frac": 1.0,
+      "res_max": 120.06146240234375,
+      "res_min": 6.381301403045654,
+      "data_max": 421.2686462402344,
+      "model_max": 414.88739013671875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 3194.1815994604126,
+      "y": 2973.7795919957125,
+      "finite_frac": 1.0,
+      "res_max": 19.120975494384766,
+      "res_min": 4.637680530548096,
+      "data_max": 421.2686462402344,
+      "model_max": 409.56707763671875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 3194.1815994604126,
+      "y": 2973.7795919957125,
+      "finite_frac": 1.0,
+      "res_max": 120.06146240234375,
+      "res_min": 6.381301403045654,
+      "data_max": 421.2686462402344,
+      "model_max": 414.88739013671875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 3194.1815994604126,
+      "y": 2973.7795919957125,
+      "finite_frac": 1.0,
+      "res_max": 19.120975494384766,
+      "res_min": 4.637680530548096,
+      "data_max": 421.2686462402344,
+      "model_max": 409.56707763671875,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    }
+   },
+   {
+    "module": "merged",
+    "ra": 266.68326594772145,
+    "dec": -28.621245875102645,
+    "flux": 1947.27685546875,
+    "origin": "own_m6",
+    "nearest_old_arcsec": 0.11946540764267798,
+    "optnm->e7nm": {
+     "old": {
+      "tag": "optnm",
+      "x": 5858.012362563032,
+      "y": 4459.928883117551,
+      "finite_frac": 1.0,
+      "res_max": 65.59173583984375,
+      "res_min": 5.5590667724609375,
+      "data_max": 2910.571533203125,
+      "model_max": 2874.59375,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7nm",
+      "x": 5858.012362563032,
+      "y": 4459.928883117551,
+      "finite_frac": 1.0,
+      "res_max": 39.87038040161133,
+      "res_min": 3.8235864639282227,
+      "data_max": 2910.571533203125,
+      "model_max": 2874.883056640625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    },
+    "optfin->e7fin": {
+     "old": {
+      "tag": "optfin",
+      "x": 5858.012362563032,
+      "y": 4459.928883117551,
+      "finite_frac": 1.0,
+      "res_max": 65.59173583984375,
+      "res_min": 5.5590667724609375,
+      "data_max": 2910.571533203125,
+      "model_max": 2874.59375,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "new": {
+      "tag": "e7fin",
+      "x": 5858.012362563032,
+      "y": 4459.928883117551,
+      "finite_frac": 1.0,
+      "res_max": 39.87038040161133,
+      "res_min": 3.8235864639282227,
+      "data_max": 2910.571533203125,
+      "model_max": 2874.883056640625,
+      "leftover_peak": null,
+      "crater_depth": null
+     },
+     "verdict": "other"
+    }
+   }
+  ]
+ },
+ "F480M": {
+  "nrca": {
+   "n_old": 121480,
+   "n_new": 121480,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  },
+  "nrcb": {
+   "n_old": 119841,
+   "n_new": 119841,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  },
+  "merged": {
+   "n_old": 163849,
+   "n_new": 163849,
+   "n_added": 0,
+   "n_dropped": 0,
+   "added": []
+  }
+ }
+}

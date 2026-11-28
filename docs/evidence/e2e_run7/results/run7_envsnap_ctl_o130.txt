@@ -1,0 +1,24 @@
+arm=ctl tile=o130 submitted=2026-11-27T20:56:45-05:00 dry=0
+EXTRA_ARGS=--manual-ext-star-prom-robust-min=-1 --residual-bg-median-size=0 --residual-bg-satstar-mask-fwhm=3.75 --manual-seed-round-loose-max=-1
+CRDS_PATH=/orange/adamginsburg/jwst/crds
+CRDS_READONLY_CACHE=1
+DAOPHOT_HANDOFF_FILTERS=F480M
+DAOPHOT_HANDOFF_PEAK_MIN_AREA=50
+DAOPHOT_HANDOFF_RESTORE_ACCEPTED_EXCL_FWHM=1.5
+EACH_SUFFIX=destreak_o130_crf
+FIELD=130
+FILTERS=F212N F480M
+GC_ALLOW_DEV=1
+GC_BASEPATH_OVERRIDE=/blue/adamginsburg/adamginsburg/tmp/claude-3663/-blue-adamginsburg-adamginsburg-jwst-brick-astrometry-paper/5803da77-292b-4dee-b758-444f6db8990e/scratchpad/e2e7/ctl/o130/gc-treasury
+MODULESHOME=/apps/lmod/9.1.2
+MODULES=nrca,nrcb,merged
+NSHARDS=8
+PHASE=m7
+PIPE_ROOT=/blue/adamginsburg/adamginsburg/tmp/claude-3663/-blue-adamginsburg-adamginsburg-jwst-brick-astrometry-paper/5803da77-292b-4dee-b758-444f6db8990e/scratchpad/wt_e2e7
+PROPOSAL=10678
+PSF_EPSF_CORE_DIR=/blue/adamginsburg/adamginsburg/repos/epsfs
+SATSTAR_OBS_PK_FROM_CRF=1
+SATSTAR_OPTIN_FILTERS=F480M
+SATSTAR_QFIT_LOCAL_GATE=1
+SATSTAR_ZF_KEEP_FINITE=1
+TARGET=gc-treasury

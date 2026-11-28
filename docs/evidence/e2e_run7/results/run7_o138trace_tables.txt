@@ -1,0 +1,20 @@
+## replays
+| arm | switches on | exposure | rows in the table | fits at the target positions | against the four-tile opt table: rows only in the replay / only in the table / matched rows with a flux change above 1e-3 (relative) | largest relative flux change against the four-tile opt table | against the opt table of this run: the same three counts | largest relative flux change against the opt table of this run |
+| :--- | :--- | :--- | ---: | :--- | :--- | ---: | :--- | ---: |
+| a0 | none | 3 | 40861 | (97.54, 493.51) absent | 0 / 0 / 0 | 0 | 0 / 4 / 1 | 0.0344 |
+| a0 | none | 6 | 41136 | (100.65, 150.69) absent; (100.71, 165.26) absent | 0 / 0 / 0 | 0 | 0 / 3 / 0 | 0 |
+| a1 | #1392 | 3 | 40861 | (97.54, 493.51) absent | 0 / 0 / 0 | 0 | 0 / 4 / 1 | 0.0344 |
+| a1 | #1392 | 6 | 41136 | (100.65, 150.69) absent; (100.71, 165.26) absent | 0 / 0 / 0 | 0 | 0 / 3 / 0 | 0 |
+| a2 | #1394 | 3 | 40865 | (97.54, 493.51) present | 4 / 0 / 1 | 0.0333 | 0 / 0 / 0 | 0 |
+| a2 | #1394 | 6 | 41139 | (100.65, 150.69) present; (100.71, 165.26) present | 3 / 0 / 0 | 0 | 0 / 0 / 0 | 0 |
+| a3 | #1392 + #1394 | 3 | 40865 | (97.54, 493.51) present | 4 / 0 / 1 | 0.0333 | 0 / 0 / 0 | 0 |
+| a3 | #1392 + #1394 | 6 | 41139 | (100.65, 150.69) present; (100.71, 165.26) present | 3 / 0 / 0 | 0 | 0 / 0 / 0 | 0 |
+| a4 | #1392 + #1394 + #1395 | 3 | 40865 | (97.54, 493.51) present | 4 / 0 / 1 | 0.0333 | 0 / 0 / 0 | 0 |
+| a4 | #1392 + #1394 + #1395 | 6 | 41139 | (100.65, 150.69) present; (100.71, 165.26) present | 3 / 0 / 0 | 0 | 0 / 0 / 0 | 0 |
+
+## fitrows
+| exposure | fit at | arms that have the fit | x_fit | y_fit | flux | flux error | pixels fitted (of 25) | qfit | reduced chi^2 | flags |
+| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | (97.54, 493.51) | a2, a3, a4 | 97.540 | 493.510 | 9469.88 | 123.207 | 15 | 0.36379 | 215.37 | 1 |
+| 6 | (100.65, 150.69) | a2, a3, a4 | 100.647 | 150.687 | 8464.84 | 99.982 | 19 | 0.56391 | 161.98 | 1 |
+| 6 | (100.71, 165.26) | a2, a3, a4 | 100.710 | 165.258 | 6718.73 | 75.348 | 11 | 0.35976 | 290.75 | 1 |

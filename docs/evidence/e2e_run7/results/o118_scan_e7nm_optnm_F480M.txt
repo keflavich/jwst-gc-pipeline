@@ -1,0 +1,10 @@
+# o118 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source e7nm, references ['optnm']
+## features of e7nm (n_left 51, n_crater 4) against the optnm extremum in the same box (regressions)
+  leftover: 51 features; optnm below the threshold and >1.5x lower (regressions): 0; optnm >1.5x lower but above the threshold: 0; within 1.5x: 49; optnm >1.5x higher: 2
+  crater  : 4 features; optnm below the threshold and >1.5x lower (regressions): 0; optnm >1.5x lower but above the threshold: 0; within 1.5x: 4; optnm >1.5x higher: 0
+## features of optnm (n_left 54, n_crater 4) against the e7nm extremum in the same box (improvements)
+  leftover: 54 features; e7nm below the threshold and >1.5x lower (improvements): 3; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 49; e7nm >1.5x higher: 2
+      ( 2133, 1847) optnm     449  e7nm      32  cls=SATSTAR_NEAR d_sat=0.263
+      ( 4904,  818) optnm     305  e7nm      41  cls=NOT_IN_M7_CATALOG d_sat=7.830
+      ( 4730,  433) optnm     299  e7nm      26  cls=SATSTAR_NEAR d_sat=0.390
+  crater  : 4 features; e7nm below the threshold and >1.5x lower (improvements): 0; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 4; e7nm >1.5x higher: 0

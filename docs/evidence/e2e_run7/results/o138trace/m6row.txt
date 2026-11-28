@@ -1,0 +1,12 @@
+--- e7 opt tree m6: 523431 rows
+   below the star: pix (8694.32,633.54) flux=8828.7 flux_err=116.07 qfit=0.49138 flags=1 nmatch=2
+   above the star: pix (8693.29,646.75) flux=6514.4 flux_err=78.093 qfit=0.46898 flags=1 nmatch=3
+--- e7 opt tree m7: 506470 rows
+   below the star: pix (8694.14,633.31) flux=8975.1 flux_err=110.57 qfit=0.48445 flags=1 nmatch=2
+   above the star: pix (8693.90,647.16) flux=8201.9 flux_err=78.248 qfit=0.62749 flags=1 nmatch=5
+--- production m6: 523431 rows
+   below the star: pix (8694.32,633.54) flux=8828.7 flux_err=116.07 qfit=0.49138 flags=1 nmatch=2
+   above the star: pix (8693.29,646.75) flux=6514.4 flux_err=78.093 qfit=0.46898 flags=1 nmatch=3
+--- production m7: 505768 rows
+   below the star: pix (8694.32,633.55) flux=8828.3 flux_err=116.14 qfit=0.49127 flags=1 nmatch=2
+   above the star: pix (8693.29,646.75) flux=6535.5 flux_err=77.976 qfit=0.47186 flags=1 nmatch=3

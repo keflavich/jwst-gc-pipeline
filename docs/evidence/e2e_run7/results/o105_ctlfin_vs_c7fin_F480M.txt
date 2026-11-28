@@ -1,0 +1,2 @@
+o105-ctlfin-vs-c7fin-F480M: A (2280, 5640) B (2280, 5640); same grid keywords: True
+o105-ctlfin-vs-c7fin-F480M: NaN only in A 0, NaN only in B 0, NaN in both 394405, finite in both 12464795; max |A-B| 0, px with |A-B| > 1e-3: 0

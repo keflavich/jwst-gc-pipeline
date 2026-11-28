@@ -1,0 +1,9 @@
+o130 F212N nrca: e2e5 159263 rows, e2e7 159263 rows; added 0, dropped 0
+o130 F212N nrcb: e2e5 160219 rows, e2e7 160220 rows; added 1, dropped 0
+o130 F212N merged: e2e5 259706 rows, e2e7 259707 rows; added 1, dropped 0
+    0 (266.7852216, -28.3426734) flux 1556.9 own_m6 nearest e2e5 seed row 0.108 arcsec | optnm->e7nm [cleared] tile px (10635, 3094): res max 159->41 min 2->2 data max 939 leftover 154.68276977539062->None crater None->None | optfin->e7fin [cleared] tile px (10635, 3094): res max 159->41 min 2->2 data max 939 leftover 154.68276977539062->None crater None->None
+o130 F212N optnm->e7nm: cleared 1, false seed 0, new left 0, other 0, masked 0, outside 0
+o130 F212N optfin->e7fin: cleared 1, false seed 0, new left 0, other 0, masked 0, outside 0
+o130 F480M nrca: e2e5 109605 rows, e2e7 109605 rows; added 0, dropped 0
+o130 F480M nrcb: e2e5 108812 rows, e2e7 108812 rows; added 0, dropped 0
+o130 F480M merged: e2e5 161863 rows, e2e7 161863 rows; added 0, dropped 0

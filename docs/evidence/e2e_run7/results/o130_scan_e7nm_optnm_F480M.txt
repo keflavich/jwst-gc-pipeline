@@ -1,0 +1,6 @@
+# o130 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source e7nm, references ['optnm']
+## features of e7nm (n_left 18, n_crater 0) against the optnm extremum in the same box (regressions)
+  leftover: 18 features; optnm below the threshold and >1.5x lower (regressions): 0; optnm >1.5x lower but above the threshold: 0; within 1.5x: 18; optnm >1.5x higher: 0
+## features of optnm (n_left 19, n_crater 0) against the e7nm extremum in the same box (improvements)
+  leftover: 19 features; e7nm below the threshold and >1.5x lower (improvements): 1; e7nm >1.5x lower but above the threshold: 0; within 1.5x: 18; e7nm >1.5x higher: 0
+      ( 1932,  146) optnm     359  e7nm      11  cls=VETTED_BUT_UNSUBTRACTED d_sat=8.029

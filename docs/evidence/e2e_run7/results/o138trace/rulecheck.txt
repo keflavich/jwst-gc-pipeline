@@ -1,0 +1,60 @@
+==== exp3: crf jw10678138001_02101_00003_nrcb2_destreak_o138_crf.fits; shape (2048, 2048); SATURATED pixels 1624 (the log line says sat_pixels_in_frame)
+  fit  position (97.540, 493.510) rounds to (98, 494): rounded-pixel distance 1.000 px -> DROP (threshold 1.0, drop at <=); continuous distance 1.560 px to the saturated pixel centre (98, 495) -> keep
+  init position (97.994, 493.514) rounds to (98, 494): rounded-pixel distance 1.000 px -> DROP (threshold 1.0, drop at <=); continuous distance 1.486 px to the saturated pixel centre (98, 495) -> keep
+  DQ map (S saturated, D do-not-use, j jump) rows y=500..488 (top to bottom), columns x=92..104; * marks the rounded pixel
+    y= 500  j S S S S S S S S S S S .
+    y= 499  j S S S S S S S S S S S j
+    y= 498  j S S S S S S S S S S S j
+    y= 497  j S S S S S S S S S S S j
+    y= 496  . j S S S S S S S S S . j
+    y= 495  . . j S S S S S S S . . .
+    y= 494  . . j . . j * j j . . . .
+    y= 493  . . . . . j j j . . . . .
+    y= 492  . . . . . j j j . . . . .
+    y= 491  . . . . . . . . . . . . .
+    y= 490  . . . . . . . . . . . . .
+    y= 489  . . . . . . . . . . . . .
+    y= 488  . . . . . . . . . . . . .
+  SCI (MJy/sr) 7x7 around the rounded pixel (rows top to bottom y=497..491, columns x=95..101):
+    y= 497    20426    23495    20950    26061    19209    20385    18885
+    y= 496     3272    10168    25398    34280    26190    11501     4416
+    y= 495     4208     1909     6028    12537     6817     2038     4438
+    y= 494     3298     2662     1469     1911     1486     2937     4136
+    y= 493     2219     1209      809      645      742     1270     1710
+    y= 492     5496     3466      918      456     1393     4095     4827
+    y= 491     3385     2902      713      419     1437     4535     3723
+  annulus 5-12 px unflagged finite pixels: n=290, median 575.1, MAD-sigma 562.6 MJy/sr
+  SCI at the rounded pixel 1911.3; max of the 5x5 box 34279.8; ERR at the rounded pixel 33.20
+  5x5 fit box around the rounded pixel: 10 pixels SATURATED / DO_NOT_USE / non-finite
+  spike finder, tolerance 0, min excess 300: 0 spikes in the frame; 0 in the 5x5 box, 0 in the 13x13 box; 3x3 masks cover 0 px of the 5x5 box and 0 px of the 13x13 box
+  spike finder, tolerance 1, min excess 300: 0 spikes in the frame; 0 in the 5x5 box, 0 in the 13x13 box; 3x3 masks cover 0 px of the 5x5 box and 0 px of the 13x13 box
+==== exp6: crf jw10678138001_02101_00006_nrcb2_destreak_o138_crf.fits; shape (2048, 2048); SATURATED pixels 1857 (the log line says sat_pixels_in_frame)
+  fit  position (100.647, 150.687) rounds to (101, 151): rounded-pixel distance 1.000 px -> DROP (threshold 1.0, drop at <=); continuous distance 1.360 px to the saturated pixel centre (101, 152) -> keep
+  init position (100.577, 151.137) rounds to (101, 151): rounded-pixel distance 1.000 px -> DROP (threshold 1.0, drop at <=); continuous distance 0.961 px to the saturated pixel centre (101, 152) -> DROP
+  DQ map (S saturated, D do-not-use, j jump) rows y=157..145 (top to bottom), columns x=95..107; * marks the rounded pixel
+    y= 157  S S S S S S S S S S S S S
+    y= 156  S S S S S S S S S S S S S
+    y= 155  j S S S S S S S S S S S S
+    y= 154  j S S S S S S S S S S S .
+    y= 153  j j j S S S S S S S S . .
+    y= 152  j j j j j j S j j j . . .
+    y= 151  j j j j j j * j j j . . .
+    y= 150  j j j j j j j j j j . . .
+    y= 149  j j j j j j j j j j . . .
+    y= 148  j j j j j j j j j j . . .
+    y= 147  . j j j j j j j j . . . .
+    y= 146  . . . j j j j j . . . . .
+    y= 145  . . . . . . . . . . . . .
+  SCI (MJy/sr) 7x7 around the rounded pixel (rows top to bottom y=154..148, columns x=98..104):
+    y= 154    12979    24486    35366    35918    25906    13958     5882
+    y= 153     3052     6020    18621    20261     8815     3328     3424
+    y= 152     5045     2419     2712     2599     2344     5188     4873
+    y= 151     1483     1167     1151      990     1389     1735     1451
+    y= 150     4056     1670      685      828     2006     3738     3348
+    y= 149     4421     2006      487      743     3175     5468     2833
+    y= 148     1437      704      557      617     1665     2450      939
+  annulus 5-12 px unflagged finite pixels: n=275, median 520.2, MAD-sigma 528.7 MJy/sr
+  SCI at the rounded pixel 990.1; max of the 5x5 box 20261.1; ERR at the rounded pixel 19.13
+  5x5 fit box around the rounded pixel: 6 pixels SATURATED / DO_NOT_USE / non-finite
+  spike finder, tolerance 0, min excess 300: 0 spikes in the frame; 0 in the 5x5 box, 0 in the 13x13 box; 3x3 masks cover 0 px of the 5x5 box and 0 px of the 13x13 box
+  spike finder, tolerance 1, min excess 300: 0 spikes in the frame; 0 in the 5x5 box, 0 in the 13x13 box; 3x3 masks cover 0 px of the 5x5 box and 0 px of the 13x13 box

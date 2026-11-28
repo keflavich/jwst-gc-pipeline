@@ -1,0 +1,29 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source e7fin, references ['c7fin']
+## features of e7fin (n_left 0, n_crater 0) against the c7fin extremum in the same box (regressions)
+## features of c7fin (n_left 168, n_crater 38) against the e7fin extremum in the same box (improvements)
+  leftover: 168 features; e7fin below the threshold and >1.5x lower (improvements): 167; e7fin >1.5x lower but above the threshold: 0; within 1.5x: 1; e7fin >1.5x higher: 0
+      ( 5014,  145) c7fin    5677  e7fin       0  cls=SATSTAR_NEAR d_sat=0.753
+      ( 3331,  655) c7fin    5418  e7fin       0  cls=SATSTAR_NEAR d_sat=0.541
+      ( 4182, 1959) c7fin    4300  e7fin       0  cls=SATSTAR_NEAR d_sat=0.403
+      ( 4759,  923) c7fin    3904  e7fin       0  cls=SATSTAR_NEAR d_sat=0.002
+      ( 1998, 1328) c7fin    3222  e7fin       0  cls=SATSTAR_NEAR d_sat=0.210
+      (   80, 1884) c7fin    3222  e7fin       0  cls=SATSTAR_NEAR d_sat=0.490
+      ( 3222,  510) c7fin    2816  e7fin       0  cls=SATSTAR_NEAR d_sat=0.412
+      (   74, 1894) c7fin    2799  e7fin       0  cls=SATSTAR_NEAR d_sat=0.510
+      (   89, 1891) c7fin    2704  e7fin       0  cls=SATSTAR_NEAR d_sat=0.458
+      (   29,  403) c7fin    2459  e7fin       0  cls=SATSTAR_NEAR d_sat=0.414
+      (  140, 1928) c7fin    2428  e7fin       0  cls=SATSTAR_NEAR d_sat=0.420
+      ( 5408,  439) c7fin    2387  e7fin       0  cls=SATSTAR_NEAR d_sat=0.741
+  crater  : 38 features; e7fin below the threshold and >1.5x lower (improvements): 38; e7fin >1.5x lower but above the threshold: 0; within 1.5x: 0; e7fin >1.5x higher: 0
+      ( 4715, 2096) c7fin    5538  e7fin      -0  d_vet1=0.202 is_sat1=True flux1=1368759
+      ( 1282, 1142) c7fin    2607  e7fin      -0  d_vet1=0.005 is_sat1=False flux1=32590
+      ( 1295, 1152) c7fin    2143  e7fin      -0  d_vet1=0.024 is_sat1=False flux1=27310
+      ( 1205,  451) c7fin    1662  e7fin      -0  d_vet1=0.033 is_sat1=False flux1=23851
+      ( 4143, 1264) c7fin    1169  e7fin      -0  d_vet1=0.023 is_sat1=False flux1=15467
+      ( 4496, 1547) c7fin    1162  e7fin      -0  d_vet1=0.047 is_sat1=True flux1=41883
+      ( 1103, 1498) c7fin    1130  e7fin      -0  d_vet1=0.042 is_sat1=True flux1=38565
+      ( 3034,  380) c7fin    1066  e7fin      -0  d_vet1=0.031 is_sat1=True flux1=29562
+      ( 5191, 1856) c7fin     994  e7fin      -0  d_vet1=0.252 is_sat1=True flux1=816099
+      ( 5195, 1853) c7fin     987  e7fin      -0  d_vet1=0.259 is_sat1=True flux1=816099
+      ( 3035,  376) c7fin     949  e7fin      -0  d_vet1=0.010 is_sat1=False flux1=21768
+      ( 4394, 1991) c7fin     874  e7fin      -0  d_vet1=0.001 is_sat1=True flux1=22689
