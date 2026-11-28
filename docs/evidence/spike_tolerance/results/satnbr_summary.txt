@@ -1,0 +1,71 @@
+finder tolerance max_unusable = 1; blocked spikes kept from excess 100 MJy/sr; recipe spike floor 300 MJy/sr; match radius 0.1 arcsec; confirmation: single < 0.15, confirmed >= 0.5 (3x3 maximum at the sky position in the other frames, fraction of the excess)
+
+## Table 1: blocked spikes per tile-band (a pixel the finder with SATURATED cleared returns and the finder as shipped does not)
+| tile | band | frames | blocked | >= 300 | >= 200 | single | between | confirmed | no other frame | isolated flagged px (blob < 5 px) | in a big blob (>= 25 px) | JUMP_DET in >= 6 neighbours |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| o045 | F212N | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| o045 | F480M | 12 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| o105 | F212N | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| o105 | F480M | 12 | 3 | 1 | 1 | 2 | 1 | 0 | 0 | 0 | 1 | 2 |
+| o118 | F212N | 48 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| o118 | F480M | 12 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
+| o130 | F212N | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| o130 | F480M | 12 | 4 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 4 | 2 |
+| o138 | F212N | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| o138 | F480M | 12 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| all | all | | 9 | 5 | 5 | 8 | 1 | 0 | 0 | 0 | 6 | 5 |
+
+## Table 2: leftovers of the residual mosaics with a blocked spike within the match radius (all eight tile-bands, the excess of the spike is any >= floor)
+| render | leftovers >= | n | with blocked spike | with blocked >= 300 | of those: single | with shipped spike (>= 300) | with blocked and no shipped | with neither |
+|---|---|---|---|---|---|---|---|---|
+| prod5 | 50 | 3998 | 3 | 3 | 3 | 310 | 3 | 3685 |
+| prod5 | 100 | 1820 | 2 | 2 | 2 | 201 | 2 | 1617 |
+| prod5 | 200 | 1195 | 2 | 2 | 2 | 84 | 2 | 1109 |
+| prod5 | 500 | 866 | 0 | 0 | 0 | 12 | 0 | 854 |
+| optnm | 50 | 2681 | 2 | 2 | 2 | 11 | 2 | 2668 |
+| optnm | 100 | 849 | 2 | 2 | 2 | 10 | 2 | 837 |
+| optnm | 200 | 553 | 2 | 2 | 2 | 2 | 2 | 549 |
+| optnm | 500 | 383 | 0 | 0 | 0 | 0 | 0 | 383 |
+| optfin | 50 | 1756 | 0 | 0 | 0 | 8 | 0 | 1748 |
+| optfin | 100 | 192 | 0 | 0 | 0 | 7 | 0 | 185 |
+| optfin | 200 | 27 | 0 | 0 | 0 | 1 | 0 | 26 |
+| optfin | 500 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+
+## Table 2b: the same for the renders, per tile-band at >= 100 MJy/sr (n, with blocked, with blocked >= 300, with shipped)
+| tile | band | prod5 | optnm | optfin |
+|---|---|---|---|---|
+| o045 | F212N | 376, 0, 0, 13 | 164, 0, 0, 0 | 78, 0, 0, 0 |
+| o045 | F480M | 224, 0, 0, 33 | 177, 0, 0, 3 | 6, 0, 0, 1 |
+| o105 | F212N | 317, 0, 0, 6 | 118, 0, 0, 0 | 52, 0, 0, 0 |
+| o105 | F480M | 202, 0, 0, 25 | 155, 0, 0, 1 | 2, 0, 0, 0 |
+| o118 | F212N | 105, 0, 0, 5 | 18, 0, 0, 0 | 16, 0, 0, 0 |
+| o118 | F480M | 121, 0, 0, 34 | 71, 0, 0, 4 | 10, 0, 0, 4 |
+| o130 | F212N | 115, 0, 0, 2 | 16, 0, 0, 0 | 3, 0, 0, 0 |
+| o130 | F480M | 90, 2, 2, 45 | 28, 2, 2, 2 | 7, 0, 0, 2 |
+| o138 | F212N | 165, 0, 0, 1 | 57, 0, 0, 0 | 14, 0, 0, 0 |
+| o138 | F480M | 105, 0, 0, 37 | 45, 0, 0, 0 | 4, 0, 0, 0 |
+
+## Table 3: blocked spikes with excess >= 300 and a leftover of the render within the match radius (converse direction)
+| render | leftover >= | blocked >= 300 | with a leftover | single-frame ones with a leftover |
+|---|---|---|---|---|
+| prod5 | 50 | 5 | 3 | 3 |
+| prod5 | 100 | 5 | 2 | 2 |
+| prod5 | 200 | 5 | 2 | 2 |
+| optnm | 50 | 5 | 2 | 2 |
+| optnm | 100 | 5 | 2 | 2 |
+| optnm | 200 | 5 | 2 | 2 |
+| optfin | 50 | 5 | 0 | 0 |
+| optfin | 100 | 5 | 0 | 0 |
+| optfin | 200 | 5 | 0 | 0 |
+
+## Chance matches: the blocked spikes shifted by 1.0 to 3.0 arcsec in eight directions, leftovers >= 100 of optfin and optnm with a blocked spike (mean over the 8 shifts, all tile-bands)
+optnm: real matches 2; shifted matches mean 0.00, max 0 over 40 shifts
+optfin: real matches 0; shifted matches mean 0.00, max 0 over 40 shifts
+
+## Table 4: leftovers >= 100 of the masked render (optfin) with a blocked spike, largest first
+| tile | band | leftover (x, y) | residual peak | class | spike frame | spike (x, y) | spike excess | sigma | SATURATED neighbours | their flux / excess | blob area | JUMP_DET neighbours | other frames: n, max fraction | spike class |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+
+## Table 5: blocked spikes of excess >= 300 that another frame confirms (fraction >= 0.5): the cores at risk if a SATURATED neighbour were tolerated
+| tile | band | frame | (x, y) | excess | sigma | SATURATED neighbours | their flux / excess | blob area | other frames: n, max fraction | distance to vetted row (arcsec) | nmatch | distance to satstar row (arcsec) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
