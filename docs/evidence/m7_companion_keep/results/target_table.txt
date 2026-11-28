@@ -1,0 +1,11 @@
+o045 (4979, 3391) nrca: row 0.017" from the leftover, flux 3189, S/N 83; dominated by: 2.08 FWHM, ratio 0.070, unsat; exempt at S/N 50, 1.75 FWHM: True
+o045 (6277, 2642) nrcb: row 0.014" from the leftover, flux 3747, S/N 99; dominated by: 2.50 FWHM, ratio 0.071, unsat; exempt at S/N 50, 1.75 FWHM: True
+o045 (6355, 3168) nrcb: row 0.016" from the leftover, flux 2977, S/N 92; dominated by: 2.44 FWHM, ratio 0.062, unsat; exempt at S/N 50, 1.75 FWHM: True
+o045 (7311, 2154) nrcb: row 0.017" from the leftover, flux 3506, S/N 100; dominated by: 2.14 FWHM, ratio 0.087, unsat; exempt at S/N 50, 1.75 FWHM: True
+o045 (6092, 3774) nrcb: row 0.011" from the leftover, flux 2748, S/N 85; dominated by: 2.35 FWHM, ratio 0.068, SAT; exempt at S/N 50, 1.75 FWHM: False
+o105 (5188, 2780) nrca: row 0.011" from the leftover, flux 2784, S/N 90; dominated by: 2.44 FWHM, ratio 0.065, unsat; exempt at S/N 50, 1.75 FWHM: True
+o105 (6137, 3868) nrcb: row 0.016" from the leftover, flux 2672, S/N 81; dominated by: 2.45 FWHM, ratio 0.058, unsat; exempt at S/N 50, 1.75 FWHM: True
+o105 (6588, 1271) nrcb: row 0.009" from the leftover, flux 1996, S/N 71; dominated by: 2.01 FWHM, ratio 0.090, unsat; exempt at S/N 50, 1.75 FWHM: True
+o105 (7097, 961) nrcb: row 0.015" from the leftover, flux 2567, S/N 85; dominated by: 1.78 FWHM, ratio 0.089, unsat; exempt at S/N 50, 1.75 FWHM: True
+o105 (11328, 2324) nrcb: row 0.005" from the leftover, flux 2859, S/N 86; dominated by: 2.29 FWHM, ratio 0.064, unsat; exempt at S/N 50, 1.75 FWHM: True
+o105 (9794, 833) nrcb: row 0.002" from the leftover, flux 2950, S/N 76; dominated by: 2.48 FWHM, ratio 0.031, SAT; exempt at S/N 50, 1.75 FWHM: False

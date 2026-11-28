@@ -1,0 +1,165 @@
+# o130 F480M: whole-star leftovers of the control (dncg) by class (NOT_IN_M7_CATALOG, SATSTAR_NEAR, VETTED_BUT_UNSUBTRACTED, VETTED_OUT), and how many of each class the arms clear
+# (no whole-star leftover of the arm within 3 px); for the arms with the union seed (sd1, sd1p) the cleared leftovers are listed with the kind (exemption or relaxed)
+# of the nearest added seed row within 0.1 arcsec.
+
+################ DQ_SAT dilation 3 px (no edge band); control dncg, arms dncgp (rescue alone), sd1, sd1p
+nrca added rows 4 2
+nrcb added rows 7 1
+added seed rows 14 {'exempt': 11, 'relaxed': 3}
+control dq3mkrdncg; a control leftover is cleared when the arm has no whole-star leftover within 3 px, reduced when the nearest one has less than half the control peak, worse when it has more than 1.5 times the control peak, unchanged otherwise
+
+== control leftovers >= 200 MJy/sr: 24 (NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0)
+-- dq3mkrdncgp
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               11       0       0        11     0
+   SATSTAR_NEAR                     3       0       0         3     0
+   VETTED_BUT_UNSUBTRACTED         10       0       0        10     0
+   VETTED_OUT                       0       0       0         0     0
+   all classes                     24       0       0        24     0
+   (no added seed rows in this arm: no origin attribution)
+-- dq3mkrsd1
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               11       0       0        11     0
+   SATSTAR_NEAR                     3       0       0         3     0
+   VETTED_BUT_UNSUBTRACTED         10       0       0        10     0
+   VETTED_OUT                       0       0       0         0     0
+   all classes                     24       0       0        24     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 0, relaxed 0, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 0, relaxed only 0, both 0, none 0
+-- dq3mkrsd1p
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               11       0       0        11     0
+   SATSTAR_NEAR                     3       0       0         3     0
+   VETTED_BUT_UNSUBTRACTED         10       0       0        10     0
+   VETTED_OUT                       0       0       0         0     0
+   all classes                     24       0       0        24     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 0, relaxed 0, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 0, relaxed only 0, both 0, none 0
+
+== control leftovers >= 100 MJy/sr: 53 (NOT_IN_M7_CATALOG 22, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 26, VETTED_OUT 1)
+-- dq3mkrdncgp
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               22       0       0        22     0
+   SATSTAR_NEAR                     4       0       0         4     0
+   VETTED_BUT_UNSUBTRACTED         26       0       0        26     0
+   VETTED_OUT                       1       0       0         1     0
+   all classes                     53       0       0        53     0
+   (no added seed rows in this arm: no origin attribution)
+-- dq3mkrsd1
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               22       2       0        20     0
+   SATSTAR_NEAR                     4       0       0         4     0
+   VETTED_BUT_UNSUBTRACTED         26       0       0        26     0
+   VETTED_OUT                       1       0       0         1     0
+   all classes                     53       2       0        51     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 1, relaxed 1, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 1, relaxed only 1, both 0, none 0
+   (  834, 2121) peak    113 NOT_IN_M7_CATALOG        nearest added row: exempt  nrca 0.036" own_m6
+   ( 4220, 1427) peak    113 NOT_IN_M7_CATALOG        nearest added row: relaxed nrcb 0.013" i2d
+-- dq3mkrsd1p
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               22       2       0        20     0
+   SATSTAR_NEAR                     4       0       0         4     0
+   VETTED_BUT_UNSUBTRACTED         26       0       0        26     0
+   VETTED_OUT                       1       0       0         1     0
+   all classes                     53       2       0        51     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 1, relaxed 1, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 1, relaxed only 1, both 0, none 0
+   (  834, 2121) peak    113 NOT_IN_M7_CATALOG        nearest added row: exempt  nrca 0.036" own_m6
+   ( 4220, 1427) peak    113 NOT_IN_M7_CATALOG        nearest added row: relaxed nrcb 0.013" i2d
+
+################ DQ_SAT dilation 3 px + edge band 6 px; control dncg, arms dncgp, sd1, sd1p
+nrca added rows 4 2
+nrcb added rows 7 1
+added seed rows 14 {'exempt': 11, 'relaxed': 3}
+control ee6dq3mkrdncg; a control leftover is cleared when the arm has no whole-star leftover within 3 px, reduced when the nearest one has less than half the control peak, worse when it has more than 1.5 times the control peak, unchanged otherwise
+
+== control leftovers >= 200 MJy/sr: 23 (NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0)
+-- ee6dq3mkrdncgp
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               11       0       0        11     0
+   SATSTAR_NEAR                     2       0       0         2     0
+   VETTED_BUT_UNSUBTRACTED         10       0       0        10     0
+   VETTED_OUT                       0       0       0         0     0
+   all classes                     23       0       0        23     0
+   (no added seed rows in this arm: no origin attribution)
+-- ee6dq3mkrsd1
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               11       0       0        11     0
+   SATSTAR_NEAR                     2       0       0         2     0
+   VETTED_BUT_UNSUBTRACTED         10       0       0        10     0
+   VETTED_OUT                       0       0       0         0     0
+   all classes                     23       0       0        23     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 0, relaxed 0, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 0, relaxed only 0, both 0, none 0
+-- ee6dq3mkrsd1p
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               11       0       0        11     0
+   SATSTAR_NEAR                     2       0       0         2     0
+   VETTED_BUT_UNSUBTRACTED         10       0       0        10     0
+   VETTED_OUT                       0       0       0         0     0
+   all classes                     23       0       0        23     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 0, relaxed 0, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 0, relaxed only 0, both 0, none 0
+
+== control leftovers >= 100 MJy/sr: 51 (NOT_IN_M7_CATALOG 21, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 26, VETTED_OUT 1)
+-- ee6dq3mkrdncgp
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               21       0       0        21     0
+   SATSTAR_NEAR                     3       0       0         3     0
+   VETTED_BUT_UNSUBTRACTED         26       0       0        26     0
+   VETTED_OUT                       1       0       0         1     0
+   all classes                     51       0       0        51     0
+   (no added seed rows in this arm: no origin attribution)
+-- ee6dq3mkrsd1
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               21       2       0        19     0
+   SATSTAR_NEAR                     3       0       0         3     0
+   VETTED_BUT_UNSUBTRACTED         26       0       0        26     0
+   VETTED_OUT                       1       0       0         1     0
+   all classes                     51       2       0        49     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 1, relaxed 1, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 1, relaxed only 1, both 0, none 0
+   (  834, 2121) peak    113 NOT_IN_M7_CATALOG        nearest added row: exempt  nrca 0.036" own_m6
+   ( 4220, 1427) peak    113 NOT_IN_M7_CATALOG        nearest added row: relaxed nrcb 0.013" i2d
+-- ee6dq3mkrsd1p
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               21       2       0        19     0
+   SATSTAR_NEAR                     3       0       0         3     0
+   VETTED_BUT_UNSUBTRACTED         26       0       0        26     0
+   VETTED_OUT                       1       0       0         1     0
+   all classes                     51       2       0        49     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 1, relaxed 1, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 1, relaxed only 1, both 0, none 0
+   (  834, 2121) peak    113 NOT_IN_M7_CATALOG        nearest added row: exempt  nrca 0.036" own_m6
+   ( 4220, 1427) peak    113 NOT_IN_M7_CATALOG        nearest added row: relaxed nrcb 0.013" i2d
+
+################ rescue on in both arms (DQ_SAT dilation 3 px, no edge band); control dncgp, arm sd1p
+nrca added rows 4 2
+nrcb added rows 7 1
+added seed rows 14 {'exempt': 11, 'relaxed': 3}
+control dq3mkrdncgp; a control leftover is cleared when the arm has no whole-star leftover within 3 px, reduced when the nearest one has less than half the control peak, worse when it has more than 1.5 times the control peak, unchanged otherwise
+
+== control leftovers >= 200 MJy/sr: 24 (NOT_IN_M7_CATALOG 11, SATSTAR_NEAR 3, VETTED_BUT_UNSUBTRACTED 10, VETTED_OUT 0)
+-- dq3mkrsd1p
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               11       0       0        11     0
+   SATSTAR_NEAR                     3       0       0         3     0
+   VETTED_BUT_UNSUBTRACTED         10       0       0        10     0
+   VETTED_OUT                       0       0       0         0     0
+   all classes                     24       0       0        24     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 0, relaxed 0, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 0, relaxed only 0, both 0, none 0
+
+== control leftovers >= 100 MJy/sr: 53 (NOT_IN_M7_CATALOG 22, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 26, VETTED_OUT 1)
+-- dq3mkrsd1p
+   class                      control cleared reduced unchanged worse
+   NOT_IN_M7_CATALOG               22       2       0        20     0
+   SATSTAR_NEAR                     4       0       0         4     0
+   VETTED_BUT_UNSUBTRACTED         26       0       0        26     0
+   VETTED_OUT                       1       0       0         1     0
+   all classes                     53       2       0        51     0
+   cleared leftovers by the origin of the nearest added row within 0.1": exempt 1, relaxed 1, none 0
+   cleared leftovers by the kinds of added rows within 0.1": exempt only 1, relaxed only 1, both 0, none 0
+   (  834, 2121) peak    113 NOT_IN_M7_CATALOG        nearest added row: exempt  nrca 0.036" own_m6
+   ( 4220, 1427) peak    113 NOT_IN_M7_CATALOG        nearest added row: relaxed nrcb 0.013" i2d

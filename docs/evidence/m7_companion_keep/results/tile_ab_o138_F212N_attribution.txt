@@ -1,0 +1,145 @@
+################ control dncg -> sd1 (DQ_SAT dilation 4 px, no edge band)
+nrca added rows 8 14
+nrcb added rows 8 15
+added seed rows 45 {'exempt': 16, 'relaxed': 29}
+dq4mkrdncg -> dq4mkrsd1: 25 control leftovers >= 100.0 MJy/sr cleared (no treatment leftover within 3.0 px)
+   x     y   peak  class                  nearest added seed (origin, mod, sep arcsec, seed_origin)
+10466  4026    294  NOT_IN_M7_CATALOG      exempt   nrcb 0.004" own_m6
+ 5290  4173    208  NOT_IN_M7_CATALOG      relaxed  nrca 0.011" i2d
+ 5313   689    188  NOT_IN_M7_CATALOG      relaxed  nrca 0.005" i2d
+ 1318  3658    170  NOT_IN_M7_CATALOG      relaxed  nrca 0.005" i2d
+ 6882  3628    158  NOT_IN_M7_CATALOG      relaxed  nrcb 0.009" i2d
+ 5275   666    148  NOT_IN_M7_CATALOG      relaxed  nrca 0.016" i2d
+ 9298  1134    147  SATSTAR_NEAR           exempt   nrcb 0.003" own_m6
+ 1146  2168    144  NOT_IN_M7_CATALOG      exempt   nrca 0.013" own_m6
+10392   280    138  SATSTAR_NEAR           relaxed  nrcb 0.021" i2d
+ 2269  3498    129  SATSTAR_NEAR           relaxed  nrca 0.001" i2d
+ 3789  2904    125  NOT_IN_M7_CATALOG      exempt   nrca 0.015" own_m6
+ 5454  1113    123  SATSTAR_NEAR           relaxed  nrca 0.013" i2d
+ 8823  3796    121  SATSTAR_NEAR           relaxed  nrcb 0.012" i2d
+  470  1477    121  NOT_IN_M7_CATALOG      relaxed  nrca 0.019" i2d
+  547  1109    117  SATSTAR_NEAR           relaxed  nrca 0.015" i2d
+ 5087   608    116  SATSTAR_NEAR           exempt   nrca 0.009" own_m6
+ 9038   326    116  SATSTAR_NEAR           exempt   nrcb 0.003" own_m6
+ 2737  4099    116  NOT_IN_M7_CATALOG      exempt   nrca 0.017" own_m6
+ 4804  2402    115  NOT_IN_M7_CATALOG      relaxed  nrca 0.023" i2d
+ 4826   557    113  NOT_IN_M7_CATALOG      exempt   nrca 0.027" own_m6
+ 5167  1319    112  NOT_IN_M7_CATALOG      exempt   nrca 0.004" own_m6
+ 3169  1511    110  NOT_IN_M7_CATALOG      exempt   nrca 0.012" own_m6
+10926  1786    110  SATSTAR_NEAR           exempt   nrcb 0.003" own_m6
+10899  1976    104  SATSTAR_NEAR           exempt   nrcb 0.010" own_m6
+ 5094   608    101  NOT_IN_M7_CATALOG      exempt   nrca 0.020" own_m6
+attribution counts {'exempt': 13, 'relaxed': 12, 'none': 0}
+added seed rows that sit under a cleared leftover: 25 of 45
+
+################ rescue on in both arms: control dncgp -> sd1p
+nrca added rows 8 14
+nrcb added rows 8 15
+added seed rows 45 {'exempt': 16, 'relaxed': 29}
+dq4mkrdncgp -> dq4mkrsd1p: 25 control leftovers >= 100.0 MJy/sr cleared (no treatment leftover within 3.0 px)
+   x     y   peak  class                  nearest added seed (origin, mod, sep arcsec, seed_origin)
+10466  4026    294  NOT_IN_M7_CATALOG      exempt   nrcb 0.004" own_m6
+ 5290  4173    208  NOT_IN_M7_CATALOG      relaxed  nrca 0.011" i2d
+ 5313   689    188  NOT_IN_M7_CATALOG      relaxed  nrca 0.005" i2d
+ 1318  3658    170  NOT_IN_M7_CATALOG      relaxed  nrca 0.005" i2d
+ 6882  3628    158  NOT_IN_M7_CATALOG      relaxed  nrcb 0.009" i2d
+ 5275   666    148  NOT_IN_M7_CATALOG      relaxed  nrca 0.016" i2d
+ 9298  1134    147  SATSTAR_NEAR           exempt   nrcb 0.003" own_m6
+ 1146  2168    144  NOT_IN_M7_CATALOG      exempt   nrca 0.013" own_m6
+10392   280    138  SATSTAR_NEAR           relaxed  nrcb 0.021" i2d
+ 2269  3498    129  SATSTAR_NEAR           relaxed  nrca 0.001" i2d
+ 3789  2904    125  NOT_IN_M7_CATALOG      exempt   nrca 0.015" own_m6
+ 5454  1113    123  SATSTAR_NEAR           relaxed  nrca 0.013" i2d
+ 8823  3796    121  SATSTAR_NEAR           relaxed  nrcb 0.012" i2d
+  470  1477    121  NOT_IN_M7_CATALOG      relaxed  nrca 0.019" i2d
+  547  1109    117  SATSTAR_NEAR           relaxed  nrca 0.015" i2d
+ 5087   608    116  SATSTAR_NEAR           exempt   nrca 0.009" own_m6
+ 9038   326    116  SATSTAR_NEAR           exempt   nrcb 0.003" own_m6
+ 2737  4099    116  NOT_IN_M7_CATALOG      exempt   nrca 0.017" own_m6
+ 4804  2402    115  NOT_IN_M7_CATALOG      relaxed  nrca 0.023" i2d
+ 4826   557    113  NOT_IN_M7_CATALOG      exempt   nrca 0.027" own_m6
+ 5167  1319    112  NOT_IN_M7_CATALOG      exempt   nrca 0.004" own_m6
+ 3169  1511    110  NOT_IN_M7_CATALOG      exempt   nrca 0.012" own_m6
+10926  1786    110  SATSTAR_NEAR           exempt   nrcb 0.003" own_m6
+10899  1976    104  SATSTAR_NEAR           exempt   nrcb 0.010" own_m6
+ 5094   608    101  NOT_IN_M7_CATALOG      exempt   nrca 0.020" own_m6
+attribution counts {'exempt': 13, 'relaxed': 12, 'none': 0}
+added seed rows that sit under a cleared leftover: 25 of 45
+
+################ share of the control leftovers >= 100 MJy/sr that sd1 clears, by whether an added row lies within 0.035 arcsec (control dncg; DQ_SAT dilation 4 px)
+nrca added rows 8 14
+nrcb added rows 8 15
+added seed rows 45 {'exempt': 16, 'relaxed': 29}
+dq4mkrdncg -> dq4mkrsd1: 89 control leftovers >= 100.0 MJy/sr; added row within 0.035": 27; cleared in total 25
+  with an added row within radius: 27 leftovers, 25 cleared, 2 persist
+  without an added row within radius: 62 leftovers, 0 cleared, 62 persist
+  persists under an added relaxed row (0.006"): (6776, 4282) peak 108 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.031"): (5302, 2577) peak 108 NOT_IN_M7_CATALOG
+  radius 0.035": 27 leftovers with an added row, 25 cleared
+  radius 0.1": 27 leftovers with an added row, 25 cleared
+  radius 0.3": 27 leftovers with an added row, 25 cleared
+  radius 1.0": 27 leftovers with an added row, 25 cleared
+
+################ the same with the edge band of 8 px
+nrca added rows 8 14
+nrcb added rows 8 15
+added seed rows 45 {'exempt': 16, 'relaxed': 29}
+ee8dq4mkrdncg -> ee8dq4mkrsd1: 77 control leftovers >= 100.0 MJy/sr; added row within 0.035": 27; cleared in total 25
+  with an added row within radius: 27 leftovers, 25 cleared, 2 persist
+  without an added row within radius: 50 leftovers, 0 cleared, 50 persist
+  persists under an added relaxed row (0.006"): (6776, 4282) peak 108 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.031"): (5302, 2577) peak 108 NOT_IN_M7_CATALOG
+  radius 0.035": 27 leftovers with an added row, 25 cleared
+  radius 0.1": 27 leftovers with an added row, 25 cleared
+  radius 0.3": 27 leftovers with an added row, 25 cleared
+  radius 1.0": 27 leftovers with an added row, 25 cleared
+
+################ the leftovers that the #1365 rescue clears (dncgp against dncg), by whether an added row lies within 0.035 arcsec (DQ_SAT dilation 4 px)
+nrca added rows 8 14
+nrcb added rows 8 15
+added seed rows 45 {'exempt': 16, 'relaxed': 29}
+dq4mkrdncg -> dq4mkrdncgp: 89 control leftovers >= 100.0 MJy/sr; added row within 0.035": 27; cleared in total 6
+  with an added row within radius: 27 leftovers, 0 cleared, 27 persist
+  without an added row within radius: 62 leftovers, 6 cleared, 56 persist
+  persists under an added exempt row (0.004"): (10466, 4026) peak 294 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.011"): (5290, 4173) peak 208 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.005"): (5313, 689) peak 188 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.005"): (1318, 3658) peak 170 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.009"): (6882, 3628) peak 158 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.016"): (5275, 666) peak 148 NOT_IN_M7_CATALOG
+  persists under an added exempt row (0.003"): (9298, 1134) peak 147 SATSTAR_NEAR
+  persists under an added exempt row (0.013"): (1146, 2168) peak 144 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.021"): (10392, 280) peak 138 SATSTAR_NEAR
+  persists under an added relaxed row (0.001"): (2269, 3498) peak 129 SATSTAR_NEAR
+  persists under an added exempt row (0.015"): (3789, 2904) peak 125 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.013"): (5454, 1113) peak 123 SATSTAR_NEAR
+  persists under an added relaxed row (0.012"): (8823, 3796) peak 121 SATSTAR_NEAR
+  persists under an added relaxed row (0.019"): (470, 1477) peak 121 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.015"): (547, 1109) peak 117 SATSTAR_NEAR
+  persists under an added exempt row (0.009"): (5087, 608) peak 116 SATSTAR_NEAR
+  persists under an added exempt row (0.003"): (9038, 326) peak 116 SATSTAR_NEAR
+  persists under an added exempt row (0.017"): (2737, 4099) peak 116 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.023"): (4804, 2402) peak 115 NOT_IN_M7_CATALOG
+  persists under an added exempt row (0.027"): (4826, 557) peak 113 NOT_IN_M7_CATALOG
+  persists under an added exempt row (0.004"): (5167, 1319) peak 112 NOT_IN_M7_CATALOG
+  persists under an added exempt row (0.012"): (3169, 1511) peak 110 NOT_IN_M7_CATALOG
+  persists under an added exempt row (0.003"): (10926, 1786) peak 110 SATSTAR_NEAR
+  persists under an added relaxed row (0.006"): (6776, 4282) peak 108 NOT_IN_M7_CATALOG
+  persists under an added relaxed row (0.031"): (5302, 2577) peak 108 NOT_IN_M7_CATALOG
+  persists under an added exempt row (0.010"): (10899, 1976) peak 104 SATSTAR_NEAR
+  persists under an added exempt row (0.020"): (5094, 608) peak 101 NOT_IN_M7_CATALOG
+  radius 0.035": 27 leftovers with an added row, 0 cleared
+  radius 0.1": 27 leftovers with an added row, 0 cleared
+  radius 0.3": 27 leftovers with an added row, 0 cleared
+  radius 1.0": 27 leftovers with an added row, 0 cleared
+
+################ the leftovers that the #1365 rescue clears, with and without the added rows (dncgp against dncg, sd1p against sd1)
+dq4mkr: rescue clears 6 of the dncg leftovers >= 100 and 6 of the sd1 leftovers >= 100
+sd1p-cleared positions with a dncgp-cleared position within 3 px: 6 of 6
+dncgp-cleared positions with a sd1p-cleared position within 3 px: 6 of 6
+   dncgp cleared ( 9336, 4059) peak  1248
+   dncgp cleared ( 5772, 3069) peak   320
+   dncgp cleared (11024, 2366) peak   170
+   dncgp cleared ( 7165, 4212) peak   111
+   dncgp cleared ( 5070,  374) peak   105
+   dncgp cleared ( 3026, 2420) peak   102

@@ -1,0 +1,39 @@
+## EPSFSHFT (mpix) of the frame catalogs of the two o130 F480M replay sets (control dncg = production seed, treatment sd1 = union seed), both with the saturated-star PSF grid cached by the production run
+o130_F480M_cg n 12 distinct EPSFSHFT {19.633784018158245: 6, 29.88653227892115: 6} nrca1 exp1 None
+o130_F480M_sd n 12 distinct EPSFSHFT {19.633784018158245: 6, 29.88653227892115: 6} nrca1 exp1 None
+
+## union seed of the treatment (sd1): rows added by the far-companion exemption (A) and by the relaxed bright window (B) per module, and B rows dropped for lying within 30 mas of an A row
+nrca: added by A 4, by B 2, B rows within 30 mas of an A row (dropped) 0
+nrcb: added by A 7, by B 1, B rows within 30 mas of an A row (dropped) 0
+
+## far-companion exemption: rows that the exemption adds per own-band S/N floor (both modules) and how many of them lie within 0.072 arcsec of a whole-star leftover of the production render; the A/B uses the floor 150
+floor 30: nrca 781 nrcb 849 total 1630; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 40: nrca 430 nrcb 488 total 918; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 50: nrca 248 nrcb 280 total 528; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 60: nrca 151 nrcb 168 total 319; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 80: nrca 56 nrcb 72 total 128; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 90: nrca 45 nrcb 59 total 104; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 100: nrca 34 nrcb 41 total 75; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 110: nrca 19 nrcb 27 total 46; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 120: nrca 16 nrcb 19 total 35; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 130: nrca 12 nrcb 14 total 26; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 140: nrca 6 nrcb 11 total 17; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 150: nrca 4 nrcb 7 total 11; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 175: nrca 4 nrcb 4 total 8; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 4 / 1 / 0
+floor 200: nrca 3 nrcb 1 total 4; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 3 / 1 / 0
+floor 250: nrca 1 nrcb 0 total 1; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 1 / 1 / 0
+
+## production seed -> union seed, both with the cached PSF grid (dncg, control -> sd1, treatment): the effect of the added rows alone; distance of the differing frame rows from the added rows
+nrca added rows 4 2
+nrcb added rows 7 1
+{'nrca': 6, 'nrcb': 8}
+frames 12; control rows 639839; lost 5; added 104; flux changed >1 % 93
+radius [arcsec]          0.15      0.50      1.00      3.00
+all    within radius        0       105       514      5277
+       share of total    0.0000    0.0002    0.0008    0.0082
+lost   within radius        0         1         2         2
+       share of total    0.0000    0.2000    0.4000    0.4000
+added  within radius       57        59        60        60
+       share of total    0.5481    0.5673    0.5769    0.5769
+chg    within radius        0        40        73        73
+       share of total    0.0000    0.4301    0.7849    0.7849

@@ -16,6 +16,7 @@ from jwst_gc_pipeline.photometry import frame_pool
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry import satstar_cache as _satstar_cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+from jwst_gc_pipeline.photometry.band_option import band_option_callback
 from jwst_gc_pipeline.photometry.catalog_dtypes import downcast_catalog_dtypes
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
@@ -5582,6 +5583,28 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help='The companion cut leaves out an own-band source only when '
                            'its flux is below this fraction of the neighbour\'s.  1.0 '
                            'cuts every fainter source within the radius.  Default 0.1.')
+    parser.add_option('--manual-m7-seed-own-band-companion-keep-snr',
+                      dest='manual_m7_seed_own_band_companion_keep_snr', type='string',
+                      action='callback', callback=band_option_callback,
+                      metavar='VALUE|BAND=VALUE,...',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_snr'],
+                      help='Far-companion exemption of the companion cut: an own-band '
+                           'source the cut would leave out is added when its m6 '
+                           'flux / flux_err is at least this and every brighter seed '
+                           'source that triggers the cut is at least '
+                           '--manual-m7-seed-own-band-companion-keep-fwhm away and '
+                           'unsaturated.  A number applies to every band; BAND=VALUE '
+                           'pairs (F212N=50,F480M=0) set the bands they name and leave '
+                           'every other band at the default.  0 = off (the default).  '
+                           'The S/N of a source depends on the band: 50 suits F212N '
+                           '(docs/evidence/m7_companion_keep), and at F480M it adds '
+                           '2406 rows to o045 where F212N gets 53 (both counted at 1.75 '
+                           'FWHM), so give F480M 0.')
+    parser.add_option('--manual-m7-seed-own-band-companion-keep-fwhm',
+                      dest='manual_m7_seed_own_band_companion_keep_fwhm', type='float',
+                      default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_fwhm'],
+                      help='Minimum separation, in PSF FWHM, of the exemption above.  '
+                           'Default 1.5.')
     parser.add_option('--manual-m7-seed-dedup-fwhm',
                       dest='manual_m7_seed_dedup_fwhm', type='float',
                       default=MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'],

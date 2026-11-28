@@ -1,0 +1,25 @@
+## EPSFSHFT (mpix) of the frame catalogs of the two o118 F212N replay sets (control dncg = production seed, treatment sd1 = union seed), both with the saturated-star PSF grid cached by the production run
+o118_F212N_cg n 48 distinct EPSFSHFT {45.207749426412995: 6, 26.570365569381455: 6, 35.70367979662391: 6, 29.778458703409676: 6, 62.4246432714379: 6, 62.706226800487705: 6, 69.57427346109766: 6, 64.71764243331177: 6} nrca1 exp1 ('f212n_nrca1_o118_visit001_vgroup02101_ex', 45.207749426412995)
+o118_F212N_sd n 48 distinct EPSFSHFT {45.207749426412995: 6, 26.570365569381455: 6, 35.70367979662391: 6, 29.778458703409676: 6, 62.4246432714379: 6, 62.706226800487705: 6, 69.57427346109766: 6, 64.71764243331177: 6} nrca1 exp1 ('f212n_nrca1_o118_visit001_vgroup02101_ex', 45.207749426412995)
+
+## union seed of the treatment (sd1): rows added by the far-companion exemption (A) and by the relaxed bright window (B) per module, and B rows dropped for lying within 30 mas of an A row
+nrca: added by A 4, by B 8, B rows within 30 mas of an A row (dropped) 0
+nrcb: added by A 1, by B 3, B rows within 30 mas of an A row (dropped) 0
+
+## far-companion exemption: rows that the exemption adds per own-band S/N floor (both modules) and how many of them lie within 0.072 arcsec of a whole-star leftover of the production render; the A/B uses the floor 50
+floor 50: nrca 4 nrcb 1 total 5; rows on whole-star leftovers of the production render >= 50 / >= 100 / >= 200 MJy/sr: 3 / 2 / 1
+
+## production seed -> union seed, both with the cached PSF grid (dncg, control -> sd1, treatment): the effect of the added rows alone; distance of the differing frame rows from the added rows
+nrca added rows 4 8
+nrcb added rows 1 3
+{'nrca': 12, 'nrcb': 4}
+frames 48; control rows 1220347; lost 2; added 63; flux changed >1 % 13
+radius [arcsec]          0.15      0.50      1.00      3.00
+all    within radius       10       268      1129     10262
+       share of total    0.0000    0.0002    0.0009    0.0084
+lost   within radius        1         2         2         2
+       share of total    0.5000    1.0000    1.0000    1.0000
+added  within radius       62        63        63        63
+       share of total    0.9841    1.0000    1.0000    1.0000
+chg    within radius        8        13        13        13
+       share of total    0.6154    1.0000    1.0000    1.0000
