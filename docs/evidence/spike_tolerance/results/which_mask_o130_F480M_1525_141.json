@@ -1,0 +1,12 @@
+{
+ "tile": "o130",
+ "band": "F480M",
+ "frame": "jw10678130001_02101_00003_nrcalong_destreak_o130_crf.fits",
+ "x": 1525,
+ "y": 141,
+ "event_px_in_box": 0,
+ "events_near": [],
+ "ramp_px_in_box": 0,
+ "ramp_events_near": [],
+ "negative_px_in_box": 0
+}

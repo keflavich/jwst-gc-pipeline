@@ -1,0 +1,131 @@
+Table 1: spikes found per tile and band, as shipped and with the tolerance k (finder run on every frame; MIN_EXCESS 300 MJy/sr)
+tile band   frames  shipped | k=1  k=2  k=3  k=4  k=5  k=6   (totals; the added count is the difference to shipped)
+o105 F212N     48       15 |  16   16   16   16   19   20
+o118 F212N     48       12 |  12   12   12   13   14   14
+o130 F212N     48        9 |  10   10   10   10   10   12
+o138 F212N     48        5 |   5    5    5    6    6    7
+o105 F480M     12       54 |  57   58   58   58   58   58
+o118 F480M     12       60 |  66   66   66   66   67   67
+o130 F480M     12       69 |  72   73   74   74   74   74
+o138 F480M     12       67 |  68   68   68   68   68   68
+
+Table 2: star cores at risk.  A core is a local maximum of a complete 3x3 box with excess >= 300 MJy/sr and >= 5 sigma.
+Dropping its k brightest neighbours it passes the isolation test (brightest remaining neighbour <= 0.15 of the excess) = "passes at k".
+"star-like" = brightest neighbour >= 0.3 of the excess.  "source" = another frame holds >= 0.50 of the excess at the same sky position.
+tile band   cores   star-like | passes at k=0..7 (all)                    | star-like passes at k=0..7
+o105 F212N  142336    142320 |    15    17    17    42   564  4057 12661 39391 |     0     1     1    26   548  4041 12645 39375
+o118 F212N   55418     55405 |    12    14    15    25   231  1545  5020 15339 |     0     1     2    12   218  1532  5007 15326
+o130 F212N   43718     43709 |     9    12    12    19   134  1118  3619 11559 |     0     3     3    10   125  1109  3610 11550
+o138 F212N   81849     81840 |     5    11    12    32   440  2904  8978 26596 |     0     2     3    23   431  2895  8969 26587
+o105 F480M   30432     30378 |    54    54    54    54    54    63   136   519 |     0     0     0     0     0     9    82   465
+o118 F480M   10143     10083 |    60    60    60    60    60    61    83   221 |     0     0     0     0     0     1    23   161
+o130 F480M    8549      8478 |    69    71    71    71    71    72    94   237 |     0     0     0     0     0     1    23   166
+o138 F480M    9102      9034 |    67    67    69    69    69    71    96   257 |     0     0     1     1     1     3    28   189
+
+Table 3: the cores that fail the isolation test as shipped and pass with their k brightest neighbours missing (k = 1 .. 4), by the other frames
+tile band   k | cores | source (other frame >= 0.50) | untestable (no other frame) | single-frame
+o105 F212N  1 |     2 |                           0 |                           0 |            2
+o105 F212N  2 |     2 |                           0 |                           0 |            2
+o105 F212N  3 |    27 |                          25 |                           0 |            2
+o105 F212N  4 |   549 |                         539 |                           8 |            2
+o118 F212N  1 |     2 |                           0 |                           0 |            2
+o118 F212N  2 |     3 |                           0 |                           0 |            3
+o118 F212N  3 |    13 |                          10 |                           0 |            3
+o118 F212N  4 |   219 |                         215 |                           1 |            3
+o130 F212N  1 |     3 |                           0 |                           0 |            3
+o130 F212N  2 |     3 |                           0 |                           0 |            3
+o130 F212N  3 |    10 |                           7 |                           0 |            3
+o130 F212N  4 |   125 |                         121 |                           1 |            3
+o138 F212N  1 |     6 |                           0 |                           0 |            6
+o138 F212N  2 |     7 |                           0 |                           0 |            7
+o138 F212N  3 |    27 |                          19 |                           1 |            7
+o138 F212N  4 |   435 |                         419 |                           8 |            8
+o105 F480M  1 |     0 |                           0 |                           0 |            0
+o105 F480M  2 |     0 |                           0 |                           0 |            0
+o105 F480M  3 |     0 |                           0 |                           0 |            0
+o105 F480M  4 |     0 |                           0 |                           0 |            0
+o118 F480M  1 |     0 |                           0 |                           0 |            0
+o118 F480M  2 |     0 |                           0 |                           0 |            0
+o118 F480M  3 |     0 |                           0 |                           0 |            0
+o118 F480M  4 |     0 |                           0 |                           0 |            0
+o130 F480M  1 |     2 |                           0 |                           0 |            2
+o130 F480M  2 |     2 |                           0 |                           0 |            2
+o130 F480M  3 |     2 |                           0 |                           0 |            2
+o130 F480M  4 |     2 |                           0 |                           0 |            2
+o138 F480M  1 |     0 |                           0 |                           0 |            0
+o138 F480M  2 |     2 |                           1 |                           0 |            1
+o138 F480M  3 |     2 |                           1 |                           0 |            1
+o138 F480M  4 |     2 |                           1 |                           0 |            1
+
+Limit rule: the largest k for which no tile and band has a source or an untestable core among its cores that pass at k or less.
+  ok by k: k=1: yes, k=2: NO, k=3: NO, k=4: NO
+  largest safe k: 1
+
+Sources and untestable cores at k = 1 .. 4:
+  o138 F480M kmin 2 jw10678138001_02101_00001_nrcblong_destreak_o138_crf.fits (1096, 92) excess 691 brightest neighbours 0.363 0.183 0.081, other frames 5 max fraction 0.56, nearest multi-frame row 0.44 FWHM
+
+Table 4: the added spikes (found with the tolerance and not shipped), every tile and band, tolerance up to 6
+Columns: frame, pixel (x, y), excess MJy/sr, sigma, brightest usable neighbour / excess, missing neighbours (DQ values), distance to the nearest SATURATED pixel (px),
+distance to the nearest DO_NOT_USE pixel outside the 3x3 box (px), nearest vetted row (FWHM, nmatch), nearest vetted row with nmatch >= 2 (FWHM), nearest satstar row (FWHM),
+other frames covering the position and the largest fraction of the excess they hold there.
+o105 F212N k=1 jw10678105001_02101_00005_nrca2_destreak_o105_crf.fits (1775, 1159) exc 368 91 sigma nb 0.0330 missing [5] dsat 133 ddnu 2 vetted 2.83 (nmatch 6) multi 2.83 satstar 12.0 others 5 max 0.01
+o105 F212N k=5 jw10678105001_02101_00003_nrca1_destreak_o105_crf.fits (1654, 2041) exc 2526 12 sigma nb 0.0416 missing [4097, 4097, 1311745, 1311745, 1311745] dsat 4 ddnu 2 vetted 1.91 (nmatch 4) multi 1.91 satstar 1.9 others 4 max 0.74
+o105 F212N k=5 jw10678105001_02101_00004_nrcb1_destreak_o105_crf.fits (650, 1338) exc 924 41 sigma nb 0.0884 missing [6145, 18110465, 1311745, 6145, 18110465] dsat 178 ddnu 2 vetted 0.71 (nmatch 2) multi 0.71 satstar 0.7 others 3 max 4.48
+o105 F212N k=5 jw10678105001_02101_00004_nrcb4_destreak_o105_crf.fits (443, 588) exc 456 38 sigma nb 0.0997 missing [1, 1, 1, 1, 1] dsat 157 ddnu 2 vetted 0.78 (nmatch 1) multi 5.96 satstar 0.8 others 1 max 4.66
+o105 F212N k=6 jw10678105001_02101_00003_nrcb2_destreak_o105_crf.fits (2038, 1522) exc 397 17 sigma nb 0.1380 missing [1315841, 1315841, 1315841, 1315841, 1315841, 1315841] dsat 106 ddnu 2 vetted 0.92 (nmatch 3) multi 0.92 satstar 0.9 others 3 max 7.97
+o118 F212N k=4 jw10678118001_02101_00003_nrcb3_destreak_o118_crf.fits (19, 1750) exc 423 7 sigma nb -0.0220 missing [1311745, 1315841, 1311745, 1315841] dsat 420 ddnu 2 vetted 1.61 (nmatch 1) multi 11.00 satstar 14.5 others 3 max -0.10
+o118 F212N k=5 jw10678118001_02101_00002_nrca2_destreak_o118_crf.fits (1574, 1475) exc 9074 90 sigma nb 0.0855 missing [1, 1, 1, 1, 1] dsat 248 ddnu 2 vetted 0.64 (nmatch 6) multi 0.64 satstar 0.6 others 5 max 2.81
+o130 F212N k=1 jw10678130001_02101_00004_nrca2_destreak_o130_crf.fits (1819, 1980) exc 602 244 sigma nb 0.0365 missing [5] dsat 170 ddnu 2 vetted 0.36 (nmatch 4) multi 0.36 satstar 29.2 others 5 max 0.02
+o130 F212N k=6 jw10678130001_02101_00004_nrcb2_destreak_o130_crf.fits (1579, 1843) exc 609 41 sigma nb 0.1184 missing [1, 1, 1, 1, 1, 1] dsat 164 ddnu 2 vetted 0.77 (nmatch 6) multi 0.77 satstar 0.8 others 5 max 4.63
+o130 F212N k=6 jw10678130001_02101_00005_nrcb1_destreak_o130_crf.fits (1742, 1937) exc 3762 153 sigma nb 0.1109 missing [1, 1, 1, 1, 1, 1] dsat 389 ddnu 2 vetted 0.60 (nmatch 3) multi 0.60 satstar 0.6 others 2 max 2.57
+o138 F212N k=4 jw10678138001_02101_00001_nrca4_destreak_o138_crf.fits (1841, 630) exc 348 24 sigma nb 0.1315 missing [1, 1, 1, 4097] dsat 31 ddnu 2 vetted 0.86 (nmatch 2) multi 0.86 satstar 0.9 others 1 max 5.36
+o138 F212N k=6 jw10678138001_02101_00004_nrcb4_destreak_o138_crf.fits (1944, 1814) exc 337 38 sigma nb 0.1003 missing [16777217, 16777217, 16777217, 16777217, 16777217, 16777217] dsat 154 ddnu 2 vetted 0.72 (nmatch 6) multi 0.72 satstar 16.8 others 5 max 4.30
+o105 F480M k=1 jw10678105001_02101_00002_nrcblong_destreak_o105_crf.fits (1552, 666) exc 1074 312 sigma nb 0.0173 missing [1] dsat 13 ddnu 2 vetted 3.31 (nmatch 4) multi 3.31 satstar 7.1 others 3 max 0.02
+o105 F480M k=1 jw10678105001_02101_00004_nrcalong_destreak_o105_crf.fits (738, 1135) exc 447 185 sigma nb 0.0077 missing [5] dsat 79 ddnu 8 vetted 1.61 (nmatch 4) multi 1.61 satstar 31.8 others 3 max 0.01
+o105 F480M k=1 jw10678105001_02101_00006_nrcalong_destreak_o105_crf.fits (1391, 500) exc 405 283 sigma nb 0.0087 missing [5] dsat 40 ddnu 2 vetted 0.06 (nmatch 2) multi 0.06 satstar 25.5 others 5 max 0.01
+o105 F480M k=2 jw10678105001_02101_00004_nrcblong_destreak_o105_crf.fits (939, 1114) exc 361 92 sigma nb 0.0121 missing [4097, 1] dsat 68 ddnu 2 vetted 1.84 (nmatch 6) multi 1.84 satstar 27.6 others 5 max 0.01
+o118 F480M k=1 jw10678118001_02101_00002_nrcalong_destreak_o118_crf.fits (760, 303) exc 2011 1805 sigma nb 0.0002 missing [1] dsat 66 ddnu 9 vetted 1.63 (nmatch 6) multi 1.63 satstar 26.9 others 5 max 0.00
+o118 F480M k=1 jw10678118001_02101_00004_nrcblong_destreak_o118_crf.fits (537, 533) exc 375 114 sigma nb 0.0026 missing [5] dsat 94 ddnu 5 vetted 0.03 (nmatch 3) multi 0.03 satstar 47.7 others 2 max 0.00
+o118 F480M k=1 jw10678118001_02101_00005_nrcblong_destreak_o118_crf.fits (1151, 1131) exc 1433 1736 sigma nb 0.0027 missing [6145] dsat 97 ddnu 2 vetted 0.99 (nmatch 6) multi 0.99 satstar 61.3 others 5 max 0.00
+o118 F480M k=1 jw10678118001_02101_00006_nrcalong_destreak_o118_crf.fits (760, 303) exc 1277 1487 sigma nb 0.0001 missing [1] dsat 109 ddnu 9 vetted 1.39 (nmatch 6) multi 1.39 satstar 89.7 others 5 max 0.00
+o118 F480M k=1 jw10678118001_02101_00006_nrcblong_destreak_o118_crf.fits (202, 309) exc 496 252 sigma nb 0.0101 missing [5] dsat 124 ddnu 2 vetted 0.20 (nmatch 4) multi 0.20 satstar 51.7 others 3 max 0.01
+o118 F480M k=1 jw10678118001_02101_00006_nrcblong_destreak_o118_crf.fits (313, 1489) exc 953 629 sigma nb 0.0055 missing [5] dsat 67 ddnu 3 vetted 3.01 (nmatch 4) multi 3.01 satstar 36.6 others 3 max 0.01
+o118 F480M k=5 jw10678118001_02101_00006_nrcalong_destreak_o118_crf.fits (1148, 1981) exc 1239 124 sigma nb 0.0225 missing [16777217, 4097, 16777217, 16777217, 16777217] dsat 4 ddnu 2 vetted 0.04 (nmatch 1) multi 2.02 satstar 26.7 others 2 max 0.03
+o130 F480M k=1 jw10678130001_02101_00003_nrcalong_destreak_o130_crf.fits (1525, 141) exc 1566 738 sigma nb 0.0055 missing [5] dsat 86 ddnu 2 vetted 0.02 (nmatch 1) multi 2.43 satstar 48.9 others 2 max 0.00
+o130 F480M k=1 jw10678130001_02101_00003_nrcalong_destreak_o130_crf.fits (760, 303) exc 1275 791 sigma nb 0.0010 missing [1] dsat 48 ddnu 9 vetted 1.27 (nmatch 6) multi 1.27 satstar 24.1 others 5 max 0.00
+o130 F480M k=1 jw10678130001_02101_00004_nrcalong_destreak_o130_crf.fits (760, 303) exc 1276 976 sigma nb 0.0019 missing [1] dsat 89 ddnu 9 vetted 0.02 (nmatch 4) multi 0.02 satstar 57.9 others 3 max 0.00
+o130 F480M k=2 jw10678130001_02101_00004_nrcalong_destreak_o130_crf.fits (307, 1360) exc 377 467 sigma nb 0.0076 missing [5, 1] dsat 112 ddnu 5 vetted 0.02 (nmatch 1) multi 2.76 satstar 44.5 others 1 max 0.01
+o130 F480M k=3 jw10678130001_02101_00001_nrcalong_destreak_o130_crf.fits (1569, 60) exc 544 484 sigma nb 0.0207 missing [5, 5, 5] dsat 27 ddnu 2 vetted 0.29 (nmatch 4) multi 0.29 satstar 12.1 others 3 max 0.02
+o138 F480M k=1 jw10678138001_02101_00001_nrcblong_destreak_o138_crf.fits (1501, 1642) exc 664 95 sigma nb 0.0696 missing [5] dsat 65 ddnu 2 vetted 1.34 (nmatch 4) multi 1.34 satstar 31.6 others 3 max 0.04
+
+Table 5: added spikes within 1 FWHM of a catalog row, by tolerance
+tolerance | added | within 1 FWHM of a vetted row | of a vetted row with nmatch >= 2 | of a satstar row | other frame >= 0.50 of the excess
+ k=1 only |    15 |                             7 |                                 6 |                0 |          0
+     k<=1 |    15 |                             7 |                                 6 |                0 |          0
+ k=2 only |     2 |                             1 |                                 0 |                0 |          0
+     k<=2 |    17 |                             8 |                                 6 |                0 |          0
+ k=3 only |     1 |                             1 |                                 1 |                0 |          0
+     k<=3 |    18 |                             9 |                                 7 |                0 |          0
+ k=4 only |     2 |                             1 |                                 1 |                1 |          1
+     k<=4 |    20 |                            10 |                                 8 |                1 |          1
+ k=5 only |     5 |                             4 |                                 2 |                3 |          4
+     k<=5 |    25 |                            14 |                                10 |                4 |          5
+ k=6 only |     4 |                             4 |                                 4 |                3 |          4
+     k<=6 |    29 |                            18 |                                14 |                7 |          9
+
+Table 6: the other-frame fraction of the cores that fail the isolation test as shipped and pass with their k brightest neighbours missing,
+by the largest fraction of the excess that another frame holds at the same sky position (cores with no other frame are in the last column)
+  k |    <0.1 | 0.1-0.2 | 0.2-0.3 | 0.3-0.5 | 0.5-0.8 |   >=0.8 | no other frame | smallest fraction at or above 0.3 | largest fraction below 0.3
+  1 |      12 |       3 |       0 |       0 |       0 |       0 |               0 |                               n/a |                      0.180
+  2 |      14 |       3 |       1 |       0 |       1 |       0 |               0 |                             0.556 |                      0.243
+  3 |      14 |       3 |       1 |       0 |       5 |      57 |               1 |                             0.556 |                      0.243
+  4 |      14 |       3 |       1 |       1 |      22 |    1273 |              18 |                             0.304 |                      0.243
+
+Table 7: the spikes added at k = 1 (the shipped limit), summed over the tile-bands
+  count 15 (F212N 2, F480M 13)
+  excess 368 to 2011 MJy/sr, sigma 91 to 1805
+  brightest usable neighbour / excess: largest 0.0696, median 0.0055 (limit 0.15)
+  DQ of the missing neighbour (value, finite or NaN): 1 NaN x5, 5 NaN x9, 6145 NaN x1
+  frames that cover the position: 15 of 15 have another frame, the largest fraction of the excess in another frame is 0.043
+  within 1 FWHM of a vetted row: 7, of a vetted row with nmatch >= 2: 6, of a satstar row: 0
+  nearest SATURATED pixel: closest 13 px

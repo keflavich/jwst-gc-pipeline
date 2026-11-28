@@ -35,6 +35,7 @@ NPIX = 160
 def _no_cached_masks(monkeypatch):
     monkeypatch.delenv(se.ENV_NEGATIVE, raising=False)
     monkeypatch.delenv(se.ENV_SPIKE, raising=False)
+    monkeypatch.delenv(se.ENV_SPIKE_UNUSABLE, raising=False)
     L._EVENT_MASK_CACHE.clear()
     yield
     L._EVENT_MASK_CACHE.clear()
@@ -255,6 +256,80 @@ def test_spike_masks_follow_the_switch_in_the_cache(tmp_path, monkeypatch):
 def test_spike_switch_typo_raises_naming_the_variable(tmp_path, monkeypatch):
     monkeypatch.setenv(se.ENV_SPIKE, 'big')
     with pytest.raises(ValueError, match=se.ENV_SPIKE):
+        L.single_exposure_event_masks([str(tmp_path / 'x.fits')])
+
+
+def _spike_beside_a_missing_pixel(tmp_path):
+    """Three frames; frame 1 has a 2000 MJy/sr pixel at (x, y) = (20, 30) whose lower
+    left neighbour is NaN with DO_NOT_USE."""
+    return [_crf_defects(tmp_path / f'f{k}_crf.fits', k,
+                         [(20, 30, 2000.0, 0), (19, 29, np.nan, 1)] if k == 1 else [])
+            for k in range(3)]
+
+
+def test_spike_beside_a_missing_pixel_is_not_masked_by_default(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    files = _spike_beside_a_missing_pixel(tmp_path)
+    assert L.single_exposure_event_masks(files) == {}
+    out = capsys.readouterr().out
+    assert 'positive spikes: 0 isolated' in out and se.ENV_SPIKE_UNUSABLE not in out
+
+
+def test_spike_beside_a_missing_pixel_is_masked_with_one_tolerated(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, '1')
+    files = _spike_beside_a_missing_pixel(tmp_path)
+    masks = L.single_exposure_event_masks(files)
+    assert list(masks) == [files[1]]
+    assert masks[files[1]].sum() == 9 and masks[files[1]][29:32, 19:22].all()
+    out = capsys.readouterr().out
+    assert ('positive spikes: 1 isolated one-pixel spikes of >= 300 MJy/sr in 1 of 3 '
+            'frames, 9 px set to DO_NOT_USE' in out)
+    assert 'POSITIVE_SPIKE_MASK_MAX_UNUSABLE=1: 1 of the spikes have a missing neighbour' in out
+
+
+def test_spike_tolerance_follows_the_switch_in_the_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    files = _spike_beside_a_missing_pixel(tmp_path)
+    off = L.single_exposure_event_masks(files)
+    assert off == {} and L.single_exposure_event_masks(files) is off
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, '1')
+    on = L.single_exposure_event_masks(files)
+    assert list(on) == [files[1]] and L.single_exposure_event_masks(files) is on
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, '0')
+    assert L.single_exposure_event_masks(files) == {}
+
+
+def test_spike_tolerance_leaves_a_clean_spike_alone(tmp_path, monkeypatch, capsys):
+    """A spike with all eight neighbours usable is the same with the tolerance on: the mask
+    and the text of the log line up to the tolerance note."""
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    files = [_crf_defects(tmp_path / f'f{k}_crf.fits', k,
+                          [(20, 30, 2000.0, 0)] if k == 1 else []) for k in range(3)]
+    plain = L.single_exposure_event_masks(files)[files[1]].copy()
+    plain_out = capsys.readouterr().out
+    L._EVENT_MASK_CACHE.clear()
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, '1')
+    tolerant = L.single_exposure_event_masks(files)[files[1]]
+    tolerant_out = capsys.readouterr().out
+    assert (tolerant == plain).all()
+    assert 'POSITIVE_SPIKE_MASK_MAX_UNUSABLE=1: 0 of the spikes have a missing neighbour' in tolerant_out
+    assert (tolerant_out.split('positive spikes:')[1].split('(')[0]
+            == plain_out.split('positive spikes:')[1].split('(')[0])
+
+
+def test_spike_tolerance_without_the_spike_switch_warns_and_does_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, '1')
+    files = _spike_beside_a_missing_pixel(tmp_path)
+    assert L.single_exposure_event_masks(files) == {}
+    assert f'{se.ENV_SPIKE_UNUSABLE}=1 has no effect while {se.ENV_SPIKE} is off' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('value', ['one', '2'])
+def test_spike_tolerance_typo_or_above_the_limit_raises_naming_the_variable(tmp_path, monkeypatch, value):
+    monkeypatch.setenv(se.ENV_SPIKE, '300')
+    monkeypatch.setenv(se.ENV_SPIKE_UNUSABLE, value)
+    with pytest.raises(ValueError, match=se.ENV_SPIKE_UNUSABLE):
         L.single_exposure_event_masks([str(tmp_path / 'x.fits')])
 
 
