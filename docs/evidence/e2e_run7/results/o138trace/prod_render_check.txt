@@ -1,0 +1,13 @@
+render, residual at (8694,633), model at (8694,633), model max in 9x9 box, data (= residual + model) at the pixel
+  prod5: residual -58.8 model 871.6 model box max 28465.2 data 812.8
+  c7fin: residual 608.3 model 204.5 model box max 30524.5 data 812.8
+  optnm: residual 608.3 model 204.5 model box max 30524.5 data 812.8
+  e7nm: residual 59.9 model 752.8 model box max 30553.8 data 812.8
+data (residual+model) difference optnm - e7nm over the window: max abs 8.715, finite px 18186
+exp5 production: 41484 rows
+    below (production 877.10,143.39): x=877.10 y=143.39 flux=9274.7 err=111.7 n_pix=20 qfit=0.465 chi2=129.6 flags=1
+    above (production 876.22,156.66): x=876.22 y=156.66 flux=7412.9 err=72.7 n_pix=15 qfit=0.476 chi2=229.7 flags=1
+exp5 e7 ctl: 41501 rows
+exp5 e5 opt: 41514 rows
+exp5 e7 opt: 41514 rows
+    above (production 876.22,156.66): x=876.89 y=156.24 flux=9107.2 err=90.05 n_pix=15 qfit=0.442 chi2=432.9 flags=1

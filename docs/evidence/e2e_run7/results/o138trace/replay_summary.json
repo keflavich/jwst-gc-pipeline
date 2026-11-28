@@ -1,0 +1,770 @@
+{
+ "a0_e3": {
+  "arm": "a0",
+  "frame": "e3",
+  "n_rows": 40861,
+  "rows": [
+   {
+    "target": [
+     97.5404,
+     493.5096
+    ],
+    "present": false,
+    "nearest_px": 13.981844440731846
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 40865,
+    "only_replay": 0,
+    "only_ref": 4,
+    "matched": 40861,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03440164222706806,
+    "only_replay_rows": [],
+    "only_ref_rows": [
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1",
+     "x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0"
+    ]
+   },
+   "e5 opt": {
+    "n_ref": 40861,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 40861,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 40843,
+    "only_replay": 19,
+    "only_ref": 1,
+    "matched": 40842,
+    "rel_gt_1e-3": 2,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.007240593853106522,
+    "only_replay_rows": [
+     "x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1",
+     "x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0",
+     "x_fit=1783.2 y_fit=103.12 flux_fit=1954.3 n_pixels_fit=25 qfit=0.26168 flags=0",
+     "x_fit=712.9 y_fit=978.3 flux_fit=1736.5 n_pixels_fit=25 qfit=0.28745 flags=0",
+     "x_fit=434.96 y_fit=181.62 flux_fit=1415 n_pixels_fit=25 qfit=0.28104 flags=0",
+     "x_fit=782.38 y_fit=1505.9 flux_fit=903.36 n_pixels_fit=25 qfit=0.042491 flags=0",
+     "x_fit=1786.4 y_fit=1877.9 flux_fit=834.94 n_pixels_fit=24 qfit=0.25302 flags=1",
+     "x_fit=375.09 y_fit=1130.2 flux_fit=818.14 n_pixels_fit=25 qfit=0.076724 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0"
+    ]
+   }
+  }
+ },
+ "a1_e3": {
+  "arm": "a1",
+  "frame": "e3",
+  "n_rows": 40861,
+  "rows": [
+   {
+    "target": [
+     97.5404,
+     493.5096
+    ],
+    "present": false,
+    "nearest_px": 13.981844440731846
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 40865,
+    "only_replay": 0,
+    "only_ref": 4,
+    "matched": 40861,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03440164222706806,
+    "only_replay_rows": [],
+    "only_ref_rows": [
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1",
+     "x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0"
+    ]
+   },
+   "e5 opt": {
+    "n_ref": 40861,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 40861,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 40843,
+    "only_replay": 19,
+    "only_ref": 1,
+    "matched": 40842,
+    "rel_gt_1e-3": 2,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.007240593853106522,
+    "only_replay_rows": [
+     "x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1",
+     "x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0",
+     "x_fit=1783.2 y_fit=103.12 flux_fit=1954.3 n_pixels_fit=25 qfit=0.26168 flags=0",
+     "x_fit=712.9 y_fit=978.3 flux_fit=1736.5 n_pixels_fit=25 qfit=0.28745 flags=0",
+     "x_fit=434.96 y_fit=181.62 flux_fit=1415 n_pixels_fit=25 qfit=0.28104 flags=0",
+     "x_fit=782.38 y_fit=1505.9 flux_fit=903.36 n_pixels_fit=25 qfit=0.042491 flags=0",
+     "x_fit=1786.4 y_fit=1877.9 flux_fit=834.94 n_pixels_fit=24 qfit=0.25302 flags=1",
+     "x_fit=375.09 y_fit=1130.2 flux_fit=818.14 n_pixels_fit=25 qfit=0.076724 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0"
+    ]
+   }
+  }
+ },
+ "a2_e3": {
+  "arm": "a2",
+  "frame": "e3",
+  "n_rows": 40865,
+  "rows": [
+   {
+    "target": [
+     97.5404,
+     493.5096
+    ],
+    "present": true,
+    "x_fit": 97.5403919046164,
+    "y_fit": 493.5095502548579,
+    "flux_fit": 9469.87890625,
+    "flux_err": 123.20697021484375,
+    "n_pixels_fit": 15.0,
+    "qfit": 0.3637916147708893,
+    "reduced_chi2": 215.368408203125,
+    "flags": 1.0
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 40865,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 40865,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e5 opt": {
+    "n_ref": 40861,
+    "only_replay": 4,
+    "only_ref": 0,
+    "matched": 40861,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03325752862592259,
+    "only_replay_rows": [
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1",
+     "x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0"
+    ],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 40843,
+    "only_replay": 23,
+    "only_ref": 1,
+    "matched": 40842,
+    "rel_gt_1e-3": 3,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03325752862592259,
+    "only_replay_rows": [
+     "x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1",
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=1783.2 y_fit=103.12 flux_fit=1954.3 n_pixels_fit=25 qfit=0.26168 flags=0",
+     "x_fit=712.9 y_fit=978.3 flux_fit=1736.5 n_pixels_fit=25 qfit=0.28745 flags=0",
+     "x_fit=434.96 y_fit=181.62 flux_fit=1415 n_pixels_fit=25 qfit=0.28104 flags=0",
+     "x_fit=782.38 y_fit=1505.9 flux_fit=903.36 n_pixels_fit=25 qfit=0.042491 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0"
+    ]
+   }
+  }
+ },
+ "a3_e3": {
+  "arm": "a3",
+  "frame": "e3",
+  "n_rows": 40865,
+  "rows": [
+   {
+    "target": [
+     97.5404,
+     493.5096
+    ],
+    "present": true,
+    "x_fit": 97.5403919046164,
+    "y_fit": 493.5095502548579,
+    "flux_fit": 9469.87890625,
+    "flux_err": 123.20697021484375,
+    "n_pixels_fit": 15.0,
+    "qfit": 0.3637916147708893,
+    "reduced_chi2": 215.368408203125,
+    "flags": 1.0
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 40865,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 40865,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e5 opt": {
+    "n_ref": 40861,
+    "only_replay": 4,
+    "only_ref": 0,
+    "matched": 40861,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03325752862592259,
+    "only_replay_rows": [
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1",
+     "x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0"
+    ],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 40843,
+    "only_replay": 23,
+    "only_ref": 1,
+    "matched": 40842,
+    "rel_gt_1e-3": 3,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03325752862592259,
+    "only_replay_rows": [
+     "x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1",
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=1783.2 y_fit=103.12 flux_fit=1954.3 n_pixels_fit=25 qfit=0.26168 flags=0",
+     "x_fit=712.9 y_fit=978.3 flux_fit=1736.5 n_pixels_fit=25 qfit=0.28745 flags=0",
+     "x_fit=434.96 y_fit=181.62 flux_fit=1415 n_pixels_fit=25 qfit=0.28104 flags=0",
+     "x_fit=782.38 y_fit=1505.9 flux_fit=903.36 n_pixels_fit=25 qfit=0.042491 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0"
+    ]
+   }
+  }
+ },
+ "a4_e3": {
+  "arm": "a4",
+  "frame": "e3",
+  "n_rows": 40865,
+  "rows": [
+   {
+    "target": [
+     97.5404,
+     493.5096
+    ],
+    "present": true,
+    "x_fit": 97.5403919046164,
+    "y_fit": 493.5095502548579,
+    "flux_fit": 9469.87890625,
+    "flux_err": 123.20697021484375,
+    "n_pixels_fit": 15.0,
+    "qfit": 0.3637916147708893,
+    "reduced_chi2": 215.368408203125,
+    "flags": 1.0
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 40865,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 40865,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e5 opt": {
+    "n_ref": 40861,
+    "only_replay": 4,
+    "only_ref": 0,
+    "matched": 40861,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03325752862592259,
+    "only_replay_rows": [
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=12.934 y_fit=1680.6 flux_fit=163.02 n_pixels_fit=21 qfit=0.21955 flags=1",
+     "x_fit=1207.5 y_fit=927.9 flux_fit=112.57 n_pixels_fit=25 qfit=0.28916 flags=0"
+    ],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 40843,
+    "only_replay": 23,
+    "only_ref": 1,
+    "matched": 40842,
+    "rel_gt_1e-3": 3,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.03325752862592259,
+    "only_replay_rows": [
+     "x_fit=488.28 y_fit=237.28 flux_fit=43765 n_pixels_fit=24 qfit=0.0074306 flags=1",
+     "x_fit=97.54 y_fit=493.51 flux_fit=9469.9 n_pixels_fit=15 qfit=0.36379 flags=1",
+     "x_fit=2036.6 y_fit=639.79 flux_fit=5608.4 n_pixels_fit=25 qfit=0.025387 flags=0",
+     "x_fit=1106.5 y_fit=553.85 flux_fit=2214.3 n_pixels_fit=17 qfit=0.01363 flags=1",
+     "x_fit=1783.2 y_fit=103.12 flux_fit=1954.3 n_pixels_fit=25 qfit=0.26168 flags=0",
+     "x_fit=712.9 y_fit=978.3 flux_fit=1736.5 n_pixels_fit=25 qfit=0.28745 flags=0",
+     "x_fit=434.96 y_fit=181.62 flux_fit=1415 n_pixels_fit=25 qfit=0.28104 flags=0",
+     "x_fit=782.38 y_fit=1505.9 flux_fit=903.36 n_pixels_fit=25 qfit=0.042491 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=1013.4 y_fit=819.83 flux_fit=199.98 n_pixels_fit=25 qfit=0.24033 flags=0"
+    ]
+   }
+  }
+ },
+ "a0_e6": {
+  "arm": "a0",
+  "frame": "e6",
+  "n_rows": 41136,
+  "rows": [
+   {
+    "target": [
+     100.6466,
+     150.6869
+    ],
+    "present": false,
+    "nearest_px": 19.985502569641454
+   },
+   {
+    "target": [
+     100.71,
+     165.26
+    ],
+    "present": false,
+    "nearest_px": 17.73638140915881
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 41139,
+    "only_replay": 0,
+    "only_ref": 3,
+    "matched": 41136,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": [
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0"
+    ]
+   },
+   "e5 opt": {
+    "n_ref": 41136,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 41136,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 41114,
+    "only_replay": 25,
+    "only_ref": 3,
+    "matched": 41111,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.015482917681867887,
+    "only_replay_rows": [
+     "x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0",
+     "x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0",
+     "x_fit=507.7 y_fit=671.36 flux_fit=2468.7 n_pixels_fit=25 qfit=0.019682 flags=0",
+     "x_fit=775.99 y_fit=778.19 flux_fit=2441.7 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=714.32 y_fit=633.84 flux_fit=1582 n_pixels_fit=25 qfit=0.30464 flags=0",
+     "x_fit=21.94 y_fit=1176.6 flux_fit=1496.2 n_pixels_fit=25 qfit=0.11918 flags=0",
+     "x_fit=783.7 y_fit=1159.8 flux_fit=807.38 n_pixels_fit=24 qfit=0.01213 flags=1",
+     "x_fit=1786.1 y_fit=1530.4 flux_fit=777.82 n_pixels_fit=25 qfit=0.28094 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16",
+     "x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16"
+    ]
+   }
+  }
+ },
+ "a1_e6": {
+  "arm": "a1",
+  "frame": "e6",
+  "n_rows": 41136,
+  "rows": [
+   {
+    "target": [
+     100.6466,
+     150.6869
+    ],
+    "present": false,
+    "nearest_px": 19.985502569641454
+   },
+   {
+    "target": [
+     100.71,
+     165.26
+    ],
+    "present": false,
+    "nearest_px": 17.73638140915881
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 41139,
+    "only_replay": 0,
+    "only_ref": 3,
+    "matched": 41136,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": [
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0"
+    ]
+   },
+   "e5 opt": {
+    "n_ref": 41136,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 41136,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 41114,
+    "only_replay": 25,
+    "only_ref": 3,
+    "matched": 41111,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.015482917681867887,
+    "only_replay_rows": [
+     "x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0",
+     "x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0",
+     "x_fit=507.7 y_fit=671.36 flux_fit=2468.7 n_pixels_fit=25 qfit=0.019682 flags=0",
+     "x_fit=775.99 y_fit=778.19 flux_fit=2441.7 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=714.32 y_fit=633.84 flux_fit=1582 n_pixels_fit=25 qfit=0.30464 flags=0",
+     "x_fit=21.94 y_fit=1176.6 flux_fit=1496.2 n_pixels_fit=25 qfit=0.11918 flags=0",
+     "x_fit=783.7 y_fit=1159.8 flux_fit=807.38 n_pixels_fit=24 qfit=0.01213 flags=1",
+     "x_fit=1786.1 y_fit=1530.4 flux_fit=777.82 n_pixels_fit=25 qfit=0.28094 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16",
+     "x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16"
+    ]
+   }
+  }
+ },
+ "a2_e6": {
+  "arm": "a2",
+  "frame": "e6",
+  "n_rows": 41139,
+  "rows": [
+   {
+    "target": [
+     100.6466,
+     150.6869
+    ],
+    "present": true,
+    "x_fit": 100.64663438149339,
+    "y_fit": 150.68687407560597,
+    "flux_fit": 8464.8447265625,
+    "flux_err": 99.98177337646484,
+    "n_pixels_fit": 19.0,
+    "qfit": 0.5639075040817261,
+    "reduced_chi2": 161.97926330566406,
+    "flags": 1.0
+   },
+   {
+    "target": [
+     100.71,
+     165.26
+    ],
+    "present": true,
+    "x_fit": 100.71009655406964,
+    "y_fit": 165.25758455756275,
+    "flux_fit": 6718.732421875,
+    "flux_err": 75.34840393066406,
+    "n_pixels_fit": 11.0,
+    "qfit": 0.35976463556289673,
+    "reduced_chi2": 290.7462158203125,
+    "flags": 1.0
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 41139,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 41139,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e5 opt": {
+    "n_ref": 41136,
+    "only_replay": 3,
+    "only_ref": 0,
+    "matched": 41136,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0"
+    ],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 41114,
+    "only_replay": 28,
+    "only_ref": 3,
+    "matched": 41111,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.015482917681867887,
+    "only_replay_rows": [
+     "x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0",
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0",
+     "x_fit=507.7 y_fit=671.36 flux_fit=2468.7 n_pixels_fit=25 qfit=0.019682 flags=0",
+     "x_fit=775.99 y_fit=778.19 flux_fit=2441.7 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=714.32 y_fit=633.84 flux_fit=1582 n_pixels_fit=25 qfit=0.30464 flags=0",
+     "x_fit=21.94 y_fit=1176.6 flux_fit=1496.2 n_pixels_fit=25 qfit=0.11918 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16",
+     "x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16"
+    ]
+   }
+  }
+ },
+ "a3_e6": {
+  "arm": "a3",
+  "frame": "e6",
+  "n_rows": 41139,
+  "rows": [
+   {
+    "target": [
+     100.6466,
+     150.6869
+    ],
+    "present": true,
+    "x_fit": 100.64663438149339,
+    "y_fit": 150.68687407560597,
+    "flux_fit": 8464.8447265625,
+    "flux_err": 99.98177337646484,
+    "n_pixels_fit": 19.0,
+    "qfit": 0.5639075040817261,
+    "reduced_chi2": 161.97926330566406,
+    "flags": 1.0
+   },
+   {
+    "target": [
+     100.71,
+     165.26
+    ],
+    "present": true,
+    "x_fit": 100.71009655406964,
+    "y_fit": 165.25758455756275,
+    "flux_fit": 6718.732421875,
+    "flux_err": 75.34840393066406,
+    "n_pixels_fit": 11.0,
+    "qfit": 0.35976463556289673,
+    "reduced_chi2": 290.7462158203125,
+    "flags": 1.0
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 41139,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 41139,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e5 opt": {
+    "n_ref": 41136,
+    "only_replay": 3,
+    "only_ref": 0,
+    "matched": 41136,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0"
+    ],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 41114,
+    "only_replay": 28,
+    "only_ref": 3,
+    "matched": 41111,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.015482917681867887,
+    "only_replay_rows": [
+     "x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0",
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0",
+     "x_fit=507.7 y_fit=671.36 flux_fit=2468.7 n_pixels_fit=25 qfit=0.019682 flags=0",
+     "x_fit=775.99 y_fit=778.19 flux_fit=2441.7 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=714.32 y_fit=633.84 flux_fit=1582 n_pixels_fit=25 qfit=0.30464 flags=0",
+     "x_fit=21.94 y_fit=1176.6 flux_fit=1496.2 n_pixels_fit=25 qfit=0.11918 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16",
+     "x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16"
+    ]
+   }
+  }
+ },
+ "a4_e6": {
+  "arm": "a4",
+  "frame": "e6",
+  "n_rows": 41139,
+  "rows": [
+   {
+    "target": [
+     100.6466,
+     150.6869
+    ],
+    "present": true,
+    "x_fit": 100.64663438149339,
+    "y_fit": 150.68687407560597,
+    "flux_fit": 8464.8447265625,
+    "flux_err": 99.98177337646484,
+    "n_pixels_fit": 19.0,
+    "qfit": 0.5639075040817261,
+    "reduced_chi2": 161.97926330566406,
+    "flags": 1.0
+   },
+   {
+    "target": [
+     100.71,
+     165.26
+    ],
+    "present": true,
+    "x_fit": 100.71009655406964,
+    "y_fit": 165.25758455756275,
+    "flux_fit": 6718.732421875,
+    "flux_err": 75.34840393066406,
+    "n_pixels_fit": 11.0,
+    "qfit": 0.35976463556289673,
+    "reduced_chi2": 290.7462158203125,
+    "flags": 1.0
+   }
+  ],
+  "cmp": {
+   "e7 opt": {
+    "n_ref": 41139,
+    "only_replay": 0,
+    "only_ref": 0,
+    "matched": 41139,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [],
+    "only_ref_rows": []
+   },
+   "e5 opt": {
+    "n_ref": 41136,
+    "only_replay": 3,
+    "only_ref": 0,
+    "matched": 41136,
+    "rel_gt_1e-3": 0,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.0,
+    "only_replay_rows": [
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1867.4 y_fit=848.59 flux_fit=39.465 n_pixels_fit=25 qfit=1.5588 flags=0"
+    ],
+    "only_ref_rows": []
+   },
+   "e7 ctl": {
+    "n_ref": 41114,
+    "only_replay": 28,
+    "only_ref": 3,
+    "matched": 41111,
+    "rel_gt_1e-3": 1,
+    "rel_gt_5e-2": 0,
+    "rel_max": 0.015482917681867887,
+    "only_replay_rows": [
+     "x_fit=586.02 y_fit=1563.7 flux_fit=12281 n_pixels_fit=25 qfit=0.0086897 flags=0",
+     "x_fit=100.65 y_fit=150.69 flux_fit=8464.8 n_pixels_fit=19 qfit=0.56391 flags=1",
+     "x_fit=100.71 y_fit=165.26 flux_fit=6718.7 n_pixels_fit=11 qfit=0.35976 flags=1",
+     "x_fit=1583.2 y_fit=1343.1 flux_fit=2599.2 n_pixels_fit=25 qfit=0.071126 flags=0",
+     "x_fit=507.7 y_fit=671.36 flux_fit=2468.7 n_pixels_fit=25 qfit=0.019682 flags=0",
+     "x_fit=775.99 y_fit=778.19 flux_fit=2441.7 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=714.32 y_fit=633.84 flux_fit=1582 n_pixels_fit=25 qfit=0.30464 flags=0",
+     "x_fit=21.94 y_fit=1176.6 flux_fit=1496.2 n_pixels_fit=25 qfit=0.11918 flags=0"
+    ],
+    "only_ref_rows": [
+     "x_fit=775.66 y_fit=778.06 flux_fit=2513.3 n_pixels_fit=25 qfit=0.026681 flags=0",
+     "x_fit=1269.5 y_fit=183.35 flux_fit=238.54 n_pixels_fit=25 qfit=0.20497 flags=16",
+     "x_fit=1274.5 y_fit=178.6 flux_fit=2.4938 n_pixels_fit=25 qfit=0.11271 flags=16"
+    ]
+   }
+  }
+ }
+}

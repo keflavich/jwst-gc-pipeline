@@ -1,0 +1,13 @@
+11 distinct positive-flux rows in the annulus 1.5-4.5 FWHM around the satstars with flux >= 1e6 (opt tables, exposures 3 and 6)
+  exp3 (1037.72,1534.13) r=3.93 FWHM angle 182 deg; offset from the nearest multiple of 60 deg: +2 deg; flux 11734.3 = 0.076 % of the star
+  exp3 (1038.59,1551.88) r=3.79 FWHM angle 4 deg; offset from the nearest multiple of 60 deg: +4 deg; flux 13680.9 = 0.088 % of the star
+  exp3 (1589.03,258.39) r=4.25 FWHM angle 66 deg; offset from the nearest multiple of 60 deg: +6 deg; flux 1030.7 = 0.085 % of the star
+  exp3 (782.04,1091.60) r=3.43 FWHM angle 67 deg; offset from the nearest multiple of 60 deg: +7 deg; flux 581.6 = 0.044 % of the star
+  exp3 (97.54,493.51) r=2.80 FWHM angle 185 deg; offset from the nearest multiple of 60 deg: +5 deg; flux 9469.9 = 0.130 % of the star
+  exp3 (98.42,507.46) r=3.27 FWHM angle 2 deg; offset from the nearest multiple of 60 deg: +2 deg; flux 7346.2 = 0.101 % of the star
+  exp6 (100.65,150.69) r=2.98 FWHM angle 180 deg; offset from the nearest multiple of 60 deg: +0 deg; flux 8464.8 = 0.113 % of the star
+  exp6 (100.71,165.26) r=3.35 FWHM angle 1 deg; offset from the nearest multiple of 60 deg: +1 deg; flux 6718.7 = 0.089 % of the star
+  exp6 (1046.18,1201.22) r=3.64 FWHM angle 58 deg; offset from the nearest multiple of 60 deg: -2 deg; flux 18259.1 = 0.116 % of the star
+  exp6 (14.03,2013.38) r=3.49 FWHM angle 304 deg; offset from the nearest multiple of 60 deg: +4 deg; flux 5061.7 = 0.075 % of the star
+  exp6 (783.20,746.55) r=3.32 FWHM angle 69 deg; offset from the nearest multiple of 60 deg: +9 deg; flux 1126.3 = 0.084 % of the star
+largest offset 9 deg; rows within 9 deg: 11 of 11; probability for uniform angles that one row lies within 9 deg of a multiple of 60 deg = 0.30; all 11 rows: 1.77e-06

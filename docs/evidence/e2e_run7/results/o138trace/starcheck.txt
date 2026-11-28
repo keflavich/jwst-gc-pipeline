@@ -1,0 +1,52 @@
+==== exp3: satstar model sum 7.023e+07; saturated star at (98.11, 499.93) flux 7.298e+06
+  row (97.54, 493.51) flux 9469.9 = 0.130 % of the saturated star; local_bkg 82.652
+    satstar-subtracted data (sci - satstar model), MJy/sr, 7x7 (y=497..491 top to bottom, x=95..101; nan = saturated / masked):
+      y= 497     nan     nan     nan     nan     nan     nan     nan
+      y= 496     nan     nan     nan     nan     nan     nan     nan
+      y= 495     nan     nan     nan     nan     nan     nan     nan
+      y= 494     562     687     806    1184     823     341    -320
+      y= 493     703     703     783     645     742     528      -3
+      y= 492     -95     -22     584     456      34     270    -190
+      y= 491      20    -242     108     221      97    -684    -474
+    3x3 peak of the subtracted data 1184; ERR at the rounded pixel 33.2 -> peak/ERR 36; pixels in the 5x5 box with finite subtracted data: 15
+  azimuthal median of the subtracted data at r = 6-8 px from the star (bins of 30 deg, angle from +y towards +x; n = pixels used):
+       0- 30:     591 (n=6) |  30- 60:     674 (n=7) |  60- 90:     471 (n=8)
+      90-120:     374 (n=7) | 120-150:     654 (n=7) | 150-180:     341 (n=7)
+     180-210:     695 (n=8) | 210-240:     584 (n=7) | 240-270:     759 (n=6)
+     270-300:     349 (n=8) | 300-330:     574 (n=7) | 330-360:     627 (n=8)
+  azimuthal median of the subtracted data at r = 10-12 px from the star (bins of 30 deg, angle from +y towards +x; n = pixels used):
+       0- 30:     208 (n=10) |  30- 60:     132 (n=9) |  60- 90:      -2 (n=12)
+      90-120:     -23 (n=11) | 120-150:      42 (n=11) | 150-180:     104 (n=11)
+     180-210:      74 (n=12) | 210-240:     163 (n=11) | 240-270:     118 (n=10)
+     270-300:     198 (n=12) | 300-330:     193 (n=12) | 330-360:     228 (n=12)
+==== exp6: satstar model sum 7.703e+07; saturated star at (100.62, 157.55) flux 7.514e+06
+  row (100.65, 150.69) flux 8464.8 = 0.113 % of the saturated star; local_bkg 89.063
+    satstar-subtracted data (sci - satstar model), MJy/sr, 7x7 (y=154..148 top to bottom, x=98..104; nan = saturated / masked):
+      y= 154     nan     nan     nan     nan     nan     nan     nan
+      y= 153     nan     nan     nan     nan     nan     nan     nan
+      y= 152     533     638     526     nan     777     307     358
+      y= 151     135     718     690     715     665     480     324
+      y= 150     443     557     685     828     698     680     168
+      y= 149    -136     259     200     415    -384    -166      46
+      y= 148    -142      26     557     455    -304     189     395
+    3x3 peak of the subtracted data 828; ERR at the rounded pixel 19.1 -> peak/ERR 43; pixels in the 5x5 box with finite subtracted data: 19
+  row (100.71, 165.26) flux 6718.7 = 0.089 % of the saturated star; local_bkg nan
+    satstar-subtracted data (sci - satstar model), MJy/sr, 7x7 (y=168..162 top to bottom, x=98..104; nan = saturated / masked):
+      y= 168     423     223     -97     169     442     149     271
+      y= 167     322     777     476     456     647     686     678
+      y= 166    -292     278     560     632     120      87     436
+      y= 165     190     582     426     666     284     170    -425
+      y= 164     nan     nan     nan     nan     976     802     315
+      y= 163     nan     nan     nan     nan     nan     nan     nan
+      y= 162     nan     nan     nan     nan     nan     nan     nan
+    3x3 peak of the subtracted data 976; ERR at the rounded pixel 12.7 -> peak/ERR 77; pixels in the 5x5 box with finite subtracted data: 17
+  azimuthal median of the subtracted data at r = 6-8 px from the star (bins of 30 deg, angle from +y towards +x; n = pixels used):
+       0- 30:     490 (n=6) |  30- 60:     465 (n=4) |  60- 90:     226 (n=4)
+      90-120:     369 (n=4) | 120-150:     571 (n=6) | 150-180:     673 (n=8)
+     180-210:     621 (n=8) | 210-240:     784 (n=6) | 240-270:     628 (n=7)
+     270-300:     260 (n=6) | 300-330:     378 (n=5) | 330-360:     308 (n=4)
+  azimuthal median of the subtracted data at r = 10-12 px from the star (bins of 30 deg, angle from +y towards +x; n = pixels used):
+       0- 30:     256 (n=12) |  30- 60:     132 (n=12) |  60- 90:     248 (n=11)
+      90-120:     148 (n=12) | 120-150:     279 (n=11) | 150-180:     155 (n=12)
+     180-210:     153 (n=11) | 210-240:     187 (n=12) | 240-270:      97 (n=12)
+     270-300:     219 (n=12) | 300-330:     120 (n=10) | 330-360:     236 (n=11)

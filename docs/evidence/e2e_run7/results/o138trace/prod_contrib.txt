@@ -1,0 +1,6 @@
+=== production merged row below the star: pix (8694.32,633.55) flux 8828.3 nmatch 2 nmatch_good 2
+   production exp5: sep 0.007" x=877.10 y=143.39 flux=9274.7 err=111.7 n_pix=20 qfit=0.465 flags=1
+   production exp6: sep 0.007" x=100.35 y=151.08 flux=8300.8 err=121.4 n_pix=19 qfit=0.522 flags=1
+=== production merged row above the star: pix (8693.29,646.75) flux 6535.5 nmatch 3 nmatch_good 1
+   production exp3: sep 0.000" x=97.22 y=506.63 flux=6535.5 err=77.98 n_pix=20 qfit=0.472 flags=1
+   production exp5: sep 0.008" x=876.22 y=156.66 flux=7412.9 err=72.7 n_pix=15 qfit=0.476 flags=1

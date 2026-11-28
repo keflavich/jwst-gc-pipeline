@@ -1,0 +1,70 @@
+FWHM used 2.30 px (F212N NIRCam 0.0725 arcsec / 0.031 arcsec/px = 2.34 px)
+--- exp3: 328 satstar rows, 12 with flux >= 1e6
+  ctl: star (1038.0,1543.2) flux 1.55e+07: 2 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.79 FWHM ang(+y->+x)=    4 deg  x=1038.59 y=1551.88 flux= 13680.9 (0.088% of star) n_pix=16 qfit=0.62 flags=1
+      r=3.93 FWHM ang(+y->+x)=  182 deg  x=1037.72 y=1534.13 flux= 11734.3 (0.076% of star) n_pix=20 qfit=0.543 flags=1
+  ctl: star (98.1,499.9) flux 7.3e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.27 FWHM ang(+y->+x)=    2 deg  x=98.42 y=507.46 flux=  7346.2 (0.101% of star) n_pix=20 qfit=0.877 flags=1
+  ctl: star (6.0,1542.2) flux 3.37e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (1604.0,790.1) flux 3.15e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (171.9,1629.9) flux 2.29e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (1419.4,1492.4) flux 1.12e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (637.6,1104.1) flux 1.05e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (538.3,639.0) flux 1.94e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (1580.1,254.5) flux 1.21e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=4.25 FWHM ang(+y->+x)=   66 deg  x=1589.03 y=258.39 flux=  1030.7 (0.085% of star) n_pix=25 qfit=0.399 flags=0
+  ctl: star (361.2,1150.2) flux 1.68e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (774.7,1088.6) flux 1.32e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.43 FWHM ang(+y->+x)=   67 deg  x=782.04 y=1091.60 flux=   581.6 (0.044% of star) n_pix=24 qfit=0.99 flags=1
+  ctl: star (514.3,1469.2) flux 1.36e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (1038.0,1543.2) flux 1.55e+07: 2 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.79 FWHM ang(+y->+x)=    4 deg  x=1038.59 y=1551.88 flux= 13680.9 (0.088% of star) n_pix=16 qfit=0.62 flags=1
+      r=3.93 FWHM ang(+y->+x)=  182 deg  x=1037.72 y=1534.13 flux= 11734.3 (0.076% of star) n_pix=20 qfit=0.543 flags=1
+  opt: star (98.1,499.9) flux 7.3e+06: 2 rows with flux>0 at 1.5-4.5 FWHM
+      r=2.80 FWHM ang(+y->+x)=  185 deg  x=97.54 y=493.51 flux=  9469.9 (0.130% of star) n_pix=15 qfit=0.364 flags=1
+      r=3.27 FWHM ang(+y->+x)=    2 deg  x=98.42 y=507.46 flux=  7346.2 (0.101% of star) n_pix=20 qfit=0.877 flags=1
+  opt: star (6.0,1542.2) flux 3.37e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (1604.0,790.1) flux 3.15e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (171.9,1629.9) flux 2.29e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (1419.4,1492.4) flux 1.12e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (637.6,1104.1) flux 1.05e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (538.3,639.0) flux 1.94e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (1580.1,254.5) flux 1.21e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=4.25 FWHM ang(+y->+x)=   66 deg  x=1589.03 y=258.39 flux=  1030.7 (0.085% of star) n_pix=25 qfit=0.399 flags=0
+  opt: star (361.2,1150.2) flux 1.68e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (774.7,1088.6) flux 1.32e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.43 FWHM ang(+y->+x)=   67 deg  x=782.04 y=1091.60 flux=   581.6 (0.044% of star) n_pix=24 qfit=0.99 flags=1
+  opt: star (514.3,1469.2) flux 1.36e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+--- exp6: 340 satstar rows, 12 with flux >= 1e6
+  ctl: star (1039.0,1196.8) flux 1.58e+07: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.64 FWHM ang(+y->+x)=   58 deg  x=1046.18 y=1201.22 flux= 18259.1 (0.116% of star) n_pix=25 qfit=0.477 flags=0
+  ctl: star (100.6,157.5) flux 7.51e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (20.7,2008.9) flux 6.72e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.49 FWHM ang(+y->+x)=  304 deg  x=14.03 y=2013.38 flux=  5061.7 (0.075% of star) n_pix=23 qfit=0.799 flags=1
+  ctl: star (1603.1,446.0) flux 3.13e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (9.4,1196.4) flux 3.49e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (175.0,1283.7) flux 2.26e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (1419.6,1146.0) flux 1.13e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (539.8,295.9) flux 1.91e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (639.2,759.3) flux 1.04e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (363.5,805.4) flux 1.6e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (516.5,1123.3) flux 1.39e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  ctl: star (776.1,743.8) flux 1.34e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.32 FWHM ang(+y->+x)=   69 deg  x=783.20 y=746.55 flux=  1126.3 (0.084% of star) n_pix=25 qfit=0.944 flags=0
+  opt: star (1039.0,1196.8) flux 1.58e+07: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.64 FWHM ang(+y->+x)=   58 deg  x=1046.18 y=1201.22 flux= 18259.1 (0.116% of star) n_pix=25 qfit=0.477 flags=0
+  opt: star (100.6,157.5) flux 7.51e+06: 2 rows with flux>0 at 1.5-4.5 FWHM
+      r=2.98 FWHM ang(+y->+x)=  180 deg  x=100.65 y=150.69 flux=  8464.8 (0.113% of star) n_pix=19 qfit=0.564 flags=1
+      r=3.35 FWHM ang(+y->+x)=    1 deg  x=100.71 y=165.26 flux=  6718.7 (0.089% of star) n_pix=11 qfit=0.36 flags=1
+  opt: star (20.7,2008.9) flux 6.72e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.49 FWHM ang(+y->+x)=  304 deg  x=14.03 y=2013.38 flux=  5061.7 (0.075% of star) n_pix=23 qfit=0.799 flags=1
+  opt: star (1603.1,446.0) flux 3.13e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (9.4,1196.4) flux 3.49e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (175.0,1283.7) flux 2.26e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (1419.6,1146.0) flux 1.13e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (539.8,295.9) flux 1.91e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (639.2,759.3) flux 1.04e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (363.5,805.4) flux 1.6e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (516.5,1123.3) flux 1.39e+06: 0 rows with flux>0 at 1.5-4.5 FWHM
+  opt: star (776.1,743.8) flux 1.34e+06: 1 rows with flux>0 at 1.5-4.5 FWHM
+      r=3.32 FWHM ang(+y->+x)=   69 deg  x=783.20 y=746.55 flux=  1126.3 (0.084% of star) n_pix=25 qfit=0.944 flags=0

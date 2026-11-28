@@ -1,0 +1,9 @@
+=== below the star (extra merged row): merged row pix (8694.14,633.31) flux 8975.1 nmatch 2
+   opt exp3: sep 0.011" x=97.54 y=493.51 flux=9469.9 err=123.2 n_pix=15 qfit=0.364 flags=1
+   opt exp6: sep 0.011" x=100.65 y=150.69 flux=8464.8 err=99.98 n_pix=19 qfit=0.564 flags=1
+=== above the star (row present in every arm): merged row pix (8693.90,647.16) flux 8201.9 nmatch 5
+   opt exp3: sep 0.023" x=98.42 y=507.46 flux=7346.2 err=61.51 n_pix=20 qfit=0.877 flags=1
+   opt exp5: sep 0.018" x=876.89 y=156.24 flux=9107.2 err=90.05 n_pix=15 qfit=0.442 flags=1
+   opt exp6: sep 0.023" x=100.71 y=165.26 flux=6718.7 err=75.35 n_pix=11 qfit=0.36 flags=1
+   ctl exp3: sep 0.023" x=98.42 y=507.46 flux=7346.2 err=61.51 n_pix=20 qfit=0.877 flags=1
+=== star: merged row pix (8694.24,640.04) flux 6.6747e+06 nmatch 6

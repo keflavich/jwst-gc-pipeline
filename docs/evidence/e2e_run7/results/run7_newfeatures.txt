@@ -34,18 +34,18 @@
 | o118 | F212N | (11389, 1475) | this-run opt | 1475, 0.044 arcsec | 2 | 2 | nan | nan | 56.64 | 56.64 |
 
 ## frames o105
-| tile | band | pixel (x, y) | row that differs | present in | frame | position in the frame (x, y) | distance by the rounded-pixel rule (px) | distance by the continuous rule (px) | rounded-pixel rule | continuous rule |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: | ---: | :--- | :--- |
-| o105 | F480M | (5325, 1803) | flux 4509, 0.035 arcsec from the pixel | four-tile opt | 105001_02101_00001_nrcblong | (1757.77, 1572.82) | 1.000 | 0.794 | drops | drops |
-| o105 | F480M | (5325, 1803) | flux 4509, 0.035 arcsec from the pixel | four-tile opt | 105001_02101_00002_nrcblong | (1755.68, 1745.30) | 1.414 | 0.975 | keeps | drops |
+| tile | band | pixel (x, y) | row that differs | present in | frame | position in the frame (x, y) | kind of position | distance by the rounded-pixel rule (px) | distance by the continuous rule (px) | rounded-pixel rule | continuous rule |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: | ---: | :--- | :--- |
+| o105 | F480M | (5325, 1803) | flux 4509, 0.035 arcsec from the pixel | four-tile opt | 105001_02101_00001_nrcblong | (1757.77, 1572.82) | projected position of the row, no fit | 1.000 | 0.794 | drops | drops |
+| o105 | F480M | (5325, 1803) | flux 4509, 0.035 arcsec from the pixel | four-tile opt | 105001_02101_00002_nrcblong | (1755.68, 1745.30) | fit position | 1.414 | 0.975 | keeps | drops |
 
 ## frames o138
-| tile | band | pixel (x, y) | row that differs | present in | frame | position in the frame (x, y) | distance by the rounded-pixel rule (px) | distance by the continuous rule (px) | rounded-pixel rule | continuous rule |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: | ---: | :--- | :--- |
-| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00001_nrcb4 | (1522.83, 146.58) | 0.000 | 0.451 | drops | drops |
-| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00002_nrcb4 | (1516.24, 488.26) | 1.000 | 0.774 | drops | drops |
-| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00003_nrcb2 | (97.80, 493.29) | 2.000 | 1.725 | keeps | keeps |
-| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00004_nrcb2 | (876.15, 485.92) | 2.000 | 2.090 | keeps | keeps |
-| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00005_nrcb2 | (876.68, 143.10) | 2.000 | 1.929 | keeps | keeps |
-| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00006_nrcb2 | (100.39, 150.91) | 1.414 | 1.252 | keeps | keeps |
+| tile | band | pixel (x, y) | row that differs | present in | frame | position in the frame (x, y) | kind of position | distance by the rounded-pixel rule (px) | distance by the continuous rule (px) | rounded-pixel rule | continuous rule |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: | ---: | :--- | :--- |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00001_nrcb4 | (1522.83, 146.58) | projected position of the row, no fit | 0.000 | 0.451 | drops | drops |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00002_nrcb4 | (1516.24, 488.26) | projected position of the row, no fit | 1.000 | 0.774 | drops | drops |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00003_nrcb2 | (97.54, 493.51) | fit position | 1.000 | 1.560 | drops | keeps |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00004_nrcb2 | (876.15, 485.92) | projected position of the row, no fit | 2.000 | 2.090 | keeps | keeps |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00005_nrcb2 | (876.68, 143.10) | projected position of the row, no fit | 2.000 | 1.929 | keeps | keeps |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00006_nrcb2 | (100.65, 150.69) | fit position | 1.000 | 1.360 | drops | keeps |
 

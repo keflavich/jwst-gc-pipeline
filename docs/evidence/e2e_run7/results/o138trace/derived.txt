@@ -1,0 +1,5 @@
+extra row, fits of exposure 3 and 6 (replay arm a2): fluxes 9469.88 and 8464.84, errors 123.207 and 99.982
+inverse-variance mean flux of the two fits: 8863.9
+merged flux of the extra row in the m7 catalog of the opt arm of this run: 8975.1; ratio to the inverse-variance mean: 1.0125
+production fits of the row at 0.30 px: fluxes 9274.7 and 8300.8, errors 111.7 and 121.4
+inverse-variance mean flux of the production fits (rounded inputs): 8828.2; merged flux of the production m7 row: 8828.3; ratio 1.0000
