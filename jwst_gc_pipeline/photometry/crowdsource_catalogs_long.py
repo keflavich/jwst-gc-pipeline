@@ -5563,12 +5563,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'every other band at the default.  0 = off (the default).  '
                            'The S/N of a source depends on the band: 50 suits F212N '
                            '(docs/evidence/m7_companion_keep), and at F480M it adds '
-                           '2406 rows to o045 where F212N gets 53, so give F480M 0.')
+                           '2406 rows to o045 where F212N gets 53 (both counted at 1.75 '
+                           'FWHM), so give F480M 0.')
     parser.add_option('--manual-m7-seed-own-band-companion-keep-fwhm',
                       dest='manual_m7_seed_own_band_companion_keep_fwhm', type='float',
                       default=MANUAL_DEFAULTS['manual_m7_seed_own_band_companion_keep_fwhm'],
                       help='Minimum separation, in PSF FWHM, of the exemption above.  '
-                           'Default 1.75.')
+                           'Default 1.5.')
     parser.add_option('--manual-m7-seed-dedup-fwhm',
                       dest='manual_m7_seed_dedup_fwhm', type='float',
                       default=MANUAL_DEFAULTS['manual_m7_seed_dedup_fwhm'],

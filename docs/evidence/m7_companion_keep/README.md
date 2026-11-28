@@ -13,7 +13,11 @@ cut sources that are bright and far from every dominating source.
 | option | default | documented F212N value |
 |---|---|---|
 | `--manual-m7-seed-own-band-companion-keep-snr` (`manual_m7_seed_own_band_companion_keep_snr`) | 0 (off) | 50 |
-| `--manual-m7-seed-own-band-companion-keep-fwhm` (`manual_m7_seed_own_band_companion_keep_fwhm`) | 1.75 | 1.75 |
+| `--manual-m7-seed-own-band-companion-keep-fwhm` (`manual_m7_seed_own_band_companion_keep_fwhm`) | 1.5 | 1.5 |
+
+The tests in this README ran with a separation of 1.75 FWHM, which was the default
+until 2026-11-28 (bullet "Default separation 1.5 FWHM" under "Things to decide or
+know").
 
 With `keep_snr` 0 the builder returns exactly what it returned before (rows
 and `NCOMPAN` match the production seed in all four tile × module cases, see
@@ -112,7 +116,8 @@ none on o105, with no extra hit).  Hits are at residual peak ≥ 100 MJy/sr:
   tile with 1 hit each at ≥ 100 MJy/sr (2 of 18, 11%).  Rows at 1.75–2.0 FWHM:
   5 rows (2 hits) on o045 and 12 rows (6 hits) on o105 (8 of 17, 47%).  The hit
   rate changes between 1.5 and 1.75; the sweep has a step of 0.25 FWHM, so the
-  position of the change is known to that resolution.
+  position of the change is known to that resolution.  The default separation is
+  now 1.5 FWHM (see "Things to decide or know").
 - **Saturated neighbours.**  At S/N 50 this class has 279 and 229 rows (4.5–5 times
   the unsaturated class) with 7 and 7 hits at ≥ 100 MJy/sr (2.5% and 3.1%),
   against 27 of 56 and 23 of 51.  The rule leaves it cut.
@@ -1176,6 +1181,24 @@ F212N S/N value, because the F182M S/N scale is another one.
   takes a value per band (`F212N=50,F480M=0`) and a band needs its own test (the
   F182M test above does not fix the F212N scale).  A band that no pair names
   stays off.
+- **Default separation 1.5 FWHM.**  The tests in this README ran with a separation
+  of 1.75 FWHM, the default until 2026-11-28; the default is now 1.5 FWHM.  The
+  sweep of "Choosing the rule" found 2 hits in 18 rows at 1.5–1.75 FWHM (11%;
+  o045 and o105 F212N, S/N ≥ 50, unsaturated, hits at ≥ 100 MJy/sr) and 8 hits in
+  17 rows at 1.75–2.0 FWHM (47%).  The end-to-end run of PR #1396 (`docs/evidence/e2e_run7/README.md`
+  of that PR, section "Seed rows added by the keep radius") built the m7 seeds of
+  o105, o118, o130 and o138 F212N with 1.5 and with 1.75 FWHM from the same m6
+  products and code.  The seed with 1.5 FWHM holds 15 merged-module rows that the
+  seed with 1.75 FWHM lacks (10, 0, 1 and 4 rows on the four tiles) and drops none
+  of the rows of that seed.  In the unmasked residual renders of the two runs, which also differ
+  by #1392, #1394 and #1395, 5 of the 15 rows sit on a leftover of at least
+  50 MJy/sr that the render with 1.75 FWHM has and the render with 1.5 FWHM lacks,
+  no row adds a crater or a leftover, and 10 rows change neither.  The fraction of
+  rows on a leftover is 5 of 15 (33%) in the end-to-end run and 2 of 18 (11%) in
+  the sweep; the tiles (o105, o118, o130 and o138 against o045 and o105) and the
+  definition differ (a leftover that disappears from the render against a row on
+  a leftover of the control).  o045 was not in the end-to-end run, and the recipe
+  keeps the exemption off at F480M.
 - **Saturated neighbours stay cut.**  Two of the 11 traced companion-cut stars,
   (6092, 3774) and (9794, 833), sit 2.35 and 2.48 FWHM from a saturated
   dominating source (their own S/N is 85 and 76), and stay in the leftover list.

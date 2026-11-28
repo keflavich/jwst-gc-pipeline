@@ -244,8 +244,10 @@ MANUAL_DEFAULTS = {
     # ``..._companion_keep_fwhm`` FWHM from it and is unsaturated.  0 = off
     # (the cut is unchanged).  50 is the documented F212N value
     # (docs/evidence/m7_companion_keep); the S/N scale differs between bands.
+    # The separation is 1.5 FWHM (1.75 before 2026-11-28, see "Things to
+    # decide or know" in the same evidence README).
     'manual_m7_seed_own_band_companion_keep_snr': 0.0,
-    'manual_m7_seed_own_band_companion_keep_fwhm': 1.75,
+    'manual_m7_seed_own_band_companion_keep_fwhm': 1.5,
     # Seed dedup (#1206): a cross-band position and an own-band m6 position of
     # one star differ by more than the 30 mas match radius in the red bands
     # (Brick F405N pairs: 31 / 41 / 61 mas at p10 / 50 / 90, FWHM 136 mas),
