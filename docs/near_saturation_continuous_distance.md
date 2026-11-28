@@ -174,11 +174,103 @@ the earlier control replay of each frame (54060 and 52982 rows; `x_fit`, `y_fit`
 `flux_fit`, `flags` and `qfit` identical in every row), so a run without the switches is
 unchanged.
 
+## Tile test (o105)
+
+The o105 tile was rebuilt end to end (stage, 8-shard m7 fan-out over both bands, finalize,
+scoring) with the integration code of the end-to-end tests plus the two switches, in the
+environment of the end-to-end control (production recipe, ePSF core on).  One arm set
+`NEARSAT_CONTINUOUS_DIST=1`; a second arm also set `SATSTAR_GATE_EPSF_CORE_SCALE=1` ("both
+switches").  The control column is the control render of the end-to-end tests, built earlier
+in another worktree of the same code; no control arm was rebuilt in the test worktree.  The production column is the production residual image,
+scored with the same tools as the other renders.
+
+Counts are by peak or depth in MJy/sr.  A leftover is a residual with residual / data > 0.7
+and a peak of at least the stated value; a big crater is a negative residual deeper than
+50 MJy/sr whose depth exceeds 0.3 times the model peak.
+
+| band | render | leftovers >= 50 | >= 100 | >= 200 | >= 500 | >= 1000 | craters >= 50 | >= 200 | >= 500 |
+|---|---|---|---|---|---|---|---|---|---|
+| F480M | production | 303 | 202 | 168 | 111 | 84 | 69 | 28 | 16 |
+| F480M | control | 297 | 200 | 168 | 107 | 77 | 92 | 38 | 17 |
+| F480M | this switch | 277 | 180 | 150 | 103 | 76 | 94 | 39 | 17 |
+| F480M | both switches | 277 | 180 | 150 | 103 | 76 | 95 | 40 | 18 |
+| F212N | production | 845 | 317 | 178 | 133 | 116 | 489 | 166 | 71 |
+| F212N | control | 830 | 315 | 176 | 134 | 117 | 454 | 152 | 65 |
+| F212N | this switch | 827 | 312 | 175 | 133 | 116 | 452 | 151 | 64 |
+| F212N | both switches | 827 | 312 | 175 | 133 | 116 | 452 | 151 | 64 |
+
+How much of the render the switch changes, against the control.  The F212N residual image
+differs in 53,059 of 51,825,305 finite pixels, in 8,246 of them by more than 1 MJy/sr and in
+4,274 by more than 5 MJy/sr (41 connected regions after a 3 pixel dilation; the largest,
+19,914 MJy/sr, is at (6508, 2524)).  The F480M image differs in 208,601 of 12,464,795 pixels,
+in 13,480 by more than 1 and in 4,612 by more than 5 MJy/sr (156 regions).  The consolidated
+F480M satstar catalog of the arm has the 1686 rows of the control, none lost or gained, with
+a median flux ratio of 1.0000 (16th to 84th percentile 1.0000 to 1.0000; no row differs by
+more than 20 per cent); the F212N catalog also has the rows of the control (10,399).  The two
+F212N craters followed through the end-to-end tests, at (8306, 1270) and (4469, 1280), have
+the same depth with the switch as in the control: 966 and 465 MJy/sr.
+
+F480M, against the control:
+
+* Leftovers >= 100: 200 to 180.  21 are cleared (19 of the 168 at >= 200, 4 of the 107 at
+  >= 500, 1 of the 77 at >= 1000; 15 of class SATSTAR_NEAR and 6 of class NOT_IN_M7_CATALOG);
+  none is worse by more than a factor 1.5; one is new.  The largest cleared are 1000 at pixel
+  (2160, 277), 904 at (2614, 1826) (the F4 feature), 741 at (4134, 1273), 531 at (2837, 911),
+  461 at (4622, 988), 432 at (1201, 983), 427 at (3230, 588) and 403 at (4452, 858) (the F5
+  feature).  The position-independent scan (13 pixel boxes, threshold 200) finds 15 of the
+  168 control features >= 200 below 200 and more than 1.5 times lower in the arm; F4 goes
+  from 904 to 33 and F5 from 403 to 59.
+* The new leftover is at (5325, 1803): 327 MJy/sr against 42 in the control and 45 in
+  production (class SATSTAR_NEAR).  The control has a row within 0.2 arcsec of it, at
+  (5324.6, 1803.3) with flux 4509.4 and `qfit` 0.014; the arm has none.  The continuous rule
+  drops 78 F480M fits that the rounded rule keeps (census below); this row was not traced to
+  one of them.
+* Craters: 92 to 94 at >= 50 MJy/sr, 38 to 39 at >= 200 and 17 to 17 at >= 500 (four new,
+  two gone).  New: (1111, 1885) depth 275 (the 13 x 13 pixel minimum is -263 against -99 in
+  the control and in production), (2795, 813) depth 129 (production has 131 there; the
+  control has none), (1304, 1780) depth 87 and (3698, 1289) depth 56.  Gone: (3940, 1391)
+  depth 94 and (1114, 1883) depth 111, the shallower form of the crater now at (1111, 1885).
+  The arm has a row at (1111.1, 1885.2) with flux 3587.7 and `qfit` 0.032 within 0.2 arcsec
+  of the new crater; the control has none.
+
+F212N, against the control:
+
+* Leftovers >= 100: 315 to 312.  Cleared: 19,898 MJy/sr at (6508, 2525), 137 at (6514, 2531)
+  and 119 at (8912, 3995); none is new.  The 13 x 13 pixel box around (6508, 2525) has a
+  maximum of 682 MJy/sr in the arm, 19,910 in the control and 19,994 in production, and a
+  minimum of -10,006, -9335 and -8457.  The arm has a row there that the control lacks, at
+  (6508.0, 2524.4) with flux 227,329 and `qfit` 0.009.
+* Craters: 454 to 452 at >= 50 MJy/sr, 152 to 151 at >= 200 and 65 to 64 at >= 500 (one new,
+  three gone).  Gone: (3357, 4052) depth 3683, (3002, 3715) depth 3295 and (3039, 3731)
+  depth 121; the 13 x 13 pixel minima at the first two go from -3674 and -3289 to -1998 and
+  -1926.  New: (1481, 3449), depth 3017 and ratio 0.320 against the limit 0.3 (13 x 13
+  pixel minimum -3008 against -1353 in the control).  The arm has a row at (1481.2, 3449.1)
+  with flux 34,401.6 and `qfit` 0.278 that the control lacks.
+
+The census line of the filter, summed over the detector exposures of the tile (one line per
+exposure; the arm with both switches in brackets where it differs):
+
+| band | exposures | flagged, continuous rule | flagged, rounded rule | kept only by the continuous rule | dropped only by it |
+|---|---|---|---|---|---|
+| F480M | 24 | 12,555 (12,427) | 13,818 (13,694) | 1341 (1345) | 78 (78) |
+| F212N | 96 | 2985 | 3471 | 518 | 32 |
+
+In F480M the continuous rule keeps about 56 fits per exposure that the rounded rule drops
+(1341 over 24 exposures) and drops about 3 per exposure that the rounded rule keeps (78).
+The new crater at (1111, 1885) has a new row in the arm and the new leftover at (5325, 1803)
+has a missing one; neither row was traced to a census category.
+
+On this tile the switch clears 21 F480M leftovers >= 100 MJy/sr (19 at >= 200) and adds one
+of 327 MJy/sr; it adds two F480M craters at >= 50 MJy/sr (one at >= 200, none at >= 500) and
+removes two F212N craters at >= 50 MJy/sr (one at >= 200 and one at >= 500).  This is one
+tile, and the threshold stayed at 1.0 px: the equal-area radius 1.26 px of the section above
+was not run on it.
+
 ## Limits of this change
 
 * The rule is a different compromise, not a more accurate one: a fit 1.2 px from a
   saturated pixel is no better measured because it lies on an axis.  What it removes is
   the dependence of the decision on which side of a half-pixel boundary the fit lands.
 * Fits kept at 1.0 to 1.5 px on-axis come from the wings of a saturated star and can
-  carry biased fluxes; the effect on the catalog is counted in the tile test of the
-  pull request description.
+  carry biased fluxes; the tile test above counts the leftovers and craters the rule
+  adds and removes.
