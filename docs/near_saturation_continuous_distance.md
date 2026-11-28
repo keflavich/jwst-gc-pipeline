@@ -264,7 +264,13 @@ F212N, against the control:
   depth 121; the 13 x 13 pixel minima at the first two go from -3674 and -3289 to -1998 and
   -1926.  New: (1481, 3449), depth 3017 and ratio 0.320 against the limit 0.3 (13 x 13
   pixel minimum -3008 against -1353 in the control).  The arm has a row at (1481.2, 3449.1)
-  with flux 34,401.6 and `qfit` 0.278 that the control lacks.
+  with flux 34,401.6 and `qfit` 0.278 that the control lacks.  At (3357, 4052) the arm
+  drops the row at (3357.1, 4051.9), flux 40,645.5 and `qfit` 0.219, and has a row at
+  (3360.3, 4056.8), flux 23,497.3 and `qfit` 0.356, that the control lacks; the 13 x 13
+  pixel minimum of the arm, -1998, is at pixel (3360, 4057), 0.4 px from that row.  At
+  (3002, 3715) it drops the row at (3002.2, 3714.5), flux 37,404.7 and `qfit` 0.222.  The
+  rows of the saturated stars next to them, at (3360.3, 4053.3) and (3005.3, 3716.2), are
+  in both arms.
 
 The census line of the filter, summed over the detector exposures of the tile (one line per
 exposure; the arm with both switches in brackets where it differs):
@@ -284,6 +290,22 @@ of 327 MJy/sr; it adds two F480M craters at >= 50 MJy/sr (one at >= 200, none at
 removes two F212N craters at >= 50 MJy/sr (one at >= 200 and one at >= 500).  This is one
 tile, and the threshold stayed at 1.0 px: the equal-area radius 1.26 px of the section above
 was not run on it.
+
+Evidence files are in `docs/evidence/near_saturation_tile_o105/`.  `o105_near_summary.txt`
+holds the counts and the paired changes against the production, control and two other
+renders; `o105_near_compare_F480M.txt` and `o105_near_compare_F212N.txt` list every cleared,
+reduced, worse and new feature; `o105_near_scan_ctlfin_F480M.txt` and
+`o105_near_scan_ctlfin_F212N.txt` hold the position-independent scan against the control (13
+pixel boxes, threshold 200 MJy/sr); `o105_near_satcons.txt` compares the consolidated satstar
+catalogs; `o105_near_features.txt` gives the features F1, F2, F4 and F5;
+`o105_boxes_at_features.txt` gives the residual extrema in the boxes around the features
+named above and `o105_rows_at_features.txt` the rows of the merged catalog there.  These
+last two files also hold the arm with both switches and the feature at (1597, 1877) of
+#1393.  The files label the renders `prod5` (production), `ctlfin` (control), `optnm` and
+`optfin` (the fit-time switches of the other open pull requests, unmasked and masked),
+`n1xnear` (this switch) and `n1xboth` (this switch and `SATSTAR_GATE_EPSF_CORE_SCALE`, see
+#1393).  The survive files named in line 16 of the compare files are scratch files of the
+end-to-end run and are not part of the evidence.
 
 ## Limits of this change
 

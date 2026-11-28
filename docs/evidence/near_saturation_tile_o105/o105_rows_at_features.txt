@@ -1,0 +1,47 @@
+ctl   F212N (1481,3449): 1 rows within 0.2 arcsec
+        pixel (  1477.9,  3447.4)  flux   688816.6  qfit  0.150  flags 1.0
+ctl   F212N (3357,4052): 2 rows within 0.2 arcsec
+        pixel (  3360.3,  4053.3)  flux   656605.1  qfit  0.142  flags 0.0
+        pixel (  3357.1,  4051.9)  flux    40645.5  qfit  0.219  flags 1.0
+ctl   F212N (3002,3715): 2 rows within 0.2 arcsec
+        pixel (  3005.3,  3716.2)  flux   733254.7  qfit  0.222  flags 1.0
+        pixel (  3002.2,  3714.5)  flux    37404.7  qfit  0.222  flags 1.0
+ctl   F212N (6508,2525): 1 rows within 0.2 arcsec
+        pixel (  6506.0,  2521.3)  flux   584367.4  qfit  0.559  flags 1.0
+ctl   F480M (1111,1885): 0 rows within 0.2 arcsec
+ctl   F480M (5325,1803): 1 rows within 0.2 arcsec
+        pixel (  5324.6,  1803.3)  flux     4509.4  qfit  0.014  flags 1.0
+ctl   F480M (1597,1877): 1 rows within 0.2 arcsec
+        pixel (  1596.7,  1877.6)  flux    22842.9  qfit  0.244  flags 0.3073248267173767
+near  F212N (1481,3449): 2 rows within 0.2 arcsec
+        pixel (  1477.9,  3447.4)  flux   688816.6  qfit  0.150  flags 1.0
+        pixel (  1481.2,  3449.1)  flux    34401.6  qfit  0.278  flags 1.0
+near  F212N (3357,4052): 2 rows within 0.2 arcsec
+        pixel (  3360.3,  4053.3)  flux   656605.1  qfit  0.142  flags 0.0
+        pixel (  3360.3,  4056.8)  flux    23497.3  qfit  0.356  flags 1.0
+near  F212N (3002,3715): 1 rows within 0.2 arcsec
+        pixel (  3005.3,  3716.2)  flux   733254.7  qfit  0.222  flags 1.0
+near  F212N (6508,2525): 2 rows within 0.2 arcsec
+        pixel (  6506.0,  2521.3)  flux   584367.4  qfit  0.559  flags 1.0
+        pixel (  6508.0,  2524.4)  flux   227329.4  qfit  0.009  flags 1.0
+near  F480M (1111,1885): 1 rows within 0.2 arcsec
+        pixel (  1111.1,  1885.2)  flux     3587.7  qfit  0.032  flags 0.0
+near  F480M (5325,1803): 0 rows within 0.2 arcsec
+near  F480M (1597,1877): 1 rows within 0.2 arcsec
+        pixel (  1596.7,  1877.6)  flux    22842.9  qfit  0.244  flags 0.3073248267173767
+both  F212N (1481,3449): 2 rows within 0.2 arcsec
+        pixel (  1477.9,  3447.4)  flux   688816.6  qfit  0.150  flags 1.0
+        pixel (  1481.2,  3449.1)  flux    34401.6  qfit  0.278  flags 1.0
+both  F212N (3357,4052): 2 rows within 0.2 arcsec
+        pixel (  3360.3,  4053.3)  flux   656605.1  qfit  0.142  flags 0.0
+        pixel (  3360.3,  4056.8)  flux    23497.3  qfit  0.356  flags 1.0
+both  F212N (3002,3715): 1 rows within 0.2 arcsec
+        pixel (  3005.3,  3716.2)  flux   733254.7  qfit  0.222  flags 1.0
+both  F212N (6508,2525): 2 rows within 0.2 arcsec
+        pixel (  6506.0,  2521.3)  flux   584367.4  qfit  0.559  flags 1.0
+        pixel (  6508.0,  2524.4)  flux   227329.4  qfit  0.009  flags 1.0
+both  F480M (1111,1885): 1 rows within 0.2 arcsec
+        pixel (  1111.1,  1885.2)  flux     3587.7  qfit  0.032  flags 0.0
+both  F480M (5325,1803): 0 rows within 0.2 arcsec
+both  F480M (1597,1877): 1 rows within 0.2 arcsec
+        pixel (  1596.6,  1877.5)  flux    28577.2  qfit  0.252  flags 0.2031966745853424
