@@ -1,0 +1,7 @@
+1,2c1,2
+< 5034 2026-11-27 19:29:11.000000000 /orange/adamginsburg/jwst/crds/config/jwst/bad_files.txt
+< 1457934 2026-11-27 19:29:11.000000000 /orange/adamginsburg/jwst/crds/config/jwst/server_config
+---
+> 5034 2026-11-27 22:52:37.000000000 /orange/adamginsburg/jwst/crds/config/jwst/bad_files.txt
+> 1457934 2026-11-27 22:52:37.000000000 /orange/adamginsburg/jwst/crds/config/jwst/server_config
+CRDS cache files differ from the snapshot before the run (see above)

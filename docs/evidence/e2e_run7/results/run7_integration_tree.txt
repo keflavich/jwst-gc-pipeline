@@ -1,0 +1,48 @@
+integration tree of the e2e7 run (local branch e2e7-integration-local in a scratch worktree, never pushed): HEAD ac6393dc; base = the integration tree of the four-tile run (HEAD 42655da6)
+ (against 42655da6)   10 files changed, 1571 insertions(+), 23 deletions(-)
+changed files (against 42655da6):
+   docs/near_saturation_continuous_distance.md                                | 132 ++++++++++++
+   jwst_gc_pipeline/photometry/cataloging.py                                  |  34 ++-
+   jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py                   | 110 ++++++++--
+   jwst_gc_pipeline/photometry/merge_catalogs.py                              |  41 ++++
+   jwst_gc_pipeline/photometry/merge_partial_box.py                           | 135 ++++++++++++
+   jwst_gc_pipeline/photometry/single_exposure_events.py                      |  84 +++++++-
+   jwst_gc_pipeline/photometry/tests/test_combine_singleframe_partial_box.py  | 410 +++++++++++++++++++++++++++++++++++++
+   jwst_gc_pipeline/photometry/tests/test_near_sat_continuous_dist.py         | 322 +++++++++++++++++++++++++++++
+   jwst_gc_pipeline/photometry/tests/test_single_exposure_event_mask_hooks.py |  75 +++++++
+   jwst_gc_pipeline/photometry/tests/test_single_exposure_events.py           | 251 +++++++++++++++++++++++
+   10 files changed, 1571 insertions(+), 23 deletions(-)
+commits on top of 42655da6 (oldest first):
+  9034faca e2e7: cherry-pick #1392 811983a7 (positive spike finder tolerates unusable neighbours)
+  1650c9e2 e2e7: cherry-pick #1392 f44a3794 code and tests (limit the spike tolerance to one neighbour)
+  0226ffd6 e2e7: cherry-pick #1394 6a9f042f (near-saturation filter: opt-in distance from the unrounded fitted position)
+  194d9a35 e2e7: cherry-pick #1395 945bdc52 (opt-in partial-fit-box row exclusion in combine_singleframe)
+  ac6393dc e2e7: cherry-pick #1395 a230c994 code part (comment in combine_singleframe)
+pull requests (gh pr view, 2026-11-28); commits of the head that the tree lacks (not in 42655da6, not in origin/main) and the paths they touch:
+  #1392 head bc04a89a ancestor of the tree: no
+     bc04a89a Count the spikes that a SATURATED neighbour leaves unjudged on ten tile-bands: documentation only
+     f44a3794 Limit the spike tolerance to one neighbour and add its evidence: touches SATURATED_PIXEL_HANDLING.md jwst_gc_pipeline/photometry/single_exposure_events.py jwst_gc_pipeline/photometry/tests/test_single_exposure_event_mask_hooks.py jwst_gc_pipeline/photometry/tests/test_single_exposure_events.py 
+     811983a7 Let the positive spike finder tolerate unusable neighbours (opt-in): touches jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py jwst_gc_pipeline/photometry/single_exposure_events.py jwst_gc_pipeline/photometry/tests/test_single_exposure_event_mask_hooks.py jwst_gc_pipeline/photometry/tests/test_single_exposure_events.py 
+  #1393 head c2ca67d5 ancestor of the tree: no
+     c2ca67d5 docs: trace the F480M difference regions and the F5 minimum in the gate tile test: documentation only
+     0b763b2e docs: tile test of the gate scale switch against the other reference renders: documentation only
+     47967a5b docs: o105 tile test of the gate scale switch: documentation only
+     2c0da204 docs: one-frame replays of the gate scale switch: documentation only
+     f0f19851 satstar: opt-in implied-peak gate scale for the ePSF-core PSF: touches jwst_gc_pipeline/reduction/saturated_star_finding.py jwst_gc_pipeline/reduction/tests/test_satstar_gate_epsf_core_scale.py 
+  #1394 head 616a72a7 ancestor of the tree: no
+     616a72a7 docs: record the dropped F212N rows of the near-saturation tile test: documentation only
+     b3ad09ab docs: tile test of the near-saturation switch against the other reference renders: documentation only
+     47a0b2b3 docs: o105 tile test of the near-saturation distance switch: documentation only
+     7e4a36a9 docs: one-frame replays of the near-saturation distance switch: documentation only
+     6a9f042f near-saturation filter: opt-in distance from the unrounded fitted position: touches jwst_gc_pipeline/photometry/cataloging.py jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py jwst_gc_pipeline/photometry/tests/test_near_sat_continuous_dist.py 
+  #1395 head a230c994 ancestor of the tree: no
+     a230c994 merge_partial_box: tile-test results; written catalogues do not carry the diagnostic column: touches jwst_gc_pipeline/photometry/merge_catalogs.py 
+     526411b8 merge_partial_box README: state the agreement numbers for all four tiles: documentation only
+     8e54b6a7 Document MERGE_PARTIAL_BOX_FRAC_MIN: evidence page and test table row: documentation only
+     945bdc52 Add opt-in partial-fit-box row exclusion to combine_singleframe (MERGE_PARTIAL_BOX_FRAC_MIN): touches jwst_gc_pipeline/photometry/merge_catalogs.py jwst_gc_pipeline/photometry/merge_partial_box.py jwst_gc_pipeline/photometry/tests/test_combine_singleframe_partial_box.py 
+  #1377 head 1553ed42 ancestor of the tree: yes
+the code commits of #1392 (811983a7, f44a3794) and #1395 (945bdc52) of the lines above appear in the tree as cherry-picks with other hashes (see the commit list); the merge_catalogs.py change of a230c994 is comment lines only:
+  -        # averages below leave out (merge_partial_box)
+  +        # averages below leave out (merge_partial_box).  The table this function
+  +        # returns has the column; merge_frames_for_observation writes a fixed
+  +        # column list, so the written catalogues do not.

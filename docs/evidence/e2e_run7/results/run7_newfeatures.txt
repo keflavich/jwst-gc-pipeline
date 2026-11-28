@@ -1,0 +1,51 @@
+## boxes
+| tile | band | kind | pixel (x, y) | `prod5` | `c7fin` | `optnm` | `e7nm` | `optfin` | `e7fin` |
+| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| o105 | F480M | leftover | (5325, 1803) | 45 / -207 | 42 / -186 | 42 / -186 | 338 / -172 | NaN | NaN |
+| o138 | F212N | crater | (8695, 623) | 236 / -247 | 290 / -220 | 290 / -219 | 272 / -220 | NaN | NaN |
+| o118 | F212N | crater | (11389, 1475) | 17 / -64 | 17 / -65 | 17 / -65 | 7 / -5 | 6 / 0 | 6 / 0 |
+
+## rows
+| tile | band | pixel (x, y) | row | distance to the pixel (arcsec) | flux in the four-tile opt catalog | flux in the opt catalog of this run | flux in the control catalog of this run | qfit | flags | group size | frames matched | saturated | near-saturated flag |
+| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- |
+| o105 | F480M | (5325, 1803) | 1 | 0.035 | 4509 | - | 4509 | 0.014 | 1.00 | 2 | 1 | no | yes |
+| o105 | F480M | (5325, 1803) | 2 | 0.310 | 22707 | 22707 | 22707 | 2.842 | 0.00 | 1 | 2 | yes | yes |
+| o138 | F212N | (8695, 623) | 1 | 0.323 | - | 8975 | - | 0.484 | 1.00 | 1 | 2 | no | yes |
+| o138 | F212N | (8695, 623) | 2 | 0.351 | 3567 | 3567 | 3567 | 0.053 | 0.00 | 5 | 2 | no | no |
+| o138 | F212N | (8695, 623) | 3 | 0.462 | 823 | 823 | - | 0.084 | 0.00 | 5 | 1 | no | no |
+| o138 | F212N | (8695, 623) | 4 | 0.533 | 6674656 | 6674656 | 6674656 | 0.034 | 1.00 | 1 | 6 | yes | yes |
+| o138 | F212N | (8695, 623) | 5 | 0.534 | 3451 | 3451 | 3451 | 0.087 | 0.46 | 5 | 2 | no | no |
+| o118 | F212N | (11389, 1475) | 1 | 0.018 | 1426 | - | 1426 | 0.022 | 1.00 | 1 | 2 | no | no |
+| o118 | F212N | (11389, 1475) | 2 | 0.044 | - | 1475 | - | 0.022 | 1.00 | 1 | 2 | no | no |
+| o118 | F212N | (11389, 1475) | 3 | 0.116 | 447 | 447 | 447 | 0.124 | 0.00 | 1 | 2 | no | no |
+| o118 | F212N | (11389, 1475) | 4 | 0.365 | 119 | 119 | 119 | 0.366 | 0.00 | 1 | 2 | no | no |
+| o118 | F212N | (11389, 1475) | 5 | 0.475 | 46 | 46 | 46 | 1.045 | 0.00 | 1 | 2 | no | no |
+| o118 | F212N | (11389, 1475) | 6 | 0.482 | 57 | 57 | 57 | 0.628 | 0.00 | 1 | 2 | no | no |
+| o118 | F212N | (11389, 1475) | 7 | 0.587 | 183 | 183 | 183 | 0.263 | 0.00 | 1 | 2 | no | no |
+
+## signature
+| tile | band | pixel (x, y) | catalog | row (flux, distance to the pixel) | frames matched | frames kept (`nmatch_good`) | scatter of the frame positions in RA (deg) | in Dec (deg) | flux error | propagated flux error |
+| :--- | :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| o105 | F480M | (5325, 1803) | four-tile opt | 4509, 0.035 arcsec | 1 | 1 | nan | nan | 9.93 | 9.93 |
+| o105 | F480M | (5325, 1803) | this-run control | 4509, 0.035 arcsec | 1 | 1 | nan | nan | 9.93 | 9.93 |
+| o138 | F212N | (8695, 623) | this-run opt | 8975, 0.323 arcsec | 2 | 2 | 2.19e-06 | 2.30e-06 | 110.57 | 78.61 |
+| o118 | F212N | (11389, 1475) | four-tile opt | 1426, 0.018 arcsec | 2 | 2 | 6.08e-07 | 7.42e-06 | 65.73 | 55.39 |
+| o118 | F212N | (11389, 1475) | this-run control | 1426, 0.018 arcsec | 2 | 2 | 6.08e-07 | 7.42e-06 | 65.73 | 55.39 |
+| o118 | F212N | (11389, 1475) | this-run opt | 1475, 0.044 arcsec | 2 | 2 | nan | nan | 56.64 | 56.64 |
+
+## frames o105
+| tile | band | pixel (x, y) | row that differs | present in | frame | position in the frame (x, y) | distance by the rounded-pixel rule (px) | distance by the continuous rule (px) | rounded-pixel rule | continuous rule |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: | ---: | :--- | :--- |
+| o105 | F480M | (5325, 1803) | flux 4509, 0.035 arcsec from the pixel | four-tile opt | 105001_02101_00001_nrcblong | (1757.77, 1572.82) | 1.000 | 0.794 | drops | drops |
+| o105 | F480M | (5325, 1803) | flux 4509, 0.035 arcsec from the pixel | four-tile opt | 105001_02101_00002_nrcblong | (1755.68, 1745.30) | 1.414 | 0.975 | keeps | drops |
+
+## frames o138
+| tile | band | pixel (x, y) | row that differs | present in | frame | position in the frame (x, y) | distance by the rounded-pixel rule (px) | distance by the continuous rule (px) | rounded-pixel rule | continuous rule |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: | ---: | :--- | :--- |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00001_nrcb4 | (1522.83, 146.58) | 0.000 | 0.451 | drops | drops |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00002_nrcb4 | (1516.24, 488.26) | 1.000 | 0.774 | drops | drops |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00003_nrcb2 | (97.80, 493.29) | 2.000 | 1.725 | keeps | keeps |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00004_nrcb2 | (876.15, 485.92) | 2.000 | 2.090 | keeps | keeps |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00005_nrcb2 | (876.68, 143.10) | 2.000 | 1.929 | keeps | keeps |
+| o138 | F212N | (8695, 623) | flux 8975, 0.323 arcsec from the pixel | this-run opt | 138001_02101_00006_nrcb2 | (100.39, 150.91) | 1.414 | 1.252 | keeps | keeps |
+

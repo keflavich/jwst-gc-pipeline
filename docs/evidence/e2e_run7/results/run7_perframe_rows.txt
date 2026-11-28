@@ -1,0 +1,42 @@
+## o105
+| tile | band | merged row (flux, distance to the pixel) | frame | catalog | fits within 3 px | fitted position (x, y) | flux | flux error | pixels fitted of 25 | qfit | reduced chi^2 | flags |
+| :--- | :--- | :--- | :--- | :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| o105 | F480M | 4509, 0.035 arcsec | 105001_02101_00001_nrcblong | four-tile opt | 0 | - | - | - | - | - | - | - |
+| o105 | F480M | 4509, 0.035 arcsec | 105001_02101_00001_nrcblong | this-run opt | 0 | - | - | - | - | - | - | - |
+| o105 | F480M | 4509, 0.035 arcsec | 105001_02101_00001_nrcblong | this-run control | 0 | - | - | - | - | - | - | - |
+| o105 | F480M | 4509, 0.035 arcsec | 105001_02101_00002_nrcblong | four-tile opt | 1 | (1755.68, 1745.30) | 4508.0 | 9.93 | 19 | 0.014 | 38.88 | 1 |
+| o105 | F480M | 4509, 0.035 arcsec | 105001_02101_00002_nrcblong | this-run opt | 0 | - | - | - | - | - | - | - |
+| o105 | F480M | 4509, 0.035 arcsec | 105001_02101_00002_nrcblong | this-run control | 1 | (1755.68, 1745.30) | 4508.0 | 9.93 | 19 | 0.014 | 38.88 | 1 |
+
+## o118
+| tile | band | merged row (flux, distance to the pixel) | frame | catalog | fits within 3 px | fitted position (x, y) | flux | flux error | pixels fitted of 25 | qfit | reduced chi^2 | flags |
+| :--- | :--- | :--- | :--- | :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| o118 | F212N | 1475, 0.044 arcsec | 118001_02101_00001_nrcb2 | four-tile opt | 1 | (2043.36, 931.19) | 1457.1 | 55.94 | 15 | 0.022 | 0.81 | 1 |
+| o118 | F212N | 1475, 0.044 arcsec | 118001_02101_00001_nrcb2 | this-run opt | 1 | (2043.36, 931.19) | 1457.1 | 55.94 | 15 | 0.022 | 0.81 | 1 |
+| o118 | F212N | 1475, 0.044 arcsec | 118001_02101_00001_nrcb2 | this-run control | 1 | (2043.36, 931.19) | 1457.1 | 55.94 | 15 | 0.022 | 0.81 | 1 |
+| o118 | F212N | 1475, 0.044 arcsec | 118001_02101_00002_nrcb2 | four-tile opt | 1 | (2042.94, 1277.11) | 340.2 | 262.31 | 5 | 0.026 | 1.35 | 1 |
+| o118 | F212N | 1475, 0.044 arcsec | 118001_02101_00002_nrcb2 | this-run opt | 1 | (2042.94, 1277.11) | 340.2 | 262.31 | 5 | 0.026 | 1.35 | 1 |
+| o118 | F212N | 1475, 0.044 arcsec | 118001_02101_00002_nrcb2 | this-run control | 1 | (2042.94, 1277.11) | 340.2 | 262.31 | 5 | 0.026 | 1.35 | 1 |
+
+## o138
+| tile | band | merged row (flux, distance to the pixel) | frame | catalog | fits within 3 px | fitted position (x, y) | flux | flux error | pixels fitted of 25 | qfit | reduced chi^2 | flags |
+| :--- | :--- | :--- | :--- | :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00001_nrcb4 | four-tile opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00001_nrcb4 | this-run opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00001_nrcb4 | this-run control | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00002_nrcb4 | four-tile opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00002_nrcb4 | this-run opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00002_nrcb4 | this-run control | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00003_nrcb2 | four-tile opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00003_nrcb2 | this-run opt | 1 | (97.54, 493.51) | 9469.9 | 123.21 | 15 | 0.364 | 215.37 | 1 |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00003_nrcb2 | this-run control | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00004_nrcb2 | four-tile opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00004_nrcb2 | this-run opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00004_nrcb2 | this-run control | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00005_nrcb2 | four-tile opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00005_nrcb2 | this-run opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00005_nrcb2 | this-run control | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00006_nrcb2 | four-tile opt | 0 | - | - | - | - | - | - | - |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00006_nrcb2 | this-run opt | 1 | (100.65, 150.69) | 8464.8 | 99.98 | 19 | 0.564 | 161.98 | 1 |
+| o138 | F212N | 8975, 0.323 arcsec | 138001_02101_00006_nrcb2 | this-run control | 0 | - | - | - | - | - | - | - |
+

@@ -1,0 +1,213 @@
+o118 F212N: matching radius 3 px of 0.031223 arcsec = 0.094 arcsec; leftovers >= 100 MJy/sr in the pair tables
+
+tag                      L>=50    L>=100   L>=200   L>=500   L>=1000    craters >=50   >=200  >=500 
+prod5                         199      105       82       72       65               308     93     33
+c7fin                         197      103       82       71       64               295     91     33
+e7nm                           92       18        7        3        1                73     26      2
+e7fin                          79       16        4        1        0                 5      0      0
+optnm                          92       18        7        3        1                74     26      2
+optfin                         79       16        4        1        0                 5      0      0
+
+prod5                    >=200 by class: NOT_IN_M7_CATALOG 22, SATSTAR_NEAR 22, VETTED_BUT_UNSUBTRACTED 14, VETTED_OUT 24
+c7fin                    >=200 by class: NOT_IN_M7_CATALOG 22, SATSTAR_NEAR 20, VETTED_BUT_UNSUBTRACTED 17, VETTED_OUT 23
+e7nm                     >=200 by class: NOT_IN_M7_CATALOG 1, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+e7fin                    >=200 by class: NOT_IN_M7_CATALOG 2, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 0, VETTED_OUT 0
+optnm                    >=200 by class: NOT_IN_M7_CATALOG 1, SATSTAR_NEAR 4, VETTED_BUT_UNSUBTRACTED 2, VETTED_OUT 0
+optfin                   >=200 by class: NOT_IN_M7_CATALOG 2, SATSTAR_NEAR 2, VETTED_BUT_UNSUBTRACTED 0, VETTED_OUT 0
+
+=== prod5 -> c7fin: leftovers >= 100: 105 -> 103; cleared 4, reduced <0.5x 0, unchanged 101, worse >1.5x 0; new (no counterpart in prod5) 2
+    cleared >= 200: 2 of 82; >= 500: 2 of 72; >= 1000: 2 of 65
+    cleared by class: SATSTAR_NEAR 4
+    new by class: VETTED_BUT_UNSUBTRACTED 2
+    cleared  (  578, 3907) SATSTAR_NEAR                1155 ->       0
+    cleared  ( 9043, 3560) SATSTAR_NEAR                1133 ->       0
+    cleared  ( 9344, 2131) SATSTAR_NEAR                 151 ->       0
+    cleared  ( 1359, 3843) SATSTAR_NEAR                 140 ->       0
+    new      ( 2373, 3424) VETTED_BUT_UNSUBTRACTED                1598
+    new      ( 9114, 3442) VETTED_BUT_UNSUBTRACTED                 343
+    big craters: 308 -> 295; gone 41 (>= 200: 13), new 29 (>= 200: 9)
+    crater new  ( 1539,  360) depth 1979 model_peak 4286 depth_over_model 0.462 nearest vetted row 0.012"
+    crater new  (11299, 1610) depth 1876 model_peak 5110 depth_over_model 0.367 nearest vetted row 0.015"
+    crater new  ( 8896, 4093) depth 837 model_peak 847 depth_over_model 0.988 nearest vetted row 0.017"
+    crater new  ( 3668, 1105) depth 772 model_peak 1972 depth_over_model 0.392 nearest vetted row 0.009"
+    crater new  (  133, 2402) depth 449 model_peak 437 depth_over_model 1.027 nearest vetted row 0.012"
+    crater new  ( 4139, 3238) depth 352 model_peak 1165 depth_over_model 0.302 nearest vetted row 0.010"
+    crater new  ( 2319, 4119) depth 285 model_peak 535 depth_over_model 0.532 nearest vetted row 0.013"
+    crater new  ( 9197, 1891) depth 257 model_peak 671 depth_over_model 0.383 nearest vetted row 0.016"
+    crater new  ( 1129, 2936) depth 239 model_peak 784 depth_over_model 0.305 nearest vetted row 0.189"
+    crater new  ( 8596,  719) depth 183 model_peak 607 depth_over_model 0.301 nearest vetted row 0.008"
+    crater new  ( 1151, 4537) depth 150 model_peak 488 depth_over_model 0.308 nearest vetted row 0.488"
+    crater new  ( 9111, 3441) depth 136 model_peak 192 depth_over_model 0.709 nearest vetted row 0.050"
+    crater gone ( 6395, 4028) depth 9330 model_peak 13561 depth_over_model 0.688 nearest vetted row 0.005"
+    crater gone ( 2373, 3424) depth 4137 model_peak 5740 depth_over_model 0.721 nearest vetted row 0.006"
+    crater gone ( 2329, 4123) depth 2766 model_peak 9133 depth_over_model 0.303 nearest vetted row 0.009"
+    crater gone ( 8647, 2653) depth 524 model_peak 1729 depth_over_model 0.303 nearest vetted row 0.118"
+    crater gone ( 6377, 4042) depth 459 model_peak 1526 depth_over_model 0.300 nearest vetted row 0.210"
+    crater gone (  902, 2059) depth 417 model_peak 1308 depth_over_model 0.319 nearest vetted row 0.107"
+    crater gone ( 9114, 1098) depth 355 model_peak 1060 depth_over_model 0.335 nearest vetted row 0.247"
+    crater gone ( 2324, 4111) depth 285 model_peak 656 depth_over_model 0.434 nearest vetted row 0.012"
+    crater gone ( 1582, 1238) depth 280 model_peak 808 depth_over_model 0.347 nearest vetted row 0.024"
+    crater gone ( 5601, 2657) depth 260 model_peak 538 depth_over_model 0.484 nearest vetted row 0.015"
+    crater gone ( 8586, 2580) depth 250 model_peak 257 depth_over_model 0.974 nearest vetted row 0.010"
+    crater gone ( 5166,  114) depth 237 model_peak 779 depth_over_model 0.304 nearest vetted row 0.129"
+
+=== c7fin -> e7nm: leftovers >= 100: 103 -> 18; cleared 85, reduced <0.5x 0, unchanged 18, worse >1.5x 0; new (no counterpart in c7fin) 0
+    cleared >= 200: 75 of 82; >= 500: 68 of 71; >= 1000: 63 of 64
+    cleared by class: NOT_IN_M7_CATALOG 25, SATSTAR_NEAR 18, VETTED_BUT_UNSUBTRACTED 17, VETTED_OUT 25
+    new by class: 
+    cleared  ( 1086, 4503) VETTED_OUT                 17414 ->       0
+    cleared  (10748, 1490) NOT_IN_M7_CATALOG          16405 ->       0
+    cleared  ( 5576, 2407) VETTED_BUT_UNSUBTRACTED    16087 ->       0
+    cleared  ( 6633, 3998) VETTED_OUT                  8427 ->       0
+    cleared  (  163, 2127) VETTED_BUT_UNSUBTRACTED     8096 ->       0
+    cleared  ( 6841,  160) VETTED_OUT                  6181 ->       0
+    cleared  ( 7213, 3989) VETTED_OUT                  5854 ->       0
+    cleared  ( 8917, 1412) NOT_IN_M7_CATALOG           5562 ->       0
+    cleared  ( 9504, 4625) NOT_IN_M7_CATALOG           5288 ->       0
+    cleared  ( 8355, 1769) VETTED_OUT                  5127 ->       0
+    cleared  ( 9397, 3084) VETTED_BUT_UNSUBTRACTED     4708 ->       0
+    cleared  ( 4961, 2157) NOT_IN_M7_CATALOG           4494 ->       0
+    big craters: 295 -> 73; gone 224 (>= 200: 65), new 2 (>= 200: 2)
+    crater new  ( 4975, 3325) depth 316 model_peak 999 depth_over_model 0.316 nearest vetted row 0.504"
+    crater new  ( 6397, 4036) depth 211 model_peak 684 depth_over_model 0.309 nearest vetted row 0.206"
+    crater gone ( 4863, 3856) depth 2321 model_peak 2 depth_over_model 1077.649 nearest vetted row 0.080"
+    crater gone ( 4854, 4201) depth 2320 model_peak 0 depth_over_model 6341.010 nearest vetted row 0.262"
+    crater gone ( 3307, 3836) depth 2188 model_peak 2 depth_over_model 1073.015 nearest vetted row 0.236"
+    crater gone ( 1539,  360) depth 1979 model_peak 4286 depth_over_model 0.462 nearest vetted row 0.012"
+    crater gone (11299, 1610) depth 1876 model_peak 5110 depth_over_model 0.367 nearest vetted row 0.015"
+    crater gone ( 4085, 3846) depth 1865 model_peak 4 depth_over_model 419.498 nearest vetted row 0.207"
+    crater gone ( 5744, 4324) depth 1727 model_peak 3200 depth_over_model 0.540 nearest vetted row 0.009"
+    crater gone ( 1564, 1208) depth 1584 model_peak 4214 depth_over_model 0.376 nearest vetted row 0.016"
+    crater gone ( 3297, 4182) depth 1421 model_peak 2 depth_over_model 906.856 nearest vetted row 0.151"
+    crater gone ( 6401, 4042) depth 1270 model_peak 2901 depth_over_model 0.438 nearest vetted row 0.015"
+    crater gone (  871, 3304) depth 1218 model_peak 2872 depth_over_model 0.424 nearest vetted row 0.017"
+    crater gone ( 9215,  901) depth 1197 model_peak 2687 depth_over_model 0.445 nearest vetted row 0.010"
+
+=== c7fin -> e7fin: leftovers >= 100: 103 -> 16; cleared 93, reduced <0.5x 0, unchanged 10, worse >1.5x 0; new (no counterpart in c7fin) 6
+    cleared >= 200: 80 of 82; >= 500: 70 of 71; >= 1000: 64 of 64
+    cleared by class: NOT_IN_M7_CATALOG 28, SATSTAR_NEAR 21, VETTED_BUT_UNSUBTRACTED 19, VETTED_OUT 25
+    new by class: NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 2
+    cleared  (  645, 3733) NOT_IN_M7_CATALOG          30151 ->       0
+    cleared  ( 1086, 4503) VETTED_OUT                 17414 ->       0
+    cleared  (10748, 1490) NOT_IN_M7_CATALOG          16405 ->       0
+    cleared  ( 5576, 2407) VETTED_BUT_UNSUBTRACTED    16087 ->       0
+    cleared  ( 6633, 3998) VETTED_OUT                  8427 ->       0
+    cleared  (  163, 2127) VETTED_BUT_UNSUBTRACTED     8096 ->       0
+    cleared  ( 6841,  160) VETTED_OUT                  6181 ->       0
+    cleared  ( 7213, 3989) VETTED_OUT                  5854 ->       0
+    cleared  ( 8917, 1412) NOT_IN_M7_CATALOG           5562 ->       0
+    cleared  ( 9504, 4625) NOT_IN_M7_CATALOG           5288 ->       0
+    cleared  ( 8355, 1769) VETTED_OUT                  5127 ->       0
+    cleared  ( 9397, 3084) VETTED_BUT_UNSUBTRACTED     4708 ->       0
+    new      (  637, 3732) NOT_IN_M7_CATALOG                       308
+    new      (  641, 3740) NOT_IN_M7_CATALOG                       203
+    new      (  641, 3725) NOT_IN_M7_CATALOG                       186
+    new      (  648, 3740) SATSTAR_NEAR                            160
+    new      (  648, 3724) NOT_IN_M7_CATALOG                       158
+    new      (  653, 3731) SATSTAR_NEAR                            149
+    big craters: 295 -> 5; gone 292 (>= 200: 91), new 2 (>= 200: 0)
+    crater new  ( 1581,   65) depth 176 model_peak 557 depth_over_model 0.316 nearest vetted row 0.024"
+    crater new  ( 6441, 3999) depth 104 model_peak 323 depth_over_model 0.322 nearest vetted row 0.022"
+    crater gone ( 4863, 3856) depth 2321 model_peak 2 depth_over_model 1077.649 nearest vetted row 0.080"
+    crater gone ( 4854, 4201) depth 2320 model_peak 0 depth_over_model 6341.010 nearest vetted row 0.262"
+    crater gone ( 3307, 3836) depth 2188 model_peak 2 depth_over_model 1073.015 nearest vetted row 0.236"
+    crater gone ( 1539,  360) depth 1979 model_peak 4286 depth_over_model 0.462 nearest vetted row 0.012"
+    crater gone (11299, 1610) depth 1876 model_peak 5110 depth_over_model 0.367 nearest vetted row 0.015"
+    crater gone ( 4085, 3846) depth 1865 model_peak 4 depth_over_model 419.498 nearest vetted row 0.207"
+    crater gone ( 5744, 4324) depth 1727 model_peak 3200 depth_over_model 0.540 nearest vetted row 0.009"
+    crater gone ( 1950, 2062) depth 1697 model_peak 1681 depth_over_model 1.010 nearest vetted row 0.015"
+    crater gone ( 1564, 1208) depth 1584 model_peak 4214 depth_over_model 0.376 nearest vetted row 0.016"
+    crater gone ( 3297, 4182) depth 1421 model_peak 2 depth_over_model 906.856 nearest vetted row 0.151"
+    crater gone ( 6401, 4042) depth 1270 model_peak 2901 depth_over_model 0.438 nearest vetted row 0.015"
+    crater gone (  871, 3304) depth 1218 model_peak 2872 depth_over_model 0.424 nearest vetted row 0.017"
+
+=== optnm -> e7nm: leftovers >= 100: 18 -> 18; cleared 0, reduced <0.5x 0, unchanged 18, worse >1.5x 0; new (no counterpart in optnm) 0
+    cleared >= 200: 0 of 7; >= 500: 0 of 3; >= 1000: 0 of 1
+    cleared by class: 
+    new by class: 
+    big craters: 74 -> 73; gone 1 (>= 200: 0), new 0 (>= 200: 0)
+    crater gone (11389, 1475) depth 70 model_peak 130 depth_over_model 0.539 nearest vetted row 0.018"
+
+=== optfin -> e7fin: leftovers >= 100: 16 -> 16; cleared 0, reduced <0.5x 0, unchanged 16, worse >1.5x 0; new (no counterpart in optfin) 0
+    cleared >= 200: 0 of 4; >= 500: 0 of 1; >= 1000: 0 of 0
+    cleared by class: 
+    new by class: 
+    big craters: 5 -> 5; gone 0 (>= 200: 0), new 0 (>= 200: 0)
+
+=== prod5 -> e7fin: leftovers >= 100: 105 -> 16; cleared 95, reduced <0.5x 0, unchanged 10, worse >1.5x 0; new (no counterpart in prod5) 6
+    cleared >= 200: 80 of 82; >= 500: 71 of 72; >= 1000: 65 of 65
+    cleared by class: NOT_IN_M7_CATALOG 28, SATSTAR_NEAR 25, VETTED_BUT_UNSUBTRACTED 16, VETTED_OUT 26
+    new by class: NOT_IN_M7_CATALOG 4, SATSTAR_NEAR 2
+    cleared  (  645, 3733) NOT_IN_M7_CATALOG          30152 ->       0
+    cleared  ( 1086, 4503) VETTED_OUT                 17415 ->       0
+    cleared  (10748, 1490) NOT_IN_M7_CATALOG          16405 ->       0
+    cleared  ( 5576, 2407) VETTED_BUT_UNSUBTRACTED    16089 ->       0
+    cleared  ( 6633, 3998) VETTED_OUT                  8427 ->       0
+    cleared  (  163, 2127) VETTED_BUT_UNSUBTRACTED     8098 ->       0
+    cleared  ( 6841,  160) VETTED_OUT                  6181 ->       0
+    cleared  ( 7213, 3989) VETTED_OUT                  5854 ->       0
+    cleared  ( 8917, 1412) NOT_IN_M7_CATALOG           5562 ->       0
+    cleared  ( 9504, 4625) NOT_IN_M7_CATALOG           5288 ->       0
+    cleared  ( 8355, 1769) VETTED_OUT                  5127 ->       0
+    cleared  ( 9397, 3084) VETTED_BUT_UNSUBTRACTED     4708 ->       0
+    new      (  637, 3732) NOT_IN_M7_CATALOG                       308
+    new      (  641, 3740) NOT_IN_M7_CATALOG                       203
+    new      (  641, 3725) NOT_IN_M7_CATALOG                       186
+    new      (  648, 3740) SATSTAR_NEAR                            160
+    new      (  648, 3724) NOT_IN_M7_CATALOG                       158
+    new      (  653, 3731) SATSTAR_NEAR                            149
+    big craters: 308 -> 5; gone 305 (>= 200: 93), new 2 (>= 200: 0)
+    crater new  ( 1581,   65) depth 176 model_peak 557 depth_over_model 0.316 nearest vetted row 0.024"
+    crater new  ( 6441, 3999) depth 104 model_peak 323 depth_over_model 0.322 nearest vetted row 0.022"
+    crater gone ( 6395, 4028) depth 9330 model_peak 13561 depth_over_model 0.688 nearest vetted row 0.005"
+    crater gone ( 2373, 3424) depth 4137 model_peak 5740 depth_over_model 0.721 nearest vetted row 0.006"
+    crater gone ( 2329, 4123) depth 2766 model_peak 9133 depth_over_model 0.303 nearest vetted row 0.009"
+    crater gone ( 4863, 3856) depth 2321 model_peak 2 depth_over_model 1071.293 nearest vetted row 0.080"
+    crater gone ( 4854, 4201) depth 2320 model_peak 0 depth_over_model 6286.291 nearest vetted row 0.262"
+    crater gone ( 3307, 3836) depth 2188 model_peak 2 depth_over_model 1065.084 nearest vetted row 0.236"
+    crater gone ( 4085, 3846) depth 1865 model_peak 4 depth_over_model 417.039 nearest vetted row 0.207"
+    crater gone ( 1951, 2062) depth 1846 model_peak 1850 depth_over_model 0.998 nearest vetted row 0.014"
+    crater gone ( 1564, 1208) depth 1561 model_peak 4191 depth_over_model 0.372 nearest vetted row 0.016"
+    crater gone ( 5744, 4324) depth 1543 model_peak 3019 depth_over_model 0.511 nearest vetted row 0.009"
+    crater gone ( 3297, 4182) depth 1421 model_peak 2 depth_over_model 905.673 nearest vetted row 0.151"
+    crater gone ( 6401, 4042) depth 1292 model_peak 2924 depth_over_model 0.442 nearest vetted row 0.015"
+
+=== prod5 -> e7nm: leftovers >= 100: 105 -> 18; cleared 87, reduced <0.5x 0, unchanged 18, worse >1.5x 0; new (no counterpart in prod5) 0
+    cleared >= 200: 75 of 82; >= 500: 69 of 72; >= 1000: 64 of 65
+    cleared by class: NOT_IN_M7_CATALOG 25, SATSTAR_NEAR 22, VETTED_BUT_UNSUBTRACTED 14, VETTED_OUT 26
+    new by class: 
+    cleared  ( 1086, 4503) VETTED_OUT                 17415 ->       0
+    cleared  (10748, 1490) NOT_IN_M7_CATALOG          16405 ->       0
+    cleared  ( 5576, 2407) VETTED_BUT_UNSUBTRACTED    16089 ->       0
+    cleared  ( 6633, 3998) VETTED_OUT                  8427 ->       0
+    cleared  (  163, 2127) VETTED_BUT_UNSUBTRACTED     8098 ->       0
+    cleared  ( 6841,  160) VETTED_OUT                  6181 ->       0
+    cleared  ( 7213, 3989) VETTED_OUT                  5854 ->       0
+    cleared  ( 8917, 1412) NOT_IN_M7_CATALOG           5562 ->       0
+    cleared  ( 9504, 4625) NOT_IN_M7_CATALOG           5288 ->       0
+    cleared  ( 8355, 1769) VETTED_OUT                  5127 ->       0
+    cleared  ( 9397, 3084) VETTED_BUT_UNSUBTRACTED     4708 ->       0
+    cleared  ( 4961, 2157) NOT_IN_M7_CATALOG           4494 ->       0
+    big craters: 308 -> 73; gone 243 (>= 200: 67), new 8 (>= 200: 3)
+    crater new  ( 4975, 3325) depth 316 model_peak 999 depth_over_model 0.316 nearest vetted row 0.504"
+    crater new  ( 1129, 2936) depth 239 model_peak 784 depth_over_model 0.305 nearest vetted row 0.189"
+    crater new  ( 6397, 4036) depth 211 model_peak 684 depth_over_model 0.309 nearest vetted row 0.206"
+    crater new  ( 1151, 4537) depth 150 model_peak 488 depth_over_model 0.308 nearest vetted row 0.488"
+    crater new  ( 5444, 4080) depth 98 model_peak 312 depth_over_model 0.315 nearest vetted row 0.384"
+    crater new  ( 2823, 2212) depth 63 model_peak 104 depth_over_model 0.604 nearest vetted row 0.405"
+    crater new  ( 4460, 1740) depth 59 model_peak 193 depth_over_model 0.306 nearest vetted row 0.506"
+    crater new  ( 3715, 4105) depth 56 model_peak 186 depth_over_model 0.301 nearest vetted row 0.495"
+    crater gone ( 6395, 4028) depth 9330 model_peak 13561 depth_over_model 0.688 nearest vetted row 0.005"
+    crater gone ( 2373, 3424) depth 4137 model_peak 5740 depth_over_model 0.721 nearest vetted row 0.006"
+    crater gone ( 2329, 4123) depth 2766 model_peak 9133 depth_over_model 0.303 nearest vetted row 0.009"
+    crater gone ( 4863, 3856) depth 2321 model_peak 2 depth_over_model 1071.293 nearest vetted row 0.080"
+    crater gone ( 4854, 4201) depth 2320 model_peak 0 depth_over_model 6286.291 nearest vetted row 0.262"
+    crater gone ( 3307, 3836) depth 2188 model_peak 2 depth_over_model 1065.084 nearest vetted row 0.236"
+    crater gone ( 4085, 3846) depth 1865 model_peak 4 depth_over_model 417.039 nearest vetted row 0.207"
+    crater gone ( 1564, 1208) depth 1561 model_peak 4191 depth_over_model 0.372 nearest vetted row 0.016"
+    crater gone ( 5744, 4324) depth 1543 model_peak 3019 depth_over_model 0.511 nearest vetted row 0.009"
+    crater gone ( 3297, 4182) depth 1421 model_peak 2 depth_over_model 905.673 nearest vetted row 0.151"
+    crater gone ( 6401, 4042) depth 1292 model_peak 2924 depth_over_model 0.442 nearest vetted row 0.015"
+    crater gone ( 9215,  901) depth 1188 model_peak 2642 depth_over_model 0.450 nearest vetted row 0.010"
+
+wrote /blue/adamginsburg/adamginsburg/tmp/claude-3663/-blue-adamginsburg-adamginsburg-jwst-brick-astrometry-paper/5803da77-292b-4dee-b758-444f6db8990e/scratchpad/e2e7a/results/o118_compare_F212N.json

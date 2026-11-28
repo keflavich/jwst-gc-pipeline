@@ -1,0 +1,10 @@
+| tile | band | finite pixels of the data mosaic | NaN pixels in `c7fin` | NaN pixels in `e7nm` | NaN pixels in `e7fin` | share of the data footprint (`e7fin`, %) | NaN pixels in `optfin` (four-tile run) | share of the data footprint (`optfin`, %) | difference in NaN pixels between `e7fin` and `optfin` |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| o105 | F212N | 51825305 | 0 | 29 | 7143322 | 13.78 | 7143322 | 13.78 | 0 |
+| o105 | F480M | 12464795 | 0 | 5 | 2907644 | 23.33 | 2907644 | 23.33 | 0 |
+| o118 | F212N | 51826881 | 0 | 26 | 2828777 | 5.46 | 2828777 | 5.46 | 0 |
+| o118 | F480M | 12470721 | 0 | 4 | 1424840 | 11.43 | 1424840 | 11.43 | 0 |
+| o130 | F212N | 51826720 | 0 | 29 | 2354582 | 4.54 | 2354582 | 4.54 | 0 |
+| o130 | F480M | 12472748 | 0 | 7 | 1042721 | 8.36 | 1042721 | 8.36 | 0 |
+| o138 | F212N | 51827646 | 0 | 87 | 4045369 | 7.81 | 4045369 | 7.81 | 0 |
+| o138 | F480M | 12472006 | 0 | 0 | 1270606 | 10.19 | 1270606 | 10.19 | 0 |

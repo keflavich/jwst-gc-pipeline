@@ -1,0 +1,8 @@
+# o130 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source c7fin, references ['prod5']
+## features of c7fin (n_left 49, n_crater 8) against the prod5 extremum in the same box (regressions)
+  leftover: 49 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 47; prod5 >1.5x higher: 2
+  crater  : 8 features; prod5 below the threshold and >1.5x lower (regressions): 0; prod5 >1.5x lower but above the threshold: 0; within 1.5x: 7; prod5 >1.5x higher: 1
+## features of prod5 (n_left 50, n_crater 12) against the c7fin extremum in the same box (improvements)
+  leftover: 50 features; c7fin below the threshold and >1.5x lower (improvements): 0; c7fin >1.5x lower but above the threshold: 4; within 1.5x: 45; c7fin >1.5x higher: 1
+  crater  : 12 features; c7fin below the threshold and >1.5x lower (improvements): 1; c7fin >1.5x lower but above the threshold: 2; within 1.5x: 9; c7fin >1.5x higher: 0
+      ( 3319,  280) prod5     244  c7fin      85  d_vet1=0.009 is_sat1=False flux1=4125

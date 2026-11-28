@@ -1,0 +1,6 @@
+o118 F212N nrca: e2e5 187609 rows, e2e7 187609 rows; added 0, dropped 0
+o118 F212N nrcb: e2e5 185631 rows, e2e7 185631 rows; added 0, dropped 0
+o118 F212N merged: e2e5 309294 rows, e2e7 309294 rows; added 0, dropped 0
+o118 F480M nrca: e2e5 109544 rows, e2e7 109544 rows; added 0, dropped 0
+o118 F480M nrcb: e2e5 111313 rows, e2e7 111313 rows; added 0, dropped 0
+o118 F480M merged: e2e5 161027 rows, e2e7 161027 rows; added 0, dropped 0

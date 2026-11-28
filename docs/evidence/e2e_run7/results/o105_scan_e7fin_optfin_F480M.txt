@@ -1,0 +1,3 @@
+# o105 F480M: box 13, leftover threshold 200.0, crater threshold 200.0; mosaic (2280, 5640); source e7fin, references ['optfin']
+## features of e7fin (n_left 0, n_crater 0) against the optfin extremum in the same box (regressions)
+## features of optfin (n_left 0, n_crater 0) against the e7fin extremum in the same box (improvements)
