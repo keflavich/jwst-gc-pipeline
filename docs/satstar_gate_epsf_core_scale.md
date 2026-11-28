@@ -189,6 +189,79 @@ cache key gains the part `gs0.955`.  The control arm reproduces the daophot tabl
 earlier control replay of each frame (54060 and 52982 rows; `x_fit`, `y_fit`, `flux_fit`,
 `flags` and `qfit` identical in every row), so a run without the switches is unchanged.
 
+## Tile test (o105)
+
+The o105 tile was rebuilt end to end (stage, 8-shard m7 fan-out over both bands, finalize,
+scoring) with the integration code of the end-to-end tests plus this switch and the
+near-saturation distance switch, in the environment of the end-to-end control (production
+recipe, ePSF core on).  One arm set
+`SATSTAR_GATE_EPSF_CORE_SCALE=1` and `NEARSAT_CONTINUOUS_DIST=1` ("both switches"); a second arm
+set `NEARSAT_CONTINUOUS_DIST=1` alone (this switch off in a tree that contains it).  No arm
+with this switch alone was built: in the
+replays this switch alone returns neither the F4 row nor the F5 neighbour, so the difference
+of the two arms measures what this switch adds to the distance switch.  The control column is
+the control render of the end-to-end tests, built earlier in another worktree of the same
+code.  The production column is the production residual image, scored with the same tools as
+the other renders.
+
+Counts are by peak or depth in MJy/sr.  A leftover is a residual with residual / data > 0.7
+and a peak of at least the stated value; a big crater is a negative residual deeper than
+50 MJy/sr whose depth exceeds 0.3 times the model peak.
+
+| band | render | leftovers >= 50 | >= 100 | >= 200 | >= 500 | >= 1000 | craters >= 50 | >= 200 | >= 500 |
+|---|---|---|---|---|---|---|---|---|---|
+| F480M | production | 303 | 202 | 168 | 111 | 84 | 69 | 28 | 16 |
+| F480M | control | 297 | 200 | 168 | 107 | 77 | 92 | 38 | 17 |
+| F480M | distance switch alone | 277 | 180 | 150 | 103 | 76 | 94 | 39 | 17 |
+| F480M | both switches | 277 | 180 | 150 | 103 | 76 | 95 | 40 | 18 |
+| F212N | production | 845 | 317 | 178 | 133 | 116 | 489 | 166 | 71 |
+| F212N | control | 830 | 315 | 176 | 134 | 117 | 454 | 152 | 65 |
+| F212N | distance switch alone | 827 | 312 | 175 | 133 | 116 | 452 | 151 | 64 |
+| F212N | both switches | 827 | 312 | 175 | 133 | 116 | 452 | 151 | 64 |
+
+Both switches against the distance switch alone:
+
+* F480M leftovers: every count in the table is the same.  The 21 leftovers >= 100 that the
+  distance switch clears against the control are cleared in both arms, with the same new one
+  at (5325, 1803) (327 MJy/sr).  The F4 feature at (2614, 1826) is 33 MJy/sr in both arms;
+  the F5 feature at (4452, 858) is 59 MJy/sr with the distance switch alone and 26 with both.
+* F480M craters: 94 to 95 at >= 50, 39 to 40 at >= 200 and 17 to 18 at >= 500.  The added
+  crater is at (1597, 1877): depth 881, ratio 0.44 and a 13 x 13 pixel minimum of -867
+  MJy/sr with both switches, against depth 475 (ratio 0.29, below the 0.3 limit) and a
+  minimum of -462 in the control and with the distance switch alone, and depth 479 and
+  -466 in production.  A returned satstar row (below) lies 0.04 arcsec from it (flux
+  28,577.2; `qfit` 0.252 at (1596.6, 1877.5); the other arms have a row there with flux
+  22,842.9).
+* The consolidated F480M satstar catalogs, matched within 0.15 arcsec:
+
+  | render | rows | against production |
+  |---|---|---|
+  | production | 1703 | |
+  | control | 1686 | 21 production rows lost (median flux 28,711), 4 rows not in production gained |
+  | distance switch alone | 1686 | the same as the control: none lost, none gained |
+  | both switches | 1701 | 7 production rows lost (median flux 24,928), 5 rows not in production gained |
+
+  Control to both switches: none lost and 15 gained, with fluxes from 28,357 to 29,237
+  (median 28,735).  These are 14 of the 21 production rows that the control lost and one row
+  that production does not have.  The median flux ratio of the 1686 rows the two share is
+  1.0000 (16th to 84th percentile 1.0000 to 1.0000; no row differs by more than 20 per cent).
+  The F5 star has a satstar row with both switches (flux 28,581; production 28,728) and none
+  in the control or with the distance switch alone (the nearest row is 3.8 arcsec away).
+* The F480M residual images of the two arms differ by more than 5 MJy/sr in 1786 pixels (117
+  regions after a 3 pixel dilation).  17 regions have a peak difference above 50 MJy/sr; 13 of
+  them lie within 3 px of one of the 15 returned rows (the largest, 466 MJy/sr, at (4837, 360)
+  and 464 at (1596, 1877)); the other four are at (5236, 916), (3673, 107), (721, 1514) and
+  (5421, 1177), with peak differences of 114, 55, 52 and 52 MJy/sr, 122 to 1085 px from the
+  nearest returned row (not traced).
+* F212N: the switch has no F212N entry.  The two arms have the same counts, the same satstar
+  rows (10,399; production 10,356) and residual images that differ in 4433 of 51,825,305
+  pixels by at most 6.3e-5 MJy/sr.
+
+On this tile the switch returns 14 of the 21 production satstar rows that the control had
+moved to the daophot channel, changes no leftover count in either band, lowers the F5 feature
+from 59 to 26 MJy/sr and adds one deeper crater at one of the returned rows.  This is one
+tile.
+
 ## Limits of this change
 
 * One scale per detector corrects the median, not the star-to-star scatter.  94 of
@@ -199,4 +272,4 @@ earlier control replay of each frame (54060 and 52982 rows; `x_fit`, `y_fit`, `f
   measurement again; the recipe above is all of it.
 * It changes which stars the satstar channel owns, so a star near the gate can come back
   to the satstar channel with a flux that differs from the daophot one.  The tile test
-  in the pull request description counts the consolidated satstar rows gained and lost.
+  above counts the consolidated satstar rows gained and lost.
